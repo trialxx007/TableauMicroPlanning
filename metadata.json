@@ -1,0 +1,6 @@
+{
+  "name": "Point Commande Journalière",
+  "description": "Tableau de bord interactif pour le suivi et le point des commandes journalières d'atelier textile haut de gamme.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
