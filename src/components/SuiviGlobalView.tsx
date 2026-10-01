@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { CardItem } from '../types/card.ts';
+import { CardFormData, CardItem } from '../types/card.ts';
 import { ChaineRow, ChaineSlotCard } from '../types/suiviGlobal.ts';
 import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS } from '../data/mockSuiviGlobal.ts';
 import { CardPickerModal } from './CardPickerModal.tsx';
+import { SlotActionModal } from './SlotActionModal.tsx';
 import {
   ArrowLeft,
   Plus,
@@ -17,12 +18,17 @@ import {
   ExternalLink,
   X,
   ArrowLeftRight,
+  Zap,
 } from 'lucide-react';
 
 interface SuiviGlobalViewProps {
   onBackToPointJournalier: () => void;
   cards: CardItem[];
   onOpenCardModal?: (card: CardItem) => void;
+  onOpenCreateCard?: (
+    prefillData: Partial<CardFormData> | null,
+    onCreatedCallback: (createdCard: CardItem) => void
+  ) => void;
 }
 
 interface ActiveSlotPicker {
@@ -36,10 +42,11 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   onBackToPointJournalier,
   cards,
   onOpenCardModal,
+  onOpenCreateCard,
 }) => {
   const [rows, setRows] = useState<ChaineRow[]>(() => {
     try {
-      const saved = localStorage.getItem('suivi_global_rows_v2');
+      const saved = localStorage.getItem('suivi_global_rows_v3');
       if (saved) {
         return JSON.parse(saved);
       }
@@ -53,14 +60,212 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [savedFeedback, setSavedFeedback] = useState(false);
   const [activePicker, setActivePicker] = useState<ActiveSlotPicker | null>(null);
+  const [selectedSlotAction, setSelectedSlotAction] = useState<ActiveSlotPicker | null>(null);
 
   useEffect(() => {
     try {
-      localStorage.setItem('suivi_global_rows_v2', JSON.stringify(rows));
+      localStorage.setItem('suivi_global_rows_v3', JSON.stringify(rows));
     } catch {
       // ignore
     }
   }, [rows]);
+
+  // Synchronise automatiquement les cartes selon la règle stricte :
+  // - Les cartes "OK Prod validé" sont STRICTEMENT migrées dans la colonne "Modèle en cours" (et interdites en Prochains Lancements)
+  // - Les cartes "En attente OK Prod" sont STRICTEMENT dans "PROCHAINS LANCEMENTS" (et interdites en Modèle en cours)
+  const reconcileRowsWithOkProdRule = (
+    currentRows: ChaineRow[],
+    allCards: CardItem[]
+  ): { newRows: ChaineRow[]; changed: boolean } => {
+    let changed = false;
+
+    // Cartes avec OK Prod validé à promouvoir en Modèle en cours si trouvées en Prochains Lancements
+    const validatedCardsToPromote: ChaineSlotCard[] = [];
+    // Cartes en attente OK Prod à rétrograder vers Prochains Lancements si trouvées en Modèle en cours
+    const pendingCardsToDemote: ChaineSlotCard[] = [];
+
+    // 1) Vérifier chaque ligne : purger les cartes mal positionnées
+    const newRows = currentRows.map((row) => {
+      let currentModele = row.modeleEnCoursCard;
+      let nextLancements = [...row.prochainsLancementsCards] as [
+        ChaineSlotCard | null,
+        ChaineSlotCard | null,
+        ChaineSlotCard | null,
+        ChaineSlotCard | null,
+        ChaineSlotCard | null
+      ];
+
+      // A) Si une carte en "Modèle en cours" n'a PAS OK Prod -> elle doit migrer vers Prochains Lancements
+      if (currentModele?.cardId) {
+        const card = allCards.find((c) => c.id === currentModele!.cardId);
+        if (card && !card.okProd) {
+          pendingCardsToDemote.push(currentModele);
+          currentModele = undefined;
+          changed = true;
+        }
+      }
+
+      // B) Si une carte en "Prochains Lancements" a l'OK Prod validé -> elle doit GLISSER vers Modèle en cours
+      nextLancements = nextLancements.map((slot) => {
+        if (slot?.cardId) {
+          const card = allCards.find((c) => c.id === slot.cardId);
+          if (card && card.okProd) {
+            // Si la chaîne actuelle a son Modèle en cours libre, la carte y glisse directement !
+            if (!currentModele) {
+              currentModele = slot;
+            } else {
+              validatedCardsToPromote.push(slot);
+            }
+            changed = true;
+            return null; // Retirer de Prochains Lancements
+          }
+        }
+        return slot;
+      }) as [
+        ChaineSlotCard | null,
+        ChaineSlotCard | null,
+        ChaineSlotCard | null,
+        ChaineSlotCard | null,
+        ChaineSlotCard | null
+      ];
+
+      return {
+        ...row,
+        modeleEnCoursCard: currentModele,
+        prochainsLancementsCards: nextLancements,
+      };
+    });
+
+    // 2) Placer les cartes avec OK Prod validé dans la colonne "Modèle en cours"
+    const validatedCards = allCards.filter((c) => c.okProd);
+    validatedCards.forEach((c) => {
+      const alreadyInModeleEnCours = newRows.some(
+        (r) => r.modeleEnCoursCard?.cardId === c.id
+      );
+
+      if (!alreadyInModeleEnCours) {
+        // Priorité : si la carte a une chaîne assignée (chaineId ou chaineNom), tenter de la placer dessus
+        const targetRow = c.chaineId
+          ? newRows.find((r) => r.id === c.chaineId)
+          : c.chaineNom
+          ? newRows.find(
+              (r) => r.nom.toLowerCase().trim() === c.chaineNom!.toLowerCase().trim()
+            )
+          : undefined;
+
+        if (targetRow && !targetRow.modeleEnCoursCard) {
+          targetRow.modeleEnCoursCard = {
+            cardId: c.id,
+            customLabel: c.modele,
+          };
+          changed = true;
+        } else {
+          // Sinon trouver la première chaîne qui a son Modèle en cours libre
+          for (const r of newRows) {
+            if (!r.modeleEnCoursCard) {
+              r.modeleEnCoursCard = {
+                cardId: c.id,
+                customLabel: c.modele,
+              };
+              changed = true;
+              break;
+            }
+          }
+        }
+      }
+    });
+
+    // 3) Placer les cartes en attente d'OK Prod dans "PROCHAINS LANCEMENTS"
+    const nonValidatedCards = allCards.filter((c) => !c.okProd);
+    nonValidatedCards.forEach((c) => {
+      const alreadyInLancements = newRows.some((r) =>
+        r.prochainsLancementsCards.some((s) => s?.cardId === c.id)
+      );
+
+      if (!alreadyInLancements) {
+        // Priorité : si la carte a une chaîne assignée, tenter de la placer dans les prochains lancements de cette chaîne
+        const targetRow = c.chaineId
+          ? newRows.find((r) => r.id === c.chaineId)
+          : c.chaineNom
+          ? newRows.find(
+              (r) => r.nom.toLowerCase().trim() === c.chaineNom!.toLowerCase().trim()
+            )
+          : undefined;
+
+        if (targetRow) {
+          const emptyIdx = targetRow.prochainsLancementsCards.findIndex(
+            (s) => s === null
+          );
+          if (emptyIdx !== -1) {
+            targetRow.prochainsLancementsCards[emptyIdx] = {
+              cardId: c.id,
+              customLabel: c.modele,
+            };
+            changed = true;
+            return;
+          }
+        }
+
+        // Sinon trouver la première chaîne qui a une case libre dans Prochains Lancements
+        for (const r of newRows) {
+          const emptyIdx = r.prochainsLancementsCards.findIndex(
+            (s) => s === null
+          );
+          if (emptyIdx !== -1) {
+            r.prochainsLancementsCards[emptyIdx] = {
+              cardId: c.id,
+              customLabel: c.modele,
+            };
+            changed = true;
+            break;
+          }
+        }
+      }
+    });
+
+    // 4) Placer les cartes rétrogradées éventuelles
+    pendingCardsToDemote.forEach((slotCard) => {
+      const alreadyInTable = newRows.some((r) =>
+        r.prochainsLancementsCards.some((s) => s?.cardId === slotCard.cardId)
+      );
+      if (!alreadyInTable) {
+        for (const r of newRows) {
+          const emptyIdx = r.prochainsLancementsCards.findIndex(
+            (s) => s === null
+          );
+          if (emptyIdx !== -1) {
+            r.prochainsLancementsCards[emptyIdx] = slotCard;
+            changed = true;
+            break;
+          }
+        }
+      }
+    });
+
+    return { newRows, changed };
+  };
+
+  // Re-synchronisation automatique lorsque les cartes du Point Commande Journalière changent
+  useEffect(() => {
+    if (cards && cards.length > 0) {
+      setRows((prev) => {
+        const { newRows, changed } = reconcileRowsWithOkProdRule(prev, cards);
+        return changed ? newRows : prev;
+      });
+    }
+  }, [cards]);
+
+  const handleSyncOkProd = () => {
+    const { newRows, changed } = reconcileRowsWithOkProdRule(rows, cards);
+    setRows(newRows);
+    setSavedFeedback(true);
+    setTimeout(() => setSavedFeedback(false), 2000);
+    alert(
+      changed
+        ? 'Migration stricte OK Prod effectuée :\n• Les cartes "OK Prod Validé" ont été migrées en colonne "Modèle en cours".\n• Les cartes "En attente OK Prod" ont été migrées en colonne "PROCHAINS LANCEMENTS".'
+        : 'Le tableau est déjà parfaitement aligné :\n• Toutes les cartes validées sont en "Modèle en cours".\n• Toutes les cartes en attente sont en "PROCHAINS LANCEMENTS".'
+    );
+  };
 
   // Find CardItem from Point Commande Journalière by cardId
   const getCardById = (cardId?: string): CardItem | undefined => {
@@ -76,6 +281,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     setRows((prev) =>
       prev.map((r) => (r.id === rowId ? { ...r, [field]: value } : r))
     );
+    setSavedFeedback(true);
   };
 
   const handleAssignSlotCard = (
@@ -84,6 +290,51 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     slotCard: ChaineSlotCard | null,
     lancementIndex?: number
   ) => {
+    // RÈGLE MÉTIER STRICTE :
+    // 1) Si affectation en "Modèle en cours" mais que la carte n'a pas OK Prod -> refusée & migrée en Prochains Lancements
+    if (slotType === 'modeleEnCours' && slotCard?.cardId) {
+      const card = getCardById(slotCard.cardId);
+      if (card && !card.okProd) {
+        alert(
+          `Action refusée : Seules les cartes avec accord "OK Prod validé" sont acceptées dans la colonne "Modèle en cours".\n\nLa carte "${card.modele}" (${card.reference}) est en attente d'OK Prod et a été automatiquement migrée dans "PROCHAINS LANCEMENTS".`
+        );
+        setRows((prev) =>
+          prev.map((r) => {
+            if (r.id !== rowId) return r;
+            const nextLancements = [...r.prochainsLancementsCards] as [
+              ChaineSlotCard | null,
+              ChaineSlotCard | null,
+              ChaineSlotCard | null,
+              ChaineSlotCard | null,
+              ChaineSlotCard | null
+            ];
+            const freeIdx = nextLancements.findIndex((s) => s === null);
+            const targetIdx = freeIdx !== -1 ? freeIdx : 0;
+            nextLancements[targetIdx] = slotCard;
+            return { ...r, prochainsLancementsCards: nextLancements };
+          })
+        );
+        return;
+      }
+    }
+
+    // 2) Si affectation en "Prochains Lancements" mais que la carte a déjà son OK Prod validé -> refusée & migrée en Modèle en cours
+    if (slotType === 'lancement' && slotCard?.cardId) {
+      const card = getCardById(slotCard.cardId);
+      if (card && card.okProd) {
+        alert(
+          `Action refusée : La carte "${card.modele}" (${card.reference}) a déjà son accord "OK Prod validé".\n\nElle est strictement migrée dans la colonne "Modèle en cours" et ne peut pas être placée dans "PROCHAINS LANCEMENTS".`
+        );
+        setRows((prev) =>
+          prev.map((r) => {
+            if (r.id !== rowId) return r;
+            return { ...r, modeleEnCoursCard: slotCard };
+          })
+        );
+        return;
+      }
+    }
+
     setRows((prev) =>
       prev.map((r) => {
         if (r.id !== rowId) return r;
@@ -107,6 +358,46 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         return r;
       })
     );
+  };
+
+  const handleCreateNewCardForSlot = (slot: ActiveSlotPicker) => {
+    const isModeleEnCours = slot.slotType === 'modeleEnCours';
+    const chaineRow = rows.find((r) => r.id === slot.rowId);
+    const chaineNom = chaineRow?.nom || '';
+    const chaineCategorie = chaineRow?.categorieId || 'BRODERIE_MAIN';
+
+    const prefill: Partial<CardFormData> = {
+      client: '',
+      modele: '',
+      nom: chaineNom ? `Modèle ${chaineNom}` : '',
+      chaineId: slot.rowId,
+      chaineNom: chaineNom,
+      chaineCategorie: chaineCategorie,
+      statut: isModeleEnCours ? 'EN_COURS' : 'EN_ATTENTE',
+      dt: isModeleEnCours,
+      tc: isModeleEnCours,
+      sms: isModeleEnCours,
+      rdl: isModeleEnCours,
+      okProd: isModeleEnCours,
+      quantiteDemandee: 120,
+      quantiteFinie: 0,
+      ofs: [],
+    };
+
+    if (onOpenCreateCard) {
+      onOpenCreateCard(prefill, (newCard) => {
+        // Direct assignment to this specific slot/case!
+        handleAssignSlotCard(
+          slot.rowId,
+          slot.slotType,
+          {
+            cardId: newCard.id,
+            customLabel: newCard.modele || newCard.nom,
+          },
+          slot.lancementIndex
+        );
+      });
+    }
   };
 
   const handleResetToDefault = () => {
@@ -225,15 +516,39 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     slotType: 'modeleEnCours' | 'lancement' | 'expedition',
     lancementIndex?: number
   ) => {
-    const linkedCard = slotCard?.cardId ? getCardById(slotCard.cardId) : undefined;
+    let linkedCard = slotCard?.cardId ? getCardById(slotCard.cardId) : undefined;
+    const customLabel = slotCard?.customLabel;
+    if (!linkedCard && customLabel) {
+      linkedCard = cards.find(
+        (c) =>
+          c.modele.toLowerCase().trim() === customLabel.toLowerCase().trim() ||
+          c.nom.toLowerCase().trim() === customLabel.toLowerCase().trim()
+      );
+    }
+
+    // RÈGLE MÉTIER STRICTE D'AFFICHAGE :
+    // 1) Si on est dans "Modèle en cours" mais que la carte est en attente d'OK Prod (okProd === false) :
+    //    -> ELLE NE DOIT STRICTEMENT PAS ÊTRE AFFICHÉE DANS MODÈLE EN COURS !
+    if (slotType === 'modeleEnCours' && linkedCard && !linkedCard.okProd) {
+      linkedCard = undefined;
+      slotCard = null;
+    }
+
+    // 2) Si on est dans "Prochains Lancements" mais que la carte a son OK Prod validé (okProd === true) :
+    //    -> ELLE NE DOIT STRICTEMENT PAS ÊTRE AFFICHÉE DANS PROCHAINS LANCEMENTS !
+    if (slotType === 'lancement' && linkedCard && linkedCard.okProd) {
+      linkedCard = undefined;
+      slotCard = null;
+    }
+
     const label = linkedCard ? linkedCard.modele : slotCard?.customLabel;
     const subLabel = linkedCard ? `${linkedCard.reference} • ${linkedCard.client}` : null;
 
-    if (!label) {
+    if (!label || !slotCard) {
       return (
         <button
           onClick={() =>
-            setActivePicker({
+            setSelectedSlotAction({
               rowId: row.id,
               slotType,
               lancementIndex,
@@ -245,38 +560,68 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                   : `Prochain Lancement #${(lancementIndex || 0) + 1} (${row.nom})`,
             })
           }
-          className="w-full h-full min-h-[50px] flex items-center justify-center text-[11px] font-medium text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 rounded-xl transition-all border border-dashed border-slate-200 hover:border-blue-300 cursor-pointer p-1"
-          title="Cliquez pour assigner une carte du Point Commande Journalière"
+          className="w-full h-full min-h-[50px] flex items-center justify-center text-[11px] font-semibold text-slate-400 hover:text-blue-700 bg-slate-50/60 hover:bg-blue-50/80 rounded-xl transition-all border border-dashed border-slate-300/80 hover:border-blue-400 cursor-pointer p-1.5 group shadow-2xs"
+          title="Cliquez pour choisir : + Nouvelle Carte ou Réassigner une carte"
         >
-          <span className="flex items-center gap-1">
-            <Plus className="w-3 h-3" />
-            <span>
+          <span className="flex items-center gap-1.5 transition-transform group-hover:scale-105">
+            <span className="w-5 h-5 rounded-md bg-white border border-slate-200 group-hover:border-blue-400 group-hover:bg-blue-600 group-hover:text-white flex items-center justify-center text-slate-400 transition-colors shadow-2xs">
+              <Plus className="w-3.5 h-3.5" />
+            </span>
+            <span className="text-slate-600 group-hover:text-blue-700 font-semibold">
               {slotType === 'expedition'
                 ? '+ Expédition'
                 : slotType === 'modeleEnCours'
-                ? '+ Carte'
-                : `#${(lancementIndex || 0) + 1}`}
+                ? '+ Remplir case'
+                : `+ Lanc. #${(lancementIndex || 0) + 1}`}
             </span>
           </span>
         </button>
       );
     }
 
+    // CLIC DIRECT SUR LA CARTE -> OUVRE LA FICHE IDENTITAIRE (CardModal) ET NON LE PICKER !
     const handleSlotClick = () => {
-      if (linkedCard && onOpenCardModal) {
-        onOpenCardModal(linkedCard);
-      } else {
-        setActivePicker({
-          rowId: row.id,
-          slotType,
-          lancementIndex,
-          slotTitle:
-            slotType === 'modeleEnCours'
-              ? `Modèle en cours (${row.nom})`
-              : slotType === 'expedition'
-              ? `Expédition (${row.nom})`
-              : `Prochain Lancement #${(lancementIndex || 0) + 1} (${row.nom})`,
-        });
+      const targetCard =
+        linkedCard ||
+        (slotCard?.cardId ? getCardById(slotCard.cardId) : undefined) ||
+        (slotCard?.customLabel
+          ? cards.find(
+              (c) =>
+                c.modele.toLowerCase().trim() ===
+                  slotCard.customLabel!.toLowerCase().trim() ||
+                c.nom.toLowerCase().trim() ===
+                  slotCard.customLabel!.toLowerCase().trim()
+            )
+          : undefined);
+
+      if (targetCard && onOpenCardModal) {
+        onOpenCardModal(targetCard);
+        return;
+      }
+
+      if (onOpenCardModal && (slotCard?.customLabel || slotCard?.cardId)) {
+        const fallbackCard: CardItem = {
+          id: slotCard?.cardId || `CRD-${Date.now()}`,
+          client: row.nom || 'Atelier',
+          nom: slotCard?.customLabel || 'Carte de Commande',
+          reference: `OF-${row.nom.toUpperCase().slice(0, 3)}-2026`,
+          modele: slotCard?.customLabel || 'Modèle de Commande',
+          dt: true,
+          tc: slotType === 'modeleEnCours',
+          sms: slotType === 'modeleEnCours',
+          rdl: slotType === 'modeleEnCours',
+          okProd: slotType === 'modeleEnCours',
+          quantiteDemandee: 100,
+          quantiteFinie: 0,
+          resteAProduire: 100,
+          statut: slotType === 'modeleEnCours' ? 'EN_COURS' : 'EN_ATTENTE',
+          dateCreation: new Date().toLocaleDateString('fr-FR'),
+          pointFaitAujourdhui: false,
+          decisionReunion: '',
+          notes: '',
+          ofs: [],
+        };
+        onOpenCardModal(fallbackCard);
       }
     };
 
@@ -287,8 +632,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           className="cursor-pointer"
           title={
             linkedCard
-              ? `Afficher la fiche identitaire : ${linkedCard.modele} (${linkedCard.reference})`
-              : 'Cliquer pour modifier ou assigner une carte'
+              ? `Cliquer pour ouvrir la fiche identitaire complète : ${linkedCard.modele} (${linkedCard.reference})`
+              : 'Cliquer pour ouvrir la fiche identitaire'
           }
         >
           <div className="flex items-center gap-1.5">
@@ -319,18 +664,29 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           {/* Expedition Specific Tags */}
           {slotType === 'expedition' && slotCard?.dateExpedition && (
             <div className="flex items-center gap-1 text-[10px] font-semibold text-emerald-800 bg-emerald-100/70 px-1.5 py-0.2 rounded mt-0.5 w-fit">
-              <Truck className="w-2.5 h-2.5" />
-              <span>{slotCard.dateExpedition}</span>
+              <span>🚚 {slotCard.dateExpedition}</span>
             </div>
           )}
         </div>
 
-        {/* Hover Quick Action Buttons */}
-        <div className="absolute right-1 top-1 hidden group-hover:flex items-center gap-1 bg-white/95 backdrop-blur-xs p-0.5 rounded-md shadow-xs border border-slate-200 z-10">
+        {/* Action icons on hover */}
+        <div className="absolute right-1 top-1 hidden group-hover:flex items-center gap-0.5 bg-white/95 rounded-md shadow-xs border border-slate-200/80 p-0.5 z-10">
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
-              setActivePicker({
+              handleSlotClick();
+            }}
+            title="Ouvrir la fiche identitaire de la carte"
+            className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors cursor-pointer"
+          >
+            <ExternalLink className="w-3 h-3" />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setSelectedSlotAction({
                 rowId: row.id,
                 slotType,
                 lancementIndex,
@@ -342,18 +698,19 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                     : `Prochain Lancement #${(lancementIndex || 0) + 1} (${row.nom})`,
               });
             }}
-            title="Changer / Réassigner une autre carte"
-            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
+            title="Changer : + Nouvelle Carte ou Réassigner une carte existante"
+            className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors cursor-pointer"
           >
             <ArrowLeftRight className="w-3 h-3" />
           </button>
           <button
+            type="button"
             onClick={(e) => {
               e.stopPropagation();
               handleAssignSlotCard(row.id, slotType, null, lancementIndex);
             }}
-            title="Retirer la carte de cette case"
-            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
+            title="Retirer cette carte"
+            className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
           >
             <X className="w-3 h-3" />
           </button>
@@ -456,6 +813,16 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               </span>
             )}
 
+            {/* Synchroniser OK Prod */}
+            <button
+              onClick={handleSyncOkProd}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors cursor-pointer shadow-2xs"
+              title="Synchroniser le tableau : seules les cartes avec OK Prod validé restent en Modèle en cours, les autres sont automatiquement en Prochains Lancements"
+            >
+              <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
+              <span>Synchroniser OK Prod</span>
+            </button>
+
             {/* Export CSV */}
             <button
               onClick={handleExportCSV}
@@ -485,7 +852,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           <div className="flex items-center gap-2">
             <Info className="w-4 h-4 text-blue-600 shrink-0" />
             <span>
-              <strong>Attribution des cartes :</strong> Cliquez sur n'importe quelle case de <em>Modèle en cours</em>, <em>Prochains Lancements (1 à 5)</em> ou <em>Expédition</em> pour choisir la carte de commande correspondante. Les colonnes <em>Objectif/Jour</em>, <em>Réalisation/Jour</em> et <em>Remarque</em> sont spécifiques à chaque chaîne.
+              <strong>Règle OK Prod :</strong> Seules les cartes avec accord <em>OK Prod validé</em> sont acceptées dans <em>Modèle en cours</em>. Toutes les cartes en attente d'accord OK Prod sont automatiquement placées dans <em>PROCHAINS LANCEMENTS</em>.
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -534,14 +901,14 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                 </th>
 
                 {/* Objectif/Jour */}
-                <th className="w-28 min-w-[95px]">
+                <th className="w-32 min-w-[110px]">
                   <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
                     Objectif/Jour
                   </div>
                 </th>
 
                 {/* Réalisation/Jour */}
-                <th className="w-28 min-w-[95px]">
+                <th className="w-32 min-w-[110px]">
                   <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
                     Réalisation/Jour
                   </div>
@@ -613,25 +980,20 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
                       {/* Column 2: Chaîne (Dot + Name) */}
                       <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs h-full min-h-[58px] flex items-center gap-2.5">
+                        <div className="bg-white border border-slate-200/90 hover:border-slate-300 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs h-full min-h-[58px] flex items-center gap-2.5 transition-all">
                           <span
                             className="w-3.5 h-3.5 rounded-full shrink-0 shadow-2xs"
                             style={{ backgroundColor: row.dotColor }}
                           />
-                          {isEditMode ? (
-                            <input
-                              type="text"
-                              value={row.nom}
-                              onChange={(e) =>
-                                handleCellChange(row.id, 'nom', e.target.value)
-                              }
-                              className="w-full font-bold text-xs sm:text-sm text-slate-800 bg-slate-50 border border-slate-300 rounded px-1.5 py-1 focus:bg-white focus:outline-hidden"
-                            />
-                          ) : (
-                            <span className="font-bold text-xs sm:text-sm text-slate-800 truncate">
-                              {row.nom}
-                            </span>
-                          )}
+                          <input
+                            type="text"
+                            value={row.nom}
+                            onChange={(e) =>
+                              handleCellChange(row.id, 'nom', e.target.value)
+                            }
+                            className="w-full font-bold text-xs sm:text-sm text-slate-800 bg-transparent hover:bg-slate-50/80 focus:bg-white rounded px-1.5 py-1 focus:outline-hidden transition-colors cursor-text"
+                            title="Cliquer pour modifier le nom de la chaîne"
+                          />
                         </div>
                       </td>
 
@@ -646,88 +1008,71 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                         </div>
                       </td>
 
-                      {/* Column 4: Objectif/Jour */}
+                      {/* Column 4: Objectif/Jour (Zone de texte multiligne) */}
                       <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-2 py-2 shadow-2xs h-full min-h-[58px] flex items-center justify-center">
-                          {isEditMode ? (
-                            <input
-                              type="text"
-                              value={row.objectifJour}
-                              placeholder="0"
-                              onChange={(e) =>
-                                handleCellChange(
-                                  row.id,
-                                  'objectifJour',
-                                  e.target.value
-                                )
-                              }
-                              className="w-16 text-center text-xs font-bold text-slate-900 bg-slate-50 border border-slate-300 rounded px-1 py-1.5 focus:bg-white focus:outline-hidden"
-                            />
-                          ) : (
-                            <span className="text-xs sm:text-sm font-bold text-slate-800 font-mono">
-                              {row.objectifJour || '—'}
-                            </span>
-                          )}
+                        <div className="bg-white border border-slate-200/90 hover:border-blue-300 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[64px] flex items-center justify-center transition-all">
+                          <textarea
+                            rows={2}
+                            value={row.objectifJour}
+                            placeholder="—"
+                            onChange={(e) =>
+                              handleCellChange(
+                                row.id,
+                                'objectifJour',
+                                e.target.value
+                              )
+                            }
+                            className="w-full h-full min-h-[52px] text-center text-xs sm:text-sm font-bold text-slate-900 font-mono bg-transparent hover:bg-slate-50/80 focus:bg-white rounded-lg p-1.5 focus:outline-hidden transition-colors cursor-text resize-none leading-snug"
+                            title="Zone de texte pour l'objectif (possibilité de sauts de ligne avec Entrée)"
+                          />
                         </div>
                       </td>
 
-                      {/* Column 5: Réalisation/Jour */}
+                      {/* Column 5: Réalisation/Jour (Zone de texte multiligne) */}
                       <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-2 py-2 shadow-2xs h-full min-h-[58px] flex items-center justify-center">
-                          {isEditMode ? (
-                            <input
-                              type="text"
-                              value={row.realisationJour}
-                              placeholder="0"
-                              onChange={(e) =>
-                                handleCellChange(
-                                  row.id,
-                                  'realisationJour',
-                                  e.target.value
-                                )
-                              }
-                              className="w-16 text-center text-xs font-bold text-slate-900 bg-slate-50 border border-slate-300 rounded px-1 py-1.5 focus:bg-white focus:outline-hidden"
-                            />
-                          ) : (
-                            <span
-                              className={`text-xs sm:text-sm font-bold font-mono ${
-                                Number(row.realisationJour) >=
-                                  Number(row.objectifJour) &&
-                                Number(row.realisationJour) > 0
-                                  ? 'text-emerald-700'
-                                  : 'text-slate-800'
-                              }`}
-                            >
-                              {row.realisationJour || '—'}
-                            </span>
-                          )}
+                        <div className="bg-white border border-slate-200/90 hover:border-blue-300 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[64px] flex items-center justify-center transition-all">
+                          <textarea
+                            rows={2}
+                            value={row.realisationJour}
+                            placeholder="—"
+                            onChange={(e) =>
+                              handleCellChange(
+                                row.id,
+                                'realisationJour',
+                                e.target.value
+                              )
+                            }
+                            className={`w-full h-full min-h-[52px] text-center text-xs sm:text-sm font-bold font-mono bg-transparent hover:bg-slate-50/80 focus:bg-white rounded-lg p-1.5 focus:outline-hidden transition-colors cursor-text resize-none leading-snug ${
+                              !isNaN(Number(row.realisationJour)) &&
+                              !isNaN(Number(row.objectifJour)) &&
+                              Number(row.realisationJour) >=
+                                Number(row.objectifJour) &&
+                              Number(row.realisationJour) > 0
+                                ? 'text-emerald-700'
+                                : 'text-slate-900'
+                            }`}
+                            title="Zone de texte pour la réalisation (possibilité de sauts de ligne avec Entrée)"
+                          />
                         </div>
                       </td>
 
-                      {/* Column 6: Remarque */}
+                      {/* Column 6: Remarque (Zone de texte multiligne) */}
                       <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs h-full min-h-[58px] flex items-center">
-                          {isEditMode ? (
-                            <input
-                              type="text"
-                              value={row.remarque}
-                              placeholder="Remarque, consigne..."
-                              onChange={(e) =>
-                                handleCellChange(row.id, 'remarque', e.target.value)
-                              }
-                              className="w-full text-xs text-slate-700 bg-slate-50 border border-slate-300 rounded px-2 py-1.5 focus:bg-white focus:outline-hidden"
-                            />
-                          ) : (
-                            <span
-                              className={`text-xs ${
-                                row.remarque
-                                  ? 'text-slate-700 font-medium'
-                                  : 'text-slate-300 italic'
-                              }`}
-                            >
-                              {row.remarque || '—'}
-                            </span>
-                          )}
+                        <div className="bg-white border border-slate-200/90 hover:border-blue-300 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[64px] flex items-center transition-all">
+                          <textarea
+                            rows={2}
+                            value={row.remarque}
+                            placeholder="Remarque, consigne..."
+                            onChange={(e) =>
+                              handleCellChange(
+                                row.id,
+                                'remarque',
+                                e.target.value
+                              )
+                            }
+                            className="w-full h-full min-h-[52px] text-xs text-slate-700 bg-transparent hover:bg-slate-50/80 focus:bg-white rounded-lg p-1.5 focus:outline-hidden transition-colors cursor-text resize-none leading-relaxed"
+                            title="Zone de texte pour les remarques et consignes"
+                          />
                         </div>
                       </td>
 
@@ -800,6 +1145,26 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         </div>
       </div>
 
+      {/* Slot Action Modal: 2 choix pour remplir la case (+ Nouvelle Carte / Reassigner une carte) */}
+      {selectedSlotAction && (
+        <SlotActionModal
+          isOpen={Boolean(selectedSlotAction)}
+          onClose={() => setSelectedSlotAction(null)}
+          slotTitle={selectedSlotAction.slotTitle}
+          slotType={selectedSlotAction.slotType}
+          onChooseNewCard={() => {
+            const slot = selectedSlotAction;
+            setSelectedSlotAction(null);
+            handleCreateNewCardForSlot(slot);
+          }}
+          onChooseExistingCard={() => {
+            const slot = selectedSlotAction;
+            setSelectedSlotAction(null);
+            setActivePicker(slot);
+          }}
+        />
+      )}
+
       {/* Card Picker Modal */}
       {activePicker && (
         <CardPickerModal
@@ -808,6 +1173,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           cards={cards}
           currentSlot={currentSlotForPicker}
           slotTitle={activePicker.slotTitle}
+          slotType={activePicker.slotType}
           isExpeditionSlot={activePicker.slotType === 'expedition'}
           onSelectCard={(slotCard) => {
             handleAssignSlotCard(

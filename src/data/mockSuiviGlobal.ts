@@ -26,6 +26,31 @@ export const CATEGORIES_CONFIG: Record<string, CategorieConfig> = {
   },
 };
 
+export interface ChaineOption {
+  id: string;
+  nom: string;
+  categorieId: 'BRODERIE_MAIN' | 'CONFECTION';
+  categorieTitre: string;
+  dotColor: string;
+}
+
+export const PRODUCTION_CHAINS: ChaineOption[] = [
+  // Broderie Main
+  { id: 'bm-glaieul', nom: 'Glaïeul', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-petunia', nom: 'Pétunia', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-dhalia', nom: 'Dhalia', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-rose', nom: 'Rose', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-orchidee', nom: 'Orchidée', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-mimosa', nom: 'Mimosa', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  // Confection
+  { id: 'conf-tan', nom: 'Tan', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-mar', nom: 'Mar', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-bleu', nom: 'Bleu', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+];
+
+// RÈGLE MÉTIER STRICTE :
+// - Seules les cartes avec OK Prod validé (CRD-001, CRD-002, CRD-003, CRD-005) sont en "Modèle en cours"
+// - Toutes les cartes en attente d'OK Prod (CRD-004, CRD-006, CRD-007, CRD-008, CRD-009, CRD-010) sont strictement en "PROCHAINS LANCEMENTS"
 export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
   // --- BRODERIE MAIN ---
   {
@@ -38,9 +63,9 @@ export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
     realisationJour: 42,
     remarque: 'Broderie col et poignets en cours',
     prochainsLancementsCards: [
-      { cardId: 'CRD-003', customLabel: 'Veste Tweed Broderie Perles' },
-      { customLabel: 'Jupe Plissée Soie' },
-      { customLabel: 'Top Organza Brodé' },
+      { cardId: 'CRD-004', customLabel: 'Veste Smoking Col Satin' },
+      { cardId: 'CRD-007', customLabel: 'Jupon Étoile Volants' },
+      null,
       null,
       null,
     ],
@@ -51,13 +76,13 @@ export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
     categorieId: 'BRODERIE_MAIN',
     nom: 'Pétunia',
     dotColor: '#f8b4a6',
-    modeleEnCoursCard: { cardId: 'CRD-003', customLabel: 'Veste Tweed Broderie Perles' },
+    modeleEnCoursCard: { cardId: 'CRD-003', customLabel: 'Veste Iconique 4 Poches' },
     objectifJour: 30,
     realisationJour: 28,
     remarque: 'Attente complément perles dorées',
     prochainsLancementsCards: [
-      { cardId: 'CRD-002', customLabel: 'Manteau Cachemire Double-Face' },
-      { customLabel: 'Robe Cocktail Émeraude' },
+      { cardId: 'CRD-006', customLabel: 'Blouson Oversize Couture' },
+      { cardId: 'CRD-008', customLabel: 'Top Dentelle Haute Couture' },
       null,
       null,
       null,
@@ -69,13 +94,13 @@ export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
     categorieId: 'BRODERIE_MAIN',
     nom: 'Dhalia',
     dotColor: '#f8b4a6',
-    modeleEnCoursCard: { customLabel: 'Jupon Étoile Volants' },
+    modeleEnCoursCard: undefined,
     objectifJour: 50,
     realisationJour: 51,
     remarque: 'Bonne cadence, fin prévue 16h',
     prochainsLancementsCards: [
-      { customLabel: 'Robe Empire Taffetas' },
-      { cardId: 'CRD-004', customLabel: 'Chemisier Soie Lavallière' },
+      { cardId: 'CRD-007', customLabel: 'Jupon Étoile Volants' },
+      { cardId: 'CRD-009', customLabel: 'Écharpe Broderie Florale' },
       null,
       null,
       null,
@@ -87,13 +112,13 @@ export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
     categorieId: 'BRODERIE_MAIN',
     nom: 'Rose',
     dotColor: '#f8b4a6',
-    modeleEnCoursCard: { customLabel: 'Top Dentelle Haute Couture' },
+    modeleEnCoursCard: undefined,
     objectifJour: 40,
     realisationJour: 36,
     remarque: 'Fil lurex délicat - contrôle 100%',
     prochainsLancementsCards: [
-      { customLabel: 'Robe Fleurie Organza' },
-      { customLabel: 'Robe Velours Nuit' },
+      { cardId: 'CRD-008', customLabel: 'Top Dentelle Haute Couture' },
+      { cardId: 'CRD-010', customLabel: 'Jupe Plissée Soleil' },
       null,
       null,
       null,
@@ -105,13 +130,13 @@ export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
     categorieId: 'BRODERIE_MAIN',
     nom: 'Orchidée',
     dotColor: '#f8b4a6',
-    modeleEnCoursCard: { cardId: 'CRD-004', customLabel: 'Chemisier Soie Lavallière' },
+    modeleEnCoursCard: undefined,
     objectifJour: 35,
     realisationJour: 35,
     remarque: 'Cadence nominale atteinte',
     prochainsLancementsCards: [
-      { cardId: 'CRD-001', customLabel: 'Robe Soirée Haute Couture' },
-      { customLabel: 'Tunique Mousseline' },
+      { cardId: 'CRD-004', customLabel: 'Veste Smoking Col Satin' },
+      { cardId: 'CRD-006', customLabel: 'Blouson Oversize Couture' },
       null,
       null,
       null,
@@ -123,13 +148,13 @@ export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
     categorieId: 'BRODERIE_MAIN',
     nom: 'Mimosa',
     dotColor: '#f8b4a6',
-    modeleEnCoursCard: { customLabel: 'Écharpe Broderie Florale' },
+    modeleEnCoursCard: undefined,
     objectifJour: 60,
     realisationJour: 58,
     remarque: 'OF interne bientôt soldé',
     prochainsLancementsCards: [
-      { customLabel: 'Carré Soie Imprimé' },
-      { customLabel: 'Châle Frangé' },
+      { cardId: 'CRD-009', customLabel: 'Écharpe Broderie Florale' },
+      { cardId: 'CRD-007', customLabel: 'Jupon Étoile Volants' },
       null,
       null,
       null,
@@ -143,13 +168,13 @@ export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
     categorieId: 'CONFECTION',
     nom: 'Tan',
     dotColor: '#7dd3fc',
-    modeleEnCoursCard: { cardId: 'CRD-005', customLabel: 'Pantalon Gabardine Laine' },
+    modeleEnCoursCard: { cardId: 'CRD-005', customLabel: 'Trench Croisé Ceinturé' },
     objectifJour: 80,
     realisationJour: 76,
     remarque: 'Montage ceintures et fermetures',
     prochainsLancementsCards: [
-      { cardId: 'CRD-002', customLabel: 'Manteau Cachemire Double-Face' },
-      { customLabel: 'Bermuda Crêpe' },
+      { cardId: 'CRD-004', customLabel: 'Veste Smoking Col Satin' },
+      { cardId: 'CRD-010', customLabel: 'Jupe Plissée Soleil' },
       null,
       null,
       null,
@@ -166,8 +191,8 @@ export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
     realisationJour: 88,
     remarque: 'Assemblage col et manchettes OK',
     prochainsLancementsCards: [
-      { cardId: 'CRD-004', customLabel: 'Chemisier Soie Lavallière' },
-      { customLabel: 'Blouse Fluide' },
+      { cardId: 'CRD-006', customLabel: 'Blouson Oversize Couture' },
+      { cardId: 'CRD-008', customLabel: 'Top Dentelle Haute Couture' },
       null,
       null,
       null,
@@ -179,13 +204,13 @@ export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
     categorieId: 'CONFECTION',
     nom: 'Bleu',
     dotColor: '#7dd3fc',
-    modeleEnCoursCard: { customLabel: 'Jupe Plissée Soleil' },
+    modeleEnCoursCard: undefined,
     objectifJour: 70,
     realisationJour: 68,
     remarque: 'Réglage machine ourlet invisible',
     prochainsLancementsCards: [
-      { cardId: 'CRD-003', customLabel: 'Veste Tweed Broderie Perles' },
-      { customLabel: 'Jupe Culotte Gabardine' },
+      { cardId: 'CRD-010', customLabel: 'Jupe Plissée Soleil' },
+      { cardId: 'CRD-009', customLabel: 'Écharpe Broderie Florale' },
       null,
       null,
       null,

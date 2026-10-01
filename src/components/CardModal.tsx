@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { CardFormData, CardItem, CardStatus, OrdreFabrication } from '../types/card.ts';
 import { OFSubTable } from './OFSubTable.tsx';
+import { PRODUCTION_CHAINS } from '../data/mockSuiviGlobal.ts';
 import {
   X,
   Check,
@@ -13,6 +14,10 @@ import {
   CheckCheck,
   Building2,
   Handshake,
+  Lock,
+  AlertCircle,
+  Layers,
+  ChevronDown,
 } from 'lucide-react';
 
 interface CardModalProps {
@@ -20,6 +25,7 @@ interface CardModalProps {
   onClose: () => void;
   onSubmit: (data: CardFormData) => Promise<void>;
   initialData?: CardItem | null;
+  prefillData?: Partial<CardFormData> | null;
 }
 
 export const CardModal: React.FC<CardModalProps> = ({
@@ -27,6 +33,7 @@ export const CardModal: React.FC<CardModalProps> = ({
   onClose,
   onSubmit,
   initialData,
+  prefillData,
 }) => {
   const [client, setClient] = useState('');
   const [nom, setNom] = useState('');
@@ -43,6 +50,10 @@ export const CardModal: React.FC<CardModalProps> = ({
   const [statut, setStatut] = useState<CardStatus>('EN_ATTENTE');
   const [decisionReunion, setDecisionReunion] = useState('');
   const [notes, setNotes] = useState('');
+  const [chaineId, setChaineId] = useState<string | undefined>(undefined);
+  const [chaineNom, setChaineNom] = useState<string | undefined>(undefined);
+  const [chaineCategorie, setChaineCategorie] = useState<string | undefined>(undefined);
+  const [isChaineSelectorOpen, setIsChaineSelectorOpen] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
@@ -64,26 +75,33 @@ export const CardModal: React.FC<CardModalProps> = ({
       setStatut(initialData.statut);
       setDecisionReunion(initialData.decisionReunion || '');
       setNotes(initialData.notes || '');
+      setChaineId(initialData.chaineId);
+      setChaineNom(initialData.chaineNom);
+      setChaineCategorie(initialData.chaineCategorie);
     } else {
-      setClient('');
-      setNom('');
+      setClient(prefillData?.client || '');
+      setNom(prefillData?.nom || '');
       setReference(`OF-2026-${Math.floor(1000 + Math.random() * 9000)}`);
-      setModele('');
-      setDt(false);
-      setTc(false);
-      setSms(false);
-      setRdl(false);
-      setOkProd(false);
-      setOfs([]);
-      setQuantiteDemandee(200);
-      setQuantiteFinie(0);
-      setStatut('EN_ATTENTE');
-      setDecisionReunion('');
-      setNotes('');
+      setModele(prefillData?.modele || '');
+      setDt(Boolean(prefillData?.dt));
+      setTc(Boolean(prefillData?.tc));
+      setSms(Boolean(prefillData?.sms));
+      setRdl(Boolean(prefillData?.rdl));
+      setOkProd(Boolean(prefillData?.okProd));
+      setOfs(prefillData?.ofs || []);
+      setQuantiteDemandee(prefillData?.quantiteDemandee || 200);
+      setQuantiteFinie(prefillData?.quantiteFinie || 0);
+      setStatut(prefillData?.statut || 'EN_ATTENTE');
+      setDecisionReunion(prefillData?.decisionReunion || '');
+      setNotes(prefillData?.notes || '');
+      setChaineId(prefillData?.chaineId);
+      setChaineNom(prefillData?.chaineNom);
+      setChaineCategorie(prefillData?.chaineCategorie);
     }
+    setIsChaineSelectorOpen(false);
     setError(null);
     setCopied(false);
-  }, [initialData, isOpen]);
+  }, [initialData, prefillData, isOpen]);
 
   if (!isOpen) return null;
 
@@ -128,6 +146,9 @@ export const CardModal: React.FC<CardModalProps> = ({
         statut,
         decisionReunion: decisionReunion.trim() || undefined,
         notes: notes.trim() || undefined,
+        chaineId,
+        chaineNom,
+        chaineCategorie,
       });
       onClose();
     } catch (err: unknown) {
@@ -140,6 +161,32 @@ export const CardModal: React.FC<CardModalProps> = ({
   const reste = Math.max(0, quantiteDemandee - quantiteFinie);
   const progressPct =
     quantiteDemandee > 0 ? Math.min(100, Math.round((quantiteFinie / quantiteDemandee) * 100)) : 0;
+
+  const handleToggleDt = () => {
+    const next = !dt;
+    setDt(next);
+    if (!next && okProd) setOkProd(false);
+  };
+
+  const handleToggleTc = () => {
+    const next = !tc;
+    setTc(next);
+    if (!next && okProd) setOkProd(false);
+  };
+
+  const handleToggleSms = () => {
+    const next = !sms;
+    setSms(next);
+    if (!next && okProd) setOkProd(false);
+  };
+
+  const handleToggleRdl = () => {
+    const next = !rdl;
+    setRdl(next);
+    if (!next && okProd) setOkProd(false);
+  };
+
+  const allJalonsChecked = Boolean(dt && tc && sms && rdl);
 
   const getStatusBadge = (s: CardStatus) => {
     switch (s) {
@@ -262,6 +309,162 @@ export const CardModal: React.FC<CardModalProps> = ({
             </div>
           )}
 
+          {/* Section: Choix de la Chaîne en charge de traiter cette carte */}
+          <div className="p-3.5 rounded-xl border border-slate-200 bg-gradient-to-r from-slate-50 to-indigo-50/30">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-2xs">
+                  <Layers className="w-4 h-4" />
+                </div>
+                <div>
+                  <div className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <span>Chaîne en charge de produire cette carte</span>
+                    {chaineNom && (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 border border-indigo-200">
+                        {chaineCategorie === 'CONFECTION' ? 'Confection' : 'Broderie Main'}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-[11px] text-slate-500 mt-0.5">
+                    {chaineNom ? (
+                      <span className="text-indigo-900 font-semibold">
+                        Affectée à la chaîne : <span className="underline decoration-indigo-300">{chaineNom}</span>
+                      </span>
+                    ) : (
+                      'Aucune chaîne attribuée (cliquez sur le bouton "Chaîne" pour assigner)'
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              {/* Bouton "Chaîne" */}
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsChaineSelectorOpen(!isChaineSelectorOpen)}
+                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer shadow-2xs ${
+                    chaineNom
+                      ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-300 ring-2 ring-indigo-500/20'
+                      : 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700'
+                  }`}
+                  title="Sélectionner la chaîne de production pour cette carte"
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  <span>{chaineNom ? `Chaîne : ${chaineNom}` : 'Chaîne (Sélectionner)'}</span>
+                  <ChevronDown
+                    className={`w-3.5 h-3.5 transition-transform ${
+                      isChaineSelectorOpen ? 'rotate-180' : ''
+                    }`}
+                  />
+                </button>
+
+                {/* Dropdown Menu de sélection des Chaînes */}
+                {isChaineSelectorOpen && (
+                  <div className="absolute right-0 mt-1.5 w-72 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                    <div className="px-2 py-1 text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+                      <span>Sélectionner la chaîne</span>
+                      <span className="text-[10px] font-normal text-slate-400">Atelier</span>
+                    </div>
+
+                    {/* Broderie Main */}
+                    <div className="mt-1.5">
+                      <div className="px-2 py-0.5 text-[10px] font-bold text-[#881337] bg-[#fbe7e2]/70 rounded mb-1">
+                        Broderie Main
+                      </div>
+                      <div className="grid grid-cols-2 gap-1">
+                        {PRODUCTION_CHAINS.filter((c) => c.categorieId === 'BRODERIE_MAIN').map(
+                          (chain) => {
+                            const isSelected = chaineNom === chain.nom || chaineId === chain.id;
+                            return (
+                              <button
+                                key={chain.id}
+                                type="button"
+                                onClick={() => {
+                                  setChaineId(chain.id);
+                                  setChaineNom(chain.nom);
+                                  setChaineCategorie(chain.categorieId);
+                                  setIsChaineSelectorOpen(false);
+                                }}
+                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all text-left cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-indigo-600 text-white shadow-2xs font-bold'
+                                    : 'text-slate-700 hover:bg-slate-100'
+                                }`}
+                              >
+                                <span
+                                  className="w-2 h-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: chain.dotColor }}
+                                />
+                                <span className="truncate">{chain.nom}</span>
+                                {isSelected && <Check className="w-3 h-3 ml-auto shrink-0" />}
+                              </button>
+                            );
+                          }
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Confection */}
+                    <div className="mt-2 pt-1.5 border-t border-slate-100">
+                      <div className="px-2 py-0.5 text-[10px] font-bold text-[#0369a1] bg-[#e0f2fe]/70 rounded mb-1">
+                        Confection
+                      </div>
+                      <div className="grid grid-cols-2 gap-1">
+                        {PRODUCTION_CHAINS.filter((c) => c.categorieId === 'CONFECTION').map(
+                          (chain) => {
+                            const isSelected = chaineNom === chain.nom || chaineId === chain.id;
+                            return (
+                              <button
+                                key={chain.id}
+                                type="button"
+                                onClick={() => {
+                                  setChaineId(chain.id);
+                                  setChaineNom(chain.nom);
+                                  setChaineCategorie(chain.categorieId);
+                                  setIsChaineSelectorOpen(false);
+                                }}
+                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all text-left cursor-pointer ${
+                                  isSelected
+                                    ? 'bg-indigo-600 text-white shadow-2xs font-bold'
+                                    : 'text-slate-700 hover:bg-slate-100'
+                                }`}
+                              >
+                                <span
+                                  className="w-2 h-2 rounded-full shrink-0"
+                                  style={{ backgroundColor: chain.dotColor }}
+                                />
+                                <span className="truncate">{chain.nom}</span>
+                                {isSelected && <Check className="w-3 h-3 ml-auto shrink-0" />}
+                              </button>
+                            );
+                          }
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Option: Retirer l'affectation */}
+                    {chaineNom && (
+                      <div className="mt-2 pt-1.5 border-t border-slate-100 text-center">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setChaineId(undefined);
+                            setChaineNom(undefined);
+                            setChaineCategorie(undefined);
+                            setIsChaineSelectorOpen(false);
+                          }}
+                          className="text-[11px] text-rose-600 hover:text-rose-800 hover:underline cursor-pointer"
+                        >
+                          ✕ Retirer l'affectation de chaîne
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* Section 1: Identifiants principaux */}
           <div className="space-y-3">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
@@ -364,7 +567,7 @@ export const CardModal: React.FC<CardModalProps> = ({
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
               {/* DT */}
               <div
-                onClick={() => setDt(!dt)}
+                onClick={handleToggleDt}
                 className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
                   dt
                     ? 'bg-emerald-50/70 border-emerald-300 text-emerald-900 ring-2 ring-emerald-500/20'
@@ -389,7 +592,7 @@ export const CardModal: React.FC<CardModalProps> = ({
 
               {/* TC */}
               <div
-                onClick={() => setTc(!tc)}
+                onClick={handleToggleTc}
                 className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
                   tc
                     ? 'bg-emerald-50/70 border-emerald-300 text-emerald-900 ring-2 ring-emerald-500/20'
@@ -414,7 +617,7 @@ export const CardModal: React.FC<CardModalProps> = ({
 
               {/* SMS */}
               <div
-                onClick={() => setSms(!sms)}
+                onClick={handleToggleSms}
                 className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
                   sms
                     ? 'bg-indigo-50/70 border-indigo-300 text-indigo-900 ring-2 ring-indigo-500/20'
@@ -439,7 +642,7 @@ export const CardModal: React.FC<CardModalProps> = ({
 
               {/* RDL */}
               <div
-                onClick={() => setRdl(!rdl)}
+                onClick={handleToggleRdl}
                 className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
                   rdl
                     ? 'bg-purple-50/70 border-purple-300 text-purple-900 ring-2 ring-purple-500/20'
@@ -488,29 +691,54 @@ export const CardModal: React.FC<CardModalProps> = ({
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={() => {
-                  const nextOk = !okProd;
-                  setOkProd(nextOk);
-                  if (nextOk) setRdl(true);
-                }}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap ${
-                  okProd
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-2xs'
-                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
-                }`}
-              >
-                {okProd ? 'OK Prod Validé ✓ (Cliquer pour révoquer)' : 'Valider OK Prod (RDL)'}
-              </button>
+              {/* RÈGLE : Tant que DT, TC, SMS et RDL ne sont pas tous cochés, on masque le bouton "Valider OK Prod" */}
+              {allJalonsChecked ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const nextOk = !okProd;
+                    setOkProd(nextOk);
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap shadow-2xs ${
+                    okProd
+                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
+                      : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 animate-pulse'
+                  }`}
+                >
+                  <CheckCheck className="w-3.5 h-3.5" />
+                  <span>{okProd ? 'OK Prod Validé ✓ (Cliquer pour révoquer)' : 'Valider OK Prod'}</span>
+                </button>
+              ) : (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 border border-slate-200 text-slate-500 whitespace-nowrap">
+                  <Lock className="w-3.5 h-3.5 text-slate-400" />
+                  <span>Bouton OK Prod masqué (Attente DT, TC, SMS & RDL)</span>
+                </div>
+              )}
             </div>
 
-            {/* Cette répartition apparaît uniquement dans la carte, une fois l'OK Prod validé durant la RDL */}
-            {okProd ? (
+            {/* Alerte explicative si les jalons ne sont pas tous cochés */}
+            {!allJalonsChecked && (
+              <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-lg text-xs text-amber-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <strong>Jalons obligatoires :</strong> Tant que <strong>DT</strong>, <strong>TC</strong>, <strong>SMS</strong> et <strong>RDL</strong> ne sont pas tous les 4 cochés, le bouton <em>« Valider OK Prod »</em> reste masqué. Cochez-les ci-dessus pour faire apparaître le bouton et lancer la production.
+                </div>
+              </div>
+            )}
+
+            {/* Répartition des OF & Sous-OFs */}
+            {okProd || rdl || (ofs && ofs.length > 0) ? (
               <div className="pt-2 border-t border-slate-200/80">
-                <div className="text-xs font-bold text-slate-800 mb-2 flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-                  <span>Répartition des OF de cette carte • Validée en RDL (Accord OK Prod ✓)</span>
+                <div className="text-xs font-bold text-slate-800 mb-2 flex items-center justify-between">
+                  <div className="flex items-center gap-1.5">
+                    <span className="w-2 h-2 rounded-full bg-purple-600"></span>
+                    <span>Répartition des OF & Sous-OFs de cette carte</span>
+                  </div>
+                  {okProd && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                      Accord OK Prod Validé ✓
+                    </span>
+                  )}
                 </div>
                 <OFSubTable
                   cardId={initialData?.id || 'NOUVELLE-CARTE'}
@@ -526,21 +754,13 @@ export const CardModal: React.FC<CardModalProps> = ({
                 />
               </div>
             ) : (
-              <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-lg text-xs text-amber-800 flex items-center justify-between gap-2">
-                <span>
-                  🔒 <strong>Répartition des OF verrouillée :</strong> Validez l'accord OK Prod durant la RDL pour faire apparaître la répartition des OFs de cette carte.
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setOkProd(true);
-                    setRdl(true);
-                  }}
-                  className="px-2.5 py-1 text-xs font-bold text-emerald-800 bg-white hover:bg-emerald-50 border border-emerald-300 rounded shadow-2xs cursor-pointer whitespace-nowrap"
-                >
-                  Valider OK Prod
-                </button>
-              </div>
+              allJalonsChecked && (
+                <div className="p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-lg text-xs text-emerald-800 flex items-center gap-2">
+                  <span>
+                    ✓ <strong>Les 4 jalons sont validés !</strong> Vous pouvez maintenant cliquer sur le bouton <strong>« Valider OK Prod »</strong> ci-dessus pour faire glisser automatiquement cette carte en « Modèle en cours ».
+                  </span>
+                </div>
+              )
             )}
           </div>
 

@@ -2,7 +2,7 @@ import { CardFormData, CardItem } from '../types/card.ts';
 import { INITIAL_CARDS } from '../data/mockData.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 
-const STORAGE_KEY = 'point_commande_cards_cache_textile_v5';
+const STORAGE_KEY = 'point_commande_cards_cache_textile_v6';
 
 function getLocalFallback(): CardItem[] {
   try {

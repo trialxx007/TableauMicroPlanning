@@ -9,6 +9,7 @@ import {
   CheckCheck,
   AlertCircle,
   HelpCircle,
+  Lock,
 } from 'lucide-react';
 
 interface CardTableProps {
@@ -238,8 +239,22 @@ export const CardTable: React.FC<CardTableProps> = ({
                       </button>
                     </div>
 
-                    {/* Jalon RDL */}
-                    <div className="mt-1">
+                    {/* Chaîne & Jalon RDL */}
+                    <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                      {card.chaineNom && (
+                        <span
+                          className={`text-[10px] font-bold px-1.5 py-0.5 rounded border inline-flex items-center gap-1 ${
+                            card.chaineCategorie === 'CONFECTION'
+                              ? 'bg-sky-50 text-sky-800 border-sky-200'
+                              : 'bg-rose-50 text-rose-800 border-rose-200'
+                          }`}
+                          title={`Chaîne de production : ${card.chaineNom}`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-current opacity-70" />
+                          <span>Chaîne : {card.chaineNom}</span>
+                        </span>
+                      )}
+
                       <button
                         type="button"
                         onClick={() => onUpdateCard(card.id, { rdl: !card.rdl })}
@@ -330,14 +345,23 @@ export const CardTable: React.FC<CardTableProps> = ({
                             {ofCount > 0 ? `${ofCount} OF dans la carte` : 'Gérer les OF'}
                           </button>
                         </>
+                      ) : card.dt && card.tc && card.sms && card.rdl ? (
+                        <button
+                          onClick={() => onUpdateCard(card.id, { okProd: true })}
+                          title="Les 4 jalons DT, TC, SMS et RDL sont validés ! Cliquer pour valider l'OK Prod (la carte glissera automatiquement en Modèle en cours)"
+                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-700 transition-colors cursor-pointer shadow-2xs animate-pulse"
+                        >
+                          <CheckCheck className="w-3.5 h-3.5" />
+                          <span>Valider OK Prod</span>
+                        </button>
                       ) : (
                         <button
-                          onClick={() => onUpdateCard(card.id, { okProd: true, rdl: true })}
-                          title="Valider l'OK Prod durant la RDL pour débloquer la répartition des OFs dans la carte"
-                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 transition-colors cursor-pointer shadow-2xs"
+                          onClick={() => onEditCard(card)}
+                          title="DT, TC, SMS et RDL doivent être tous les 4 cochés avant de pouvoir valider l'accord OK Prod"
+                          className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-slate-100 text-slate-500 border border-slate-200 hover:bg-slate-200 transition-colors cursor-pointer"
                         >
-                          <CheckCheck className="w-3.5 h-3.5 text-amber-600" />
-                          <span>Valider OK Prod</span>
+                          <Lock className="w-3 h-3 text-slate-400" />
+                          <span>Attente DT/TC/SMS/RDL</span>
                         </button>
                       )}
                     </div>

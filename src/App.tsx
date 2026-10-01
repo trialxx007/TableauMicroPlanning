@@ -23,6 +23,8 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CardItem | null>(null);
+  const [cardModalPrefill, setCardModalPrefill] = useState<Partial<CardFormData> | null>(null);
+  const [onCardCreatedCallback, setOnCardCreatedCallback] = useState<((card: CardItem) => void) | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
   const [isMeetingFilterActive, setIsMeetingFilterActive] = useState(false);
 
@@ -72,7 +74,11 @@ export default function App() {
     } else {
       const created = await cardApi.create(formData);
       setCards((prev) => [created, ...prev]);
-      showNotification(`Nouvelle carte ${created.nom} ajoutée au point de production`);
+      showNotification(`Nouvelle carte "${created.modele}" créée et enregistrée avec succès`);
+      if (onCardCreatedCallback) {
+        onCardCreatedCallback(created);
+        setOnCardCreatedCallback(null);
+      }
     }
   };
 
@@ -295,6 +301,13 @@ export default function App() {
           cards={cards}
           onOpenCardModal={(card) => {
             setEditingCard(card);
+            setCardModalPrefill(null);
+            setIsModalOpen(true);
+          }}
+          onOpenCreateCard={(prefill, callback) => {
+            setEditingCard(null);
+            setCardModalPrefill(prefill);
+            setOnCardCreatedCallback(() => callback);
             setIsModalOpen(true);
           }}
         />
@@ -304,9 +317,12 @@ export default function App() {
             onClose={() => {
               setIsModalOpen(false);
               setEditingCard(null);
+              setCardModalPrefill(null);
+              setOnCardCreatedCallback(null);
             }}
             onSubmit={handleCreateOrUpdate}
             initialData={editingCard}
+            prefillData={cardModalPrefill}
           />
         )}
       </>

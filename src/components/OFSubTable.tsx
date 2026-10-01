@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
-import { OrdreFabrication, CardStatus, OFType } from '../types/card.ts';
+import { OrdreFabrication, SousOrdreFabrication, CardStatus, OFType } from '../types/card.ts';
+import { EnCoursGrid } from './EnCoursCasesSection.tsx';
+import { EditableItemName } from './EditableItemName.tsx';
 import {
   Building2,
   Handshake,
   Plus,
   Trash2,
-  ArrowUpDown,
-  CheckCircle2,
-  Clock,
-  AlertTriangle,
+  X,
 } from 'lucide-react';
 
 interface OFSubTableProps {
@@ -16,6 +15,14 @@ interface OFSubTableProps {
   totalDemandee: number;
   ofs: OrdreFabrication[];
   onUpdateOFs: (newOfs: OrdreFabrication[]) => void;
+}
+
+function adjustCasesLength(arr: number[] | undefined, targetLen: number): number[] {
+  const result = arr ? [...arr] : [];
+  while (result.length < targetLen) {
+    result.push(0);
+  }
+  return result.slice(0, targetLen);
 }
 
 export const OFSubTable: React.FC<OFSubTableProps> = ({
@@ -45,6 +52,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
     }
   };
 
+  // --- OF CRUD ---
   const handleUpdateSingleOF = (
     ofId: string,
     updates: Partial<OrdreFabrication>
@@ -64,7 +72,6 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
       updated.quantiteFinie = qteFinie;
       updated.resteAProduire = Math.max(0, qteDemandee - qteFinie);
 
-      // Auto update status if completed
       if (updates.quantiteFinie !== undefined && updates.statut === undefined) {
         if (qteFinie >= qteDemandee && qteDemandee > 0) {
           updated.statut = 'TERMINE';
@@ -80,7 +87,6 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
 
   const handleDeleteOF = (ofId: string) => {
     const nextOfs = ofs.filter((o) => o.id !== ofId);
-    // Re-index codeOF and ordreRDL
     const reindexed = nextOfs.map((o, idx) => ({
       ...o,
       codeOF: `OF${idx + 1}`,
@@ -98,7 +104,6 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
     copy[index] = copy[targetIndex];
     copy[targetIndex] = temp;
 
-    // Re-assign ordreRDL and codeOF based on RDL order
     const updated = copy.map((o, idx) => ({
       ...o,
       codeOF: `OF${idx + 1}`,
@@ -111,9 +116,11 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
   const handleCreateOF = (e: React.FormEvent) => {
     e.preventDefault();
     const nextIndex = ofs.length + 1;
+    const defaultCode = `OF${nextIndex}`;
     const newOF: OrdreFabrication = {
       id: `OF-${Date.now().toString().slice(-5)}`,
-      codeOF: `OF${nextIndex}`,
+      codeOF: defaultCode,
+      titre: defaultCode,
       ordreRDL: nextIndex,
       type: newType,
       nomExecutant:
@@ -124,6 +131,9 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
       quantiteFinie: 0,
       resteAProduire: Number(newQuantite),
       statut: 'EN_ATTENTE',
+      nbCases: 5,
+      casesEnCours: [0, 0, 0, 0, 0],
+      sousOfs: [],
     };
 
     onUpdateOFs([...ofs, newOF]);
@@ -132,17 +142,80 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
     setNewQuantite(Math.max(10, soldeNonAlloue - newQuantite));
   };
 
+  // --- SOUS-OF SIMPLE & DIRECT ---
+  const handleDirectAddSousOF = (ofId: string) => {
+    const targetOF = ofs.find((o) => o.id === ofId);
+    if (!targetOF) return;
+
+    const nextSubNum = (targetOF.sousOfs?.length || 0) + 1;
+    const defaultCode = `${targetOF.codeOF}.${nextSubNum}`;
+    const newSousOF: SousOrdreFabrication = {
+      id: `SOF-${Date.now().toString().slice(-6)}`,
+      codeSousOF: defaultCode,
+      titre: defaultCode, // Par défaut OF1.1, OF1.2...
+      quantiteDemandee: 0,
+      quantiteFinie: 0,
+      statut: 'EN_COURS',
+      nbCases: 5,
+      casesEnCours: [0, 0, 0, 0, 0],
+    };
+
+    const nextOfs = ofs.map((o) => {
+      if (o.id !== ofId) return o;
+      return {
+        ...o,
+        sousOfs: [...(o.sousOfs || []), newSousOF],
+      };
+    });
+
+    onUpdateOFs(nextOfs);
+  };
+
+  const handleUpdateSousOF = (
+    ofId: string,
+    sousOFId: string,
+    updates: Partial<SousOrdreFabrication>
+  ) => {
+    const nextOfs = ofs.map((o) => {
+      if (o.id !== ofId) return o;
+      const nextSousOfs = (o.sousOfs || []).map((sof) => {
+        if (sof.id !== sousOFId) return sof;
+        const updated = { ...sof, ...updates };
+
+        if (updates.nbCases !== undefined && updates.nbCases !== sof.nbCases) {
+          updated.casesEnCours = adjustCasesLength(sof.casesEnCours, updates.nbCases);
+        }
+
+        return updated;
+      });
+      return { ...o, sousOfs: nextSousOfs };
+    });
+
+    onUpdateOFs(nextOfs);
+  };
+
+  const handleDeleteSousOF = (ofId: string, sousOFId: string) => {
+    const nextOfs = ofs.map((o) => {
+      if (o.id !== ofId) return o;
+      return {
+        ...o,
+        sousOfs: (o.sousOfs || []).filter((sof) => sof.id !== sousOFId),
+      };
+    });
+    onUpdateOFs(nextOfs);
+  };
+
   return (
     <div className="bg-slate-50/90 p-4 rounded-xl border border-slate-200 mt-2 space-y-3">
-      {/* Header bar of OF subdivision */}
+      {/* Barre d'en-tête */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-200/80 pb-3">
         <div className="flex items-center gap-2">
           <span className="font-bold text-slate-800 text-xs sm:text-sm flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-purple-600"></span>
-            Ordres de Fabrication (OF) après OK Prod
+            <span className="w-2.5 h-2.5 rounded-full bg-slate-900 shadow-2xs"></span>
+            Ordres de Fabrication (OF) & Sous-OF
           </span>
-          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200">
-            Ordre déterminé en RDL
+          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-200 text-slate-800 border border-slate-300">
+            Cases d'en-cours manuelles (3 à 5)
           </span>
         </div>
 
@@ -165,27 +238,30 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                 setIsAddingOF(true);
                 setNewQuantite(soldeNonAlloue > 0 ? soldeNonAlloue : 50);
               }}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-white hover:bg-blue-50 border border-blue-200 rounded-lg shadow-2xs transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-bold text-slate-900 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg shadow-2xs transition-colors cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>Ajouter un OF (Interne / Sous-traitant)</span>
+              <span>Ajouter un OF</span>
             </button>
           )}
         </div>
       </div>
 
-      {/* Form to add an OF */}
+      {/* Formulaire ajout OF */}
       {isAddingOF && (
         <form
           onSubmit={handleCreateOF}
-          className="bg-white p-3 rounded-lg border border-blue-200 shadow-xs space-y-3 animate-in fade-in"
+          className="bg-white p-3.5 rounded-xl border border-slate-300 shadow-xs space-y-3 animate-in fade-in"
         >
-          <div className="text-xs font-bold text-blue-900 flex items-center justify-between">
-            <span>Nouvel Ordre de Fabrication (Découpage RDL)</span>
+          <div className="text-xs font-bold text-slate-900 flex items-center justify-between">
+            <span className="flex items-center gap-1.5">
+              <Plus className="w-4 h-4 text-slate-900" />
+              Nouvel Ordre de Fabrication (OF)
+            </span>
             <button
               type="button"
               onClick={() => setIsAddingOF(false)}
-              className="text-slate-400 hover:text-slate-600 text-xs"
+              className="text-slate-400 hover:text-slate-600 text-xs cursor-pointer"
             >
               Annuler
             </button>
@@ -221,7 +297,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder="ex: Sous-traitant Duval Confection, Atelier Broderie Marigny..."
+                  placeholder="ex: Sous-traitant Duval Confection..."
                   value={newNomExecutant}
                   onChange={(e) => setNewNomExecutant(e.target.value)}
                   className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
@@ -254,7 +330,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
             </button>
             <button
               type="submit"
-              className="px-3 py-1 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer shadow-2xs"
+              className="px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-black rounded-lg cursor-pointer shadow-2xs"
             >
               Enregistrer l'OF
             </button>
@@ -262,222 +338,255 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
         </form>
       )}
 
-      {/* Table of OFs */}
+      {/* Liste des OFs */}
       {ofs.length === 0 ? (
-        <div className="text-center py-4 bg-white rounded-lg border border-dashed border-slate-300 text-xs text-slate-500">
-          Aucun OF n'a encore été créé pour cette carte. Cliquez sur "Ajouter un OF" pour ventiler
-          la production entre l'atelier interne et les sous-traitants.
+        <div className="text-center py-5 bg-white rounded-xl border border-dashed border-slate-300 text-xs text-slate-500">
+          Aucun OF pour cette carte. Cliquez sur "Ajouter un OF".
         </div>
       ) : (
-        <div className="bg-white rounded-lg border border-slate-200 shadow-2xs overflow-hidden">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="bg-slate-100/70 border-b border-slate-200 font-semibold text-slate-600">
-                <th className="py-2.5 px-3">Ordre RDL</th>
-                <th className="py-2.5 px-3">Code OF</th>
-                <th className="py-2.5 px-3">Type & Exécutant</th>
-                <th className="py-2.5 px-3 text-right">Qté Demandée</th>
-                <th className="py-2.5 px-3 text-center min-w-[160px]">Point Journalier (Qté Finie)</th>
-                <th className="py-2.5 px-3 text-right">Reste</th>
-                <th className="py-2.5 px-3 text-center">Statut OF</th>
-                <th className="py-2.5 px-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {ofs.map((ofItem, index) => {
-                const progress =
-                  ofItem.quantiteDemandee > 0
-                    ? Math.min(
-                        100,
-                        Math.round(
-                          (ofItem.quantiteFinie / ofItem.quantiteDemandee) * 100
-                        )
-                      )
-                    : 0;
+        <div className="space-y-3">
+          {ofs.map((ofItem, index) => {
+            const hasSubOfs = Boolean(ofItem.sousOfs && ofItem.sousOfs.length > 0);
 
-                return (
-                  <tr key={ofItem.id} className="hover:bg-slate-50/80 transition-colors">
+            const ofNbCases = ofItem.nbCases || 5;
+            const ofCases = ofItem.casesEnCours && ofItem.casesEnCours.length
+              ? ofItem.casesEnCours
+              : Array(ofNbCases).fill(0);
+
+            return (
+              <div
+                key={ofItem.id}
+                className="bg-white rounded-xl border border-slate-300 shadow-2xs overflow-hidden"
+              >
+                {/* Ligne d'en-tête de l'OF */}
+                <div className="p-3 bg-slate-100/70 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {/* Ordre RDL */}
-                    <td className="py-2.5 px-3 whitespace-nowrap">
-                      <div className="flex items-center gap-1">
-                        <span className="font-bold text-purple-900 bg-purple-100 px-2 py-0.5 rounded text-[11px] border border-purple-200">
-                          #{ofItem.ordreRDL}
+                    <div className="flex items-center gap-1">
+                      <span className="font-bold text-slate-900 bg-white px-2 py-0.5 rounded text-[11px] border border-slate-300 shadow-2xs">
+                        #{ofItem.ordreRDL}
+                      </span>
+                      <div className="flex flex-col">
+                        <button
+                          type="button"
+                          disabled={index === 0}
+                          onClick={() => handleMoveOrder(index, 'UP')}
+                          title="Monter"
+                          className="text-slate-400 hover:text-slate-800 disabled:opacity-20 cursor-pointer text-[9px] leading-tight"
+                        >
+                          ▲
+                        </button>
+                        <button
+                          type="button"
+                          disabled={index === ofs.length - 1}
+                          onClick={() => handleMoveOrder(index, 'DOWN')}
+                          title="Descendre"
+                          className="text-slate-400 hover:text-slate-800 disabled:opacity-20 cursor-pointer text-[9px] leading-tight"
+                        >
+                          ▼
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* NOM DE L'OF PERSONNALISABLE AVEC CRAYON (PAR DÉFAUT OF1, OF2...) */}
+                    <EditableItemName
+                      value={ofItem.titre}
+                      defaultValue={ofItem.codeOF}
+                      onSave={(newName) => handleUpdateSingleOF(ofItem.id, { titre: newName })}
+                      className="text-sm font-mono font-bold text-slate-900"
+                    />
+
+                    {/* BOUTON "+" À CÔTÉ DE L'OF POUR AJOUTER UN SOUS-OF */}
+                    <button
+                      type="button"
+                      onClick={() => handleDirectAddSousOF(ofItem.id)}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-900 hover:bg-black text-white text-xs font-bold transition-all shadow-2xs cursor-pointer ml-1"
+                      title={`Ajouter un Sous-OF à ${ofItem.codeOF}`}
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>Sous-OF</span>
+                    </button>
+
+                    {/* Type et Exécutant */}
+                    <div className="flex items-center gap-1.5 ml-1">
+                      {ofItem.type === 'INTERNE' ? (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-800 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
+                          <Building2 className="w-3 h-3 text-blue-600" />
+                          Interne
                         </span>
-                        <div className="flex flex-col">
-                          <button
-                            type="button"
-                            disabled={index === 0}
-                            onClick={() => handleMoveOrder(index, 'UP')}
-                            title="Monter dans l'ordre de passage RDL"
-                            className="text-slate-400 hover:text-purple-700 disabled:opacity-20 cursor-pointer text-[10px]"
-                          >
-                            ▲
-                          </button>
-                          <button
-                            type="button"
-                            disabled={index === ofs.length - 1}
-                            onClick={() => handleMoveOrder(index, 'DOWN')}
-                            title="Descendre dans l'ordre de passage RDL"
-                            className="text-slate-400 hover:text-purple-700 disabled:opacity-20 cursor-pointer text-[10px]"
-                          >
-                            ▼
-                          </button>
-                        </div>
-                      </div>
-                    </td>
-
-                    {/* Code OF */}
-                    <td className="py-2.5 px-3 font-mono font-bold text-slate-900 whitespace-nowrap">
-                      {ofItem.codeOF}
-                    </td>
-
-                    {/* Type & Exécutant */}
-                    <td className="py-2.5 px-3">
-                      <div className="flex items-center gap-1.5">
-                        {ofItem.type === 'INTERNE' ? (
-                          <span
-                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200"
-                            title="Traité par l'atelier de l'entreprise"
-                          >
-                            <Building2 className="w-3 h-3 text-blue-600" />
-                            Interne
-                          </span>
-                        ) : (
-                          <span
-                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200"
-                            title="Traité en dehors de l'entreprise par un sous-traitant"
-                          >
-                            <Handshake className="w-3 h-3 text-indigo-600" />
-                            Sous-traitant
-                          </span>
-                        )}
-                        <span className="font-semibold text-slate-800 truncate max-w-[200px]" title={ofItem.nomExecutant}>
-                          {ofItem.nomExecutant}
-                        </span>
-                      </div>
-                    </td>
-
-                    {/* Qté Demandée */}
-                    <td className="py-2.5 px-3 text-right font-semibold text-slate-900">
-                      {ofItem.quantiteDemandee.toLocaleString('fr-FR')}
-                    </td>
-
-                    {/* Point Fini */}
-                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleUpdateSingleOF(ofItem.id, {
-                              quantiteFinie: Math.max(0, ofItem.quantiteFinie - 5),
-                            })
-                          }
-                          className="w-5 h-5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center cursor-pointer"
-                          title="-5 pièces"
-                        >
-                          -
-                        </button>
-
-                        <input
-                          type="number"
-                          min="0"
-                          max={ofItem.quantiteDemandee}
-                          value={ofItem.quantiteFinie}
-                          onChange={(e) =>
-                            handleUpdateSingleOF(ofItem.id, {
-                              quantiteFinie: Math.min(
-                                ofItem.quantiteDemandee,
-                                Math.max(0, Number(e.target.value) || 0)
-                              ),
-                            })
-                          }
-                          className="w-14 text-center font-bold text-slate-900 border border-slate-200 rounded py-0.5 px-1 bg-white focus:outline-hidden focus:ring-1 focus:ring-blue-500"
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleUpdateSingleOF(ofItem.id, {
-                              quantiteFinie: Math.min(
-                                ofItem.quantiteDemandee,
-                                ofItem.quantiteFinie + 5
-                              ),
-                            })
-                          }
-                          className="w-5 h-5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center cursor-pointer"
-                          title="+5 pièces"
-                        >
-                          +
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleUpdateSingleOF(ofItem.id, {
-                              quantiteFinie: ofItem.quantiteDemandee,
-                            })
-                          }
-                          title="Marquer l'OF comme 100% terminé"
-                          className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded border border-emerald-200 cursor-pointer"
-                        >
-                          Max
-                        </button>
-                      </div>
-
-                      {/* Micro progress bar */}
-                      <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
-                        <div
-                          className={`h-full ${progress === 100 ? 'bg-emerald-500' : 'bg-blue-600'}`}
-                          style={{ width: `${progress}%` }}
-                        />
-                      </div>
-                    </td>
-
-                    {/* Reste à produire */}
-                    <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-700">
-                      {ofItem.resteAProduire === 0 ? (
-                        <span className="text-emerald-600 font-bold">Terminé ✓</span>
                       ) : (
-                        `${ofItem.resteAProduire.toLocaleString('fr-FR')}`
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-800 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200">
+                          <Handshake className="w-3 h-3 text-indigo-600" />
+                          Sous-traitant
+                        </span>
                       )}
-                    </td>
+                      <span className="font-semibold text-slate-800 text-xs truncate max-w-[200px]">
+                        {ofItem.nomExecutant}
+                      </span>
+                    </div>
+                  </div>
 
-                    {/* Statut OF */}
-                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                      <select
-                        value={ofItem.statut}
+                  {/* Actions & métriques OF */}
+                  <div className="flex items-center gap-3 text-xs">
+                    {/* Quantité Demandée */}
+                    <div className="text-right">
+                      <span className="text-[10px] text-slate-400 block">Qté demandée</span>
+                      <strong className="text-slate-900 font-mono">
+                        {ofItem.quantiteDemandee.toLocaleString('fr-FR')} pcs
+                      </strong>
+                    </div>
+
+                    {/* Point Fini (saisie manuelle pure, sans boutons +/-) */}
+                    <div className="text-right">
+                      <span className="text-[10px] text-slate-400 block">Qté finie</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max={ofItem.quantiteDemandee}
+                        value={ofItem.quantiteFinie === 0 ? '' : ofItem.quantiteFinie}
+                        placeholder="0"
                         onChange={(e) =>
                           handleUpdateSingleOF(ofItem.id, {
-                            statut: e.target.value as CardStatus,
+                            quantiteFinie: Math.min(
+                              ofItem.quantiteDemandee,
+                              Math.max(0, Number(e.target.value) || 0)
+                            ),
                           })
                         }
-                        className={`text-[11px] font-semibold rounded px-2 py-0.5 border cursor-pointer ${getStatusBadge(
-                          ofItem.statut
-                        )}`}
-                      >
-                        <option value="EN_COURS">En cours</option>
-                        <option value="EN_ATTENTE">En attente</option>
-                        <option value="TERMINE">Terminé</option>
-                        <option value="BLOQUE">Bloqué</option>
-                      </select>
-                    </td>
+                        className="w-14 text-center font-bold text-slate-900 border border-slate-300 rounded py-0.5 px-1 bg-white focus:bg-amber-50 text-xs font-mono [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                        title="Pièces finies (saisie manuelle)"
+                      />
+                    </div>
 
-                    {/* Action supprimer */}
-                    <td className="py-2.5 px-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteOF(ofItem.id)}
-                        className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
-                        title="Supprimer cet OF"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                    {/* Statut OF */}
+                    <select
+                      value={ofItem.statut}
+                      onChange={(e) =>
+                        handleUpdateSingleOF(ofItem.id, {
+                          statut: e.target.value as CardStatus,
+                        })
+                      }
+                      className={`text-[11px] font-semibold rounded px-2 py-1 border cursor-pointer ${getStatusBadge(
+                        ofItem.statut
+                      )}`}
+                    >
+                      <option value="EN_COURS">En cours</option>
+                      <option value="EN_ATTENTE">En attente</option>
+                      <option value="TERMINE">Terminé</option>
+                      <option value="BLOQUE">Bloqué</option>
+                    </select>
+
+                    {/* Supprimer l'OF */}
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteOF(ofItem.id)}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 rounded-lg transition-colors cursor-pointer"
+                      title="Supprimer cet OF"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                {/* Section Sous-OFs ou Grille de l'OF direct */}
+                <div className="p-3 bg-white space-y-2">
+                  {hasSubOfs ? (
+                    /* CAS 1 : Présentation des sous-OFs : nom personnalisable à gauche avec petit crayon au clic, puis les cases */
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 border-b border-slate-200 pb-1">
+                        <span>Sous-OF de {ofItem.codeOF} ({ofItem.sousOfs!.length}) :</span>
+                        <button
+                          type="button"
+                          onClick={() => handleDirectAddSousOF(ofItem.id)}
+                          className="inline-flex items-center gap-1 text-[10px] font-bold text-slate-800 hover:text-black bg-slate-100 hover:bg-slate-200 px-2 py-0.5 rounded border border-slate-300 cursor-pointer"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>+ Autre sous-OF</span>
+                        </button>
+                      </div>
+
+                      {ofItem.sousOfs!.map((sousOF) => (
+                        <div
+                          key={sousOF.id}
+                          className="flex flex-wrap items-center gap-3 py-1.5 px-2.5 bg-slate-50 hover:bg-slate-100/80 rounded-lg border border-slate-200 transition-colors"
+                        >
+                          {/* 1. NOM PERSONNALISABLE À SON CÔTÉ GAUCHE (DÉFAUT: OF1.1, OF1.2... AVEC PETIT CRAYON) */}
+                          <div className="min-w-[150px] max-w-[240px]">
+                            <EditableItemName
+                              prefix="↳"
+                              value={sousOF.titre}
+                              defaultValue={sousOF.codeSousOF}
+                              onSave={(newName) =>
+                                handleUpdateSousOF(ofItem.id, sousOF.id, { titre: newName })
+                              }
+                            />
+                          </div>
+
+                          {/* 2. PUIS LES CASES CONTIGUËS (SAISIE MANUELLE, SANS +/-) AVEC CHOIX DU NOMBRE DE CASES AU CLIC */}
+                          <EnCoursGrid
+                            nbCases={sousOF.nbCases || 5}
+                            casesEnCours={sousOF.casesEnCours}
+                            showSelector={true}
+                            onChangeNbCases={(n) =>
+                              handleUpdateSousOF(ofItem.id, sousOF.id, {
+                                nbCases: n,
+                                casesEnCours: adjustCasesLength(sousOF.casesEnCours, n),
+                              })
+                            }
+                            onChangeCaseValue={(idx, val) => {
+                              const nextCases = adjustCasesLength(sousOF.casesEnCours, sousOF.nbCases || 5);
+                              nextCases[idx] = val;
+                              handleUpdateSousOF(ofItem.id, sousOF.id, { casesEnCours: nextCases });
+                            }}
+                          />
+
+                          {/* 3. BOUTON SUPPRIMER LE SOUS-OF */}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteSousOF(ofItem.id, sousOF.id)}
+                            className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer ml-auto"
+                            title="Supprimer ce sous-OF"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    /* CAS 2 : MÊME PRÉSENTATION POUR L'OF S'IL N'A PAS DE SOUS-OF */
+                    <div className="flex flex-wrap items-center gap-3 py-1.5 px-2.5 bg-slate-50 rounded-lg border border-slate-200">
+                      {/* Côté gauche : Nom personnalisable de l'OF (par défaut OF1, OF2...) avec petit crayon */}
+                      <div className="min-w-[150px] max-w-[240px]">
+                        <EditableItemName
+                          value={ofItem.titre}
+                          defaultValue={ofItem.codeOF}
+                          onSave={(newName) => handleUpdateSingleOF(ofItem.id, { titre: newName })}
+                        />
+                      </div>
+
+                      {/* Puis les cases contiguës (saisie manuelle sans +/-) avec choix du nombre de cases au clic */}
+                      <EnCoursGrid
+                        nbCases={ofNbCases}
+                        casesEnCours={ofCases}
+                        showSelector={true}
+                        onChangeNbCases={(n) =>
+                          handleUpdateSingleOF(ofItem.id, {
+                            nbCases: n,
+                            casesEnCours: adjustCasesLength(ofItem.casesEnCours, n),
+                          })
+                        }
+                        onChangeCaseValue={(idx, val) => {
+                          const nextCases = adjustCasesLength(ofItem.casesEnCours, ofNbCases);
+                          nextCases[idx] = val;
+                          handleUpdateSingleOF(ofItem.id, { casesEnCours: nextCases });
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
