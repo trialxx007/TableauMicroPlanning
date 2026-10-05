@@ -667,7 +667,11 @@ export const CardModal: React.FC<CardModalProps> = ({
                 onClick={() => {
                   const nextOk = !okProd;
                   setOkProd(nextOk);
-                  if (nextOk) setJalon('RDL', { valide: true, semaine: null });
+                  // L'OK Prod entraîne la RDL, mais seulement si le jalon existe encore
+                  // au catalogue : sinon on laisserait un code orphelin dans la carte.
+                  if (nextOk && catalogue.some((j) => j.code === 'RDL')) {
+                    setJalon('RDL', { valide: true, semaine: null });
+                  }
                 }}
                 title={okProd ? 'Révoquer la validation' : 'Valider'}
                 className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap ${
@@ -687,7 +691,6 @@ export const CardModal: React.FC<CardModalProps> = ({
                   Répartition des OF
                 </div>
                 <OFSubTable
-                  cardId={initialData?.id || 'NOUVELLE-CARTE'}
                   totalDemandee={quantiteDemandee}
                   ofs={ofs}
                   onUpdateOFs={(newOfs) => {

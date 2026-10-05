@@ -8,7 +8,9 @@ export default defineConfig(() => {
     plugins: [react(), tailwindcss()],
     resolve: {
       alias: {
-        '@': path.resolve(__dirname, '.'),
+        // import.meta.dirname : __dirname n'existe pas dans un module ES et
+        // fait échouer le configLoader natif de Vite.
+        '@': path.resolve(import.meta.dirname, '.'),
       },
     },
     server: {

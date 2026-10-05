@@ -4,6 +4,7 @@ import { ChaineRow, ChaineSlotCard, CategorieConfig } from '../types/suiviGlobal
 import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS } from '../data/mockSuiviGlobal.ts';
 import { CardPickerModal } from './CardPickerModal.tsx';
 import { getJalonsEnRetard } from '../utils/jalons.ts';
+import { getNowParis } from '../utils/dateFrance.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
 import {
   ArrowLeft,
@@ -34,6 +35,10 @@ interface ActiveSlotPicker {
   lancementIndex?: number;
   slotTitle: string;
 }
+
+/** Nombre de colonnes « Prochains Lancements ». Source unique pour l'affichage
+ *  et l'affectation, pour qu'ajouter une colonne ne demande pas deux edits. */
+const NOMBRE_LANCEMENTS = 5;
 
 const BANNER_LINE_RATIO = 1.06;
 const BANNER_WORD_GAP = 0.45;
@@ -101,15 +106,21 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 }) => {
   const catalogue = useJalonCatalogue();
   const [rows, setRows] = useState<ChaineRow[]>(() => {
-    try {
-      const saved = localStorage.getItem('suivi_global_rows_v2');
-      if (saved) {
-        return JSON.parse(saved);
+      try {
+        const saved = localStorage.getItem('suivi_global_rows_v2');
+        if (saved) {
+          const parsed = JSON.parse(saved) as ChaineRow[];
+          // Un cache corrompu ou d'un autre format rendrait les accès
+          // `prochainsLancementsCards[i]` infructueux : on retombe sur le défaut.
+          const valide =
+            Array.isArray(parsed) &&
+            parsed.every((r) => Array.isArray(r.prochainsLancementsCards));
+          if (valide) return parsed;
+        }
+      } catch {
+        // Fallback
       }
-    } catch {
-      // Fallback
-    }
-    return INITIAL_CHAINE_ROWS;
+      return INITIAL_CHAINE_ROWS;
   });
 
   const [isEditMode, setIsEditMode] = useState(false);
@@ -213,13 +224,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           return { ...r, expeditionCard: slotCard || null };
         }
         if (slotType === 'lancement' && typeof lancementIndex === 'number') {
-          const nextLancements = [...r.prochainsLancementsCards] as [
-            ChaineSlotCard | null,
-            ChaineSlotCard | null,
-            ChaineSlotCard | null,
-            ChaineSlotCard | null,
-            ChaineSlotCard | null
-          ];
+          const nextLancements = Array.from(
+            { length: NOMBRE_LANCEMENTS },
+            (_, i) => r.prochainsLancementsCards?.[i] ?? null
+          ) as ChaineRow['prochainsLancementsCards'];
           nextLancements[lancementIndex] = slotCard;
           return { ...r, prochainsLancementsCards: nextLancements };
         }
@@ -257,7 +265,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       objectifJour: '',
       realisationJour: '',
       remarque: '',
-      prochainsLancementsCards: [null, null, null, null, null],
+      prochainsLancementsCards: Array.from(
+        { length: NOMBRE_LANCEMENTS },
+        () => null
+      ) as ChaineRow['prochainsLancementsCards'],
       expeditionCard: null,
     };
 
@@ -272,15 +283,15 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       'Objectif/Jour',
       'Réalisation/Jour',
       'Remarque',
-      'Prochain Lancement 1',
-      'Prochain Lancement 2',
-      'Prochain Lancement 3',
-      'Prochain Lancement 4',
-      'Prochain Lancement 5',
+      ...Array.from(
+        { length: NOMBRE_LANCEMENTS },
+        (_, i) => `Prochain Lancement ${i + 1}`
+      ),
       'Expédition',
     ];
 
-    const csvRows = [headers.join(';')];
+    const echapper = (v: string) => `"${v.replace(/"/g, '""')}"`;
+    const csvRows = [headers.map(echapper).join(';')];
     rows.forEach((r) => {
       const catTitle = CATEGORIES_CONFIG[r.categorieId]?.titre || r.categorieId;
       const modeleEnCoursText =
@@ -288,10 +299,14 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         r.modeleEnCoursCard?.customLabel ||
         '';
 
-      const lancementsTexts = r.prochainsLancementsCards.map((l) => {
-        if (!l) return '';
-        return getCardById(l.cardId)?.modele || l.customLabel || '';
-      });
+      const lancementsTexts = Array.from(
+        { length: NOMBRE_LANCEMENTS },
+        (_, i) => {
+          const l = r.prochainsLancementsCards?.[i];
+          if (!l) return '';
+          return getCardById(l.cardId)?.modele || l.customLabel || '';
+        }
+      );
 
       const expeditionText =
         getCardById(r.expeditionCard?.cardId)?.modele ||
@@ -299,15 +314,15 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         '';
 
       const values = [
-        `"${catTitle}"`,
-        `"${r.nom}"`,
-        `"${modeleEnCoursText}"`,
-        `"${r.objectifJour}"`,
-        `"${r.realisationJour}"`,
-        `"${r.remarque}"`,
-        ...lancementsTexts.map((txt) => `"${txt}"`),
-        `"${expeditionText}"`,
-      ];
+        catTitle,
+        r.nom,
+        modeleEnCoursText,
+        r.objectifJour,
+        r.realisationJour,
+        r.remarque,
+        ...lancementsTexts,
+        expeditionText,
+      ].map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`);
       csvRows.push(values.join(';'));
     });
 
@@ -317,7 +332,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `Suivi_Global_Chaines_Cartes_${new Date().toISOString().slice(0, 10)}.csv`;
+    // Date du jour au format JJ/MM/AAAA, alignée sur le reste de l'application.
+    link.download = `Suivi_Global_Chaines_Cartes_${getNowParis().dateStr.replace(/\//g, '-')}.csv`;
     link.click();
     URL.revokeObjectURL(url);
   };
@@ -735,7 +751,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                 </th>
 
                 {/* PROCHAINS LANCEMENTS (Spans 5 columns) */}
-                <th colSpan={5}>
+                <th colSpan={NOMBRE_LANCEMENTS}>
                   <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-4 text-center text-xs sm:text-sm font-extrabold text-[#1e40af] tracking-wider uppercase shadow-2xs">
                     PROCHAINS LANCEMENTS
                   </div>
@@ -914,7 +930,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                         </td>
 
                       {/* Columns 7 to 11: 5 Slots under PROCHAINS LANCEMENTS (Cartes) */}
-                      {[0, 1, 2, 3, 4].map((slotIdx) => {
+                      {Array.from({ length: NOMBRE_LANCEMENTS }, (_, slotIdx) => {
                         const slotCard = row.prochainsLancementsCards[slotIdx];
                         return (
                           <td key={slotIdx} className="p-0 min-w-[125px]">

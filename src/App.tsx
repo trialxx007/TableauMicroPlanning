@@ -71,7 +71,9 @@ export default function App() {
   const handleCreateOrUpdate = async (formData: CardFormData) => {
     const { timeStr } = getNowParis();
     if (editingCard) {
-      const updated = await cardApi.update(editingCard.id, formData);
+      // PUT explicite : la modale renvoie la carte entière, on ne veut pas qu'un
+      // PATCH recalcule un statut ou un reste à produire côté serveur.
+      const updated = await cardApi.replace(editingCard.id, formData);
       setCards((prev) => prev.map((c) => (c.id === editingCard.id ? updated : c)));
       showNotification(`Carte ${updated.nom} mise à jour en réunion à ${timeStr}`);
     } else {
@@ -230,8 +232,12 @@ export default function App() {
         }
         return sortOrder === 'asc' ? diff : -diff;
       });
+    // `catalogue` fait partie des dépendances : les filtres RDL et
+    // « tous les jalons validés » en dépendent, ils doivent se recalculer
+    // quand un jalon est ajouté ou retiré.
   }, [
     cards,
+    catalogue,
     isMeetingFilterActive,
     searchQuery,
     statusFilter,
@@ -272,25 +278,29 @@ export default function App() {
       'Notes Atelier',
     ];
 
+    const echapper = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
     const rows = filteredCards.map((c) => [
-      `"${c.client.replace(/"/g, '""')}"`,
-      `"${c.modele.replace(/"/g, '""')}"`,
-      `"${c.nom.replace(/"/g, '""')}"`,
-      `"${c.reference.replace(/"/g, '""')}"`,
-      ...catalogue.map((j) => valeurJalon(c, j.code)),
+      echapper(c.client),
+      echapper(c.modele),
+      echapper(c.nom),
+      echapper(c.reference),
+      ...catalogue.map((j) => echapper(valeurJalon(c, j.code))),
       c.quantiteDemandee,
       c.quantiteFinie,
       c.resteAProduire,
-      getStatusLabel(c.statut),
-      c.dateDernierPoint || '',
-      c.heureDernierPoint || '',
-      `"${(c.decisionReunion || '').replace(/"/g, '""')}"`,
-      `"${(c.notes || '').replace(/"/g, '""')}"`,
+      echapper(getStatusLabel(c.statut)),
+      echapper(c.dateDernierPoint),
+      echapper(c.heureDernierPoint),
+      echapper(c.decisionReunion),
+      echapper(c.notes),
     ]);
 
     const csvContent =
       'data:text/csv;charset=utf-8,\uFEFF' +
-      [headers.join(';'), ...rows.map((e) => e.join(';'))].join('\n');
+      [
+        headers.map((h) => echapper(h)).join(';'),
+        ...rows.map((e) => e.join(';')),
+      ].join('\n');
 
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement('a');
@@ -305,9 +315,14 @@ export default function App() {
     showNotification('Export CSV de la réunion généré');
   };
 
+  /** Le catalogue a changé : on le recharge pour que tableaux et alertes suivent. */
+  const handleJalonAjoute = async () => {
+    setCatalogue(await jalonApi.getAll());
+  };
+
   if (currentPage === 'suivi-global') {
     return (
-      <>
+      <JalonCatalogueProvider catalogue={catalogue}>
         <SuiviGlobalView
           onBackToPointJournalier={() => setCurrentPage('point-journalier')}
           cards={cards}
@@ -316,25 +331,19 @@ export default function App() {
             setIsModalOpen(true);
           }}
         />
-        {isModalOpen && (
-          <CardModal
-            isOpen={isModalOpen}
-            onClose={() => {
-              setIsModalOpen(false);
-              setEditingCard(null);
-            }}
-            onSubmit={handleCreateOrUpdate}
-            initialData={editingCard}
-          />
-        )}
-      </>
+        <CardModal
+          isOpen={isModalOpen}
+          onClose={() => {
+            setIsModalOpen(false);
+            setEditingCard(null);
+          }}
+          onSubmit={handleCreateOrUpdate}
+          initialData={editingCard}
+          onJalonAjoute={handleJalonAjoute}
+        />
+      </JalonCatalogueProvider>
     );
   }
-
-  /** Le catalogue a changé : on le recharge pour que tableaux et alertes suivent. */
-  const handleJalonAjoute = async () => {
-    setCatalogue(await jalonApi.getAll());
-  };
 
   return (
     <JalonCatalogueProvider catalogue={catalogue}>

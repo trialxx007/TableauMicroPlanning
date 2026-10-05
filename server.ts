@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
+import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { CardItem, CardJalon } from './src/types/card.ts';
@@ -11,6 +12,7 @@ import {
   insertCard,
   listCards,
   listJalons,
+  prochainIdCarte,
   renameJalon,
   resetDatabase,
   updateCardData,
@@ -18,6 +20,10 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+// PORT, APP_URL et DB_PATH sont lus au démarrage : sans ça, un .env local est ignoré.
+dotenv.config({ path: path.resolve(__dirname, '.env.local') });
+dotenv.config();
 
 const app = express();
 const PORT = Number(process.env.PORT) || 3000;
@@ -32,11 +38,12 @@ const allowedOrigins = [
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (like mobile apps, curl, same-origin)
-      if (!origin || allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+      // Requêtes sans Origin (curl, même origine) : toujours acceptées.
+      // En développement tout passe ; en production seule l'allow-list est valable.
+      if (!origin || process.env.NODE_ENV !== 'production' || allowedOrigins.includes(origin)) {
         return callback(null, true);
       }
-      return callback(null, true);
+      return callback(null, false);
     },
     credentials: true,
   })
@@ -181,7 +188,7 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
     : listJalons().map((j) => ({ code: j.code, valide: false }));
 
   const newCard: CardItem = {
-    id: `CRD-${Date.now().toString().slice(-4)}`,
+    id: prochainIdCarte(),
     client: String(body.client).trim(),
     nom: String(body.nom).trim(),
     reference: String(body.reference).trim(),
@@ -249,6 +256,23 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
   });
 });
 
+/**
+ * Champs qu'un PATCH est autorisé à modifier. Tout le reste de la carte (id,
+ * dateCreation, champs dérivés) est hors d'atteinte d'un client.
+ */
+const CHAMPS_MODIFIABLES = [
+  'client',
+  'nom',
+  'reference',
+  'modele',
+  'okProd',
+  'dateOkProd',
+  'dateRdl',
+  'ofs',
+  'decisionReunion',
+  'notes',
+] as const;
+
 // PATCH partial update (daily point quantity, status, flags, meeting decisions)
 apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
   const existing = getCard(req.params.id);
@@ -274,10 +298,9 @@ apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
     }
   }
 
-  // Les jalons sont des lignes dédiées : on ne les laisse pas passer par le spread.
-  const { jalons, ...reste } = body as Partial<CardItem> & { jalons?: unknown };
-  const updated = updateCardData(req.params.id, {
-    ...reste,
+  // Liste blanche explicite : un PATCH ne doit pas pouvoir réécrire les champs
+  // qu'il ne connaît pas (dateCreation, id, champs dérivés…).
+  const patch: Partial<CardItem> = {
     quantiteDemandee,
     quantiteFinie,
     resteAProduire,
@@ -285,8 +308,15 @@ apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
     dateDernierPoint: dateStr,
     heureDernierPoint: timeStr,
     pointFaitAujourdhui: true,
-    ...(jalons !== undefined ? { jalons: parseJalons(jalons) ?? existing.jalons } : {}),
-  });
+  };
+  for (const champ of CHAMPS_MODIFIABLES) {
+    if (body[champ] !== undefined) (patch as Record<string, unknown>)[champ] = body[champ];
+  }
+  if (body.jalons !== undefined) {
+    patch.jalons = parseJalons(body.jalons) ?? existing.jalons;
+  }
+
+  const updated = updateCardData(req.params.id, patch);
 
   res.json({
     success: true,
@@ -351,6 +381,17 @@ apiRouter.get('/stats', (_req: Request, res: Response) => {
 // Mount /api/v1
 app.use('/api/v1', apiRouter);
 
+// Dernier rempart : une route qui lève renvoie du JSON, jamais une page HTML
+// d'erreur que le client tenterait de parser comme une réponse d'API.
+app.use((err: unknown, _req: Request, res: Response, _next: express.NextFunction) => {
+  console.error('Erreur API', err);
+  if (res.headersSent) return;
+  res.status(500).json({
+    success: false,
+    error: err instanceof Error ? err.message : 'Erreur interne du serveur',
+  });
+});
+
 // Start server with Vite or static
 async function start() {
   if (process.env.NODE_ENV !== 'production') {
@@ -361,9 +402,11 @@ async function start() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static(path.resolve(__dirname, 'dist')));
+    const distDir = path.resolve(__dirname, 'dist');
+    app.use(express.static(distDir));
+    // express 4 : '*' est un motif de chemin valide. express 5 exigerait '/*splat'.
     app.get('*', (_req, res) => {
-      res.sendFile(path.resolve(__dirname, 'dist', 'index.html'));
+      res.sendFile(path.join(distDir, 'index.html'));
     });
   }
 
@@ -371,5 +414,14 @@ async function start() {
     console.log(`Point Commande Journalière - Serveur démarré sur http://0.0.0.0:${PORT}`);
   });
 }
+
+// Une erreur non gérée ne doit pas laisser le process sans réponse : on journalise
+// et on renvoie un 500 JSON, sinon l'API reste muette et le client expire.
+process.on('uncaughtException', (err) => {
+  console.error('Exception non interceptée', err);
+});
+process.on('unhandledRejection', (err) => {
+  console.error('Promesse rejetée sans gestionnaire', err);
+});
 
 start();

@@ -11,16 +11,21 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 /**
  * Emplacement du fichier SQLite. Surchargable par DB_PATH (utile pour les tests).
  * Par défaut data/point-commande.db, hors du dossier dist/ et ignoré par git.
+ * Lu à la première connexion et non au chargement du module : db.ts est importé
+ * par server.ts avant que dotenv n'ait eu l'occasion de lire le .env.
  */
-const DB_PATH = process.env.DB_PATH || path.resolve(__dirname, 'data', 'point-commande.db');
+function dbPath(): string {
+  return process.env.DB_PATH || path.resolve(__dirname, 'data', 'point-commande.db');
+}
 
 let db: DatabaseSync | null = null;
 
 function openDb(): DatabaseSync {
   if (db) return db;
 
-  fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
-  const conn = new DatabaseSync(DB_PATH);
+  const chemin = dbPath();
+  fs.mkdirSync(path.dirname(chemin), { recursive: true });
+  const conn = new DatabaseSync(chemin);
   conn.exec('PRAGMA journal_mode = WAL');
   conn.exec('PRAGMA foreign_keys = ON');
   db = conn;
@@ -64,6 +69,33 @@ function initSchema(conn: DatabaseSync): void {
 
 function now(): string {
   return new Date().toISOString();
+}
+
+/** Date du jour au format JJ/MM/AAAA sur le fuseau Europe/Paris, comme le client. */
+function dateDuJour(): string {
+  return new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Europe/Paris',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+  }).format(new Date());
+}
+
+/**
+ * Identifiant de carte lisible et unique. Le suffixe reprend le plus grand
+ * numéro déjà attribué : `Date.now()` tronqué ne suffit pas, deux cartes créées
+ * dans la même seconde Recevraient le même id et le second POST échouerait.
+ */
+export function prochainIdCarte(): string {
+  const rows = getDb()
+    .prepare("SELECT id FROM cards WHERE id LIKE 'CRD-%'")
+    .all() as { id: string }[];
+  let max = 0;
+  for (const r of rows) {
+    const n = Number.parseInt(r.id.slice(4), 10);
+    if (Number.isFinite(n) && n > max) max = n;
+  }
+  return `CRD-${String(max + 1).padStart(3, '0')}`;
 }
 
 /** Première initialisation : catalogue + jeu de démonstration, une seule fois. */
@@ -211,8 +243,25 @@ function etatsForCard(cardId: string): CardJalon[] {
   }));
 }
 
+/**
+ * Reconstitue une carte depuis la colonne JSON. `resteAProduire` et
+ * `pointFaitAujourdhui` sont recalculés ici plutôt que lus : ils sont dérivés des
+ * quantités et de la date du dernier point, les stocker les ferait diverger de
+ * leur source dès qu'une écriture oublie de les mettre à jour.
+ */
 function hydrate(id: string, dataBrut: string): CardItem {
-  return { id, ...(JSON.parse(dataBrut) as Omit<CardItem, 'id' | 'jalons'>), jalons: etatsForCard(id) };
+  const data = JSON.parse(dataBrut) as Omit<CardItem, 'id' | 'jalons'>;
+  const quantiteDemandee = Number(data.quantiteDemandee) || 0;
+  const quantiteFinie = Number(data.quantiteFinie) || 0;
+  return {
+    ...data,
+    id,
+    quantiteDemandee,
+    quantiteFinie,
+    resteAProduire: Math.max(0, quantiteDemandee - quantiteFinie),
+    pointFaitAujourdhui: data.dateDernierPoint === dateDuJour(),
+    jalons: etatsForCard(id),
+  };
 }
 
 export function listCards(): CardItem[] {
@@ -250,7 +299,7 @@ function writeJalons(cardId: string, etats: CardJalon[] | undefined): void {
 
 export function insertCard(card: CardItem): CardItem {
   const conn = getDb();
-  const { id, jalons, ...reste } = card;
+  const { id, jalons, resteAProduire: _reste, pointFaitAujourdhui: _point, ...reste } = card;
   conn
     .prepare('INSERT INTO cards (id, data, cree_le, maj_le) VALUES (?, ?, ?, ?)')
     .run(id, JSON.stringify(reste), now(), now());
@@ -266,19 +315,11 @@ export function updateCardData(id: string, data: Partial<CardItem>): CardItem | 
   if (!row) return undefined;
 
   const actuel = JSON.parse(row.data) as Record<string, unknown>;
-  const { id: _ignoreId, jalons, ...patch } = data as Partial<CardItem> & {
-    jalons?: CardJalon[];
-  };
-  // Ces champs sont dérivés ou vivaient dans une colonne dédiée : jamais dans le JSON.
+  const { jalons, ...patch } = data as Partial<CardItem> & { jalons?: CardJalon[] };
+  // `id` et `jalons` ont leur propre colonne, et les deux champs dérivés sont
+  // recalculés à la lecture : les écrire ici serait immédiatement écrasé.
   const fusionne: Record<string, unknown> = { ...actuel, ...patch };
-  for (const interdit of [
-    'id',
-    'jalons',
-    'resteAProduire',
-    'dateDernierPoint',
-    'heureDernierPoint',
-    'pointFaitAujourdhui',
-  ]) {
+  for (const interdit of ['id', 'jalons', 'resteAProduire', 'pointFaitAujourdhui']) {
     delete fusionne[interdit];
   }
 

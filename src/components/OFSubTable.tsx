@@ -12,7 +12,6 @@ import {
 } from 'lucide-react';
 
 interface OFSubTableProps {
-  cardId: string;
   totalDemandee: number;
   ofs: OrdreFabrication[];
   onUpdateOFs: (newOfs: OrdreFabrication[]) => void;
@@ -129,7 +128,8 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
     onUpdateOFs([...ofs, newOF]);
     setIsAddingOF(false);
     setNewNomExecutant('');
-    setNewQuantite(Math.max(10, soldeNonAlloue - newQuantite));
+    // La quantité proposée pour le OF suivant est le solde restant après celui-ci.
+    setNewQuantite(Math.max(10, totalDemandee - totalAlloue - newQuantite));
   };
 
   return (

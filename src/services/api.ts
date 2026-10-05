@@ -83,8 +83,10 @@ export const cardApi = {
     const quantiteDemandee = Number(data.quantiteDemandee) || 0;
     const quantiteFinie = Number(data.quantiteFinie) || 0;
     const { dateStr, timeStr } = getNowParis();
+    // Hors ligne, on se contente d'un id unique dans le cache local : le serveur
+    // réattribue le sien à la première synchronisation réussie.
     const newCard: CardItem = {
-      id: `CRD-${Date.now().toString().slice(-4)}`,
+      id: `CRD-L${Date.now().toString(36).toUpperCase()}`,
       client: data.client,
       nom: data.nom,
       reference: data.reference,
@@ -125,16 +127,23 @@ export const cardApi = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(data),
       });
+      const json = await res.json().catch(() => null);
       if (res.ok) {
-        const json = await res.json();
-        if (json.success && json.data) {
+        if (json?.success && json.data) {
           const list = getLocalFallback().map((c) => (c.id === id ? json.data : c));
           saveLocalFallback(list);
           return json.data;
         }
+      } else {
+        // Réponse explicite du serveur (404, 400…) : c'est une erreur métier,
+        // pas une coupure réseau. Le repli local masquerait le problème.
+        throw new Error(json?.error || `Erreur ${res.status}`);
       }
-    } catch {
-      // Fallback
+    } catch (err) {
+      if (err instanceof Error && !/Failed to fetch|NetworkError|Load failed/i.test(err.message)) {
+        throw err;
+      }
+      // Coupure réseau : repli sur le cache local.
     }
 
     const current = getLocalFallback();
@@ -142,7 +151,8 @@ export const cardApi = {
     if (index === -1) throw new Error('Carte non trouvée');
 
     const prev = current[index];
-    const quantiteDemandee = data.quantiteDemandee !== undefined ? Number(data.quantiteDemandee) : prev.quantiteDemandee;
+    const quantiteDemandee =
+      data.quantiteDemandee !== undefined ? Number(data.quantiteDemandee) : prev.quantiteDemandee;
     const quantiteFinie = data.quantiteFinie !== undefined ? Number(data.quantiteFinie) : prev.quantiteFinie;
     const resteAProduire = Math.max(0, quantiteDemandee - quantiteFinie);
 
@@ -165,6 +175,58 @@ export const cardApi = {
       heureDernierPoint: timeStr,
       pointFaitAujourdhui: true,
     };
+
+    current[index] = updatedCard;
+    saveLocalFallback(current);
+    return updatedCard;
+  },
+
+  /**
+   * Remplace la carte entière (PUT). Utilisé par la modale d'édition, qui gère
+   * toutes les zones d'un coup : un PATCH recalculerait le statut à partir des
+   * quantités, ce qui écraserait un choix fait dans la modale.
+   */
+  async replace(id: string, data: CardFormData): Promise<CardItem> {
+    try {
+      const res = await fetch(`/api/v1/cards/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      });
+      const json = await res.json().catch(() => null);
+      if (res.ok) {
+        if (json?.success && json.data) {
+          const list = getLocalFallback().map((c) => (c.id === id ? json.data : c));
+          saveLocalFallback(list);
+          return json.data;
+        }
+      } else {
+        throw new Error(json?.error || `Erreur ${res.status}`);
+      }
+    } catch (err) {
+      if (err instanceof Error && !/Failed to fetch|NetworkError|Load failed/i.test(err.message)) {
+        throw err;
+      }
+      // Coupure réseau : repli sur le cache local.
+    }
+
+    const current = getLocalFallback();
+    const index = current.findIndex((c) => c.id === id);
+    if (index === -1) throw new Error('Carte non trouvée');
+
+    const { dateStr, timeStr } = getNowParis();
+    const quantiteDemandee = Number(data.quantiteDemandee) || 0;
+    const quantiteFinie = Number(data.quantiteFinie) || 0;
+    const updatedCard: CardItem = {
+      ...(current[index] as CardItem),
+      ...data,
+      quantiteDemandee,
+      quantiteFinie,
+      resteAProduire: Math.max(0, quantiteDemandee - quantiteFinie),
+      dateDernierPoint: dateStr,
+      heureDernierPoint: timeStr,
+      pointFaitAujourdhui: true,
+    } as CardItem;
 
     current[index] = updatedCard;
     saveLocalFallback(current);

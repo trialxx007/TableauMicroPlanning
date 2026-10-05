@@ -431,8 +431,9 @@ export const CardTable: React.FC<CardTableProps> = ({
                           onClick={() =>
                             onUpdateCard(
                               card.id,
-                              codeRDL
-                                ? { okProd: true, ...patchJalonEtat(card, codeRDL, 'VALIDE') }
+                              // RDL a pu quitter le catalogue : sans lui, seul l'OK Prod est posable.
+                              enteteRDL
+                                ? { okProd: true, ...patchJalonEtat(card, enteteRDL.code, 'VALIDE') }
                                 : { okProd: true }
                             )
                           }
