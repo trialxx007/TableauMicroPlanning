@@ -1,6 +1,8 @@
 import React from 'react';
 import { Search, Filter, ArrowUpDown } from 'lucide-react';
 import { CardStatus } from '../types/card.ts';
+import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
+import { filtreJalonManquant } from '../utils/jalons.ts';
 
 export type SortField = 'resteAProduire' | 'quantiteDemandee' | 'client' | 'statut' | 'dateCreation';
 export type SortOrder = 'asc' | 'desc';
@@ -10,7 +12,9 @@ interface FilterBarProps {
   onSearchChange: (q: string) => void;
   statusFilter: string;
   onStatusFilterChange: (status: string) => void;
-  flagFilter: string; // 'ALL' | 'DT_MISSING' | 'TC_MISSING' | 'SMS_MISSING'
+  /** 'ALL', 'OK_PROD', 'OK_PROD_PENDING', 'HAS_SOUS_TRAITANCE', 'ALL_VALIDATED'
+   *  ou `JALON_MISSING:<CODE>` pour un code du catalogue global. */
+  flagFilter: string;
   onFlagFilterChange: (flag: string) => void;
   sortField: SortField;
   sortOrder: SortOrder;
@@ -34,6 +38,8 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   selectedClient,
   onClientChange,
 }) => {
+  const catalogue = useJalonCatalogue();
+
   return (
     <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-xs mb-4">
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -83,7 +89,7 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             </select>
           )}
 
-          {/* DT / TC / SMS / RDL / OK Prod / Sous-traitance Filter */}
+          {/* Filtres jalons : une entrée par code du catalogue global */}
           <select
             value={flagFilter}
             onChange={(e) => onFlagFilterChange(e.target.value)}
@@ -93,11 +99,12 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             <option value="OK_PROD">Accord OK Prod validé</option>
             <option value="OK_PROD_PENDING">En attente accord OK Prod</option>
             <option value="HAS_SOUS_TRAITANCE">Avec sous-traitance (OF externes)</option>
-            <option value="RDL_MISSING">OF à programmer en RDL (Réunion De Lancement)</option>
-            <option value="DT_MISSING">DT non validé (Dossier Technique)</option>
-            <option value="TC_MISSING">TC non validé (Type Conforme)</option>
-            <option value="SMS_MISSING">SMS non validé (Sales Man's Sample)</option>
-            <option value="ALL_VALIDATED">DT + TC + SMS validés</option>
+            {catalogue.map((j) => (
+              <option key={j.code} value={filtreJalonManquant(j.code)}>
+                {j.code} non validé ({j.libelle})
+              </option>
+            ))}
+            <option value="ALL_VALIDATED">Tous les jalons validés</option>
           </select>
 
           {/* Sort */}

@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
-import { CardItem, CardStatus } from '../types/card.ts';
+import { CardItem, CardStatus, JalonCode } from '../types/card.ts';
+import { getJalonsCard, getEtatJalon, type JalonEtat } from '../utils/jalons.ts';
+import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
+import { getSemaineISO } from '../utils/dateFrance.ts';
 import {
   Check,
   X,
@@ -8,8 +11,33 @@ import {
   Copy,
   CheckCheck,
   AlertCircle,
+  AlertTriangle,
   HelpCircle,
 } from 'lucide-react';
+
+/**
+ * Traduit un choix de listbox en mise à jour de carte. Les trois états sont
+ * distincts : « En attente » et « Validé » effacent la semaine, « Semaine » en exige
+ * une (pré-remplie avec la semaine courante si le jalon n'en a pas encore).
+ * Le tableau `jalons` remplace l'ensemble des états de la carte, donc on repart
+ * de l'existant et on ne change que le code visé.
+ */
+function patchJalonEtat(card: CardItem, code: JalonCode, etat: JalonEtat): Partial<CardItem> {
+  const courant = getEtatJalon(card, code);
+  const valide = etat === 'VALIDE';
+  const semaine = valide
+    ? null
+    : etat === 'SEMAINE'
+    ? (courant.semaine ?? getSemaineISO())
+    : null;
+
+  return {
+    jalons: [
+      ...card.jalons.filter((j) => j.code !== code),
+      { code, valide, ...(semaine != null ? { semaine } : {}) },
+    ],
+  };
+}
 
 interface CardTableProps {
   cards: CardItem[];
@@ -26,6 +54,7 @@ export const CardTable: React.FC<CardTableProps> = ({
   onDeleteCard,
   onOpenCreate,
 }) => {
+  const catalogue = useJalonCatalogue();
   const [copiedRef, setCopiedRef] = useState<string | null>(null);
   const [editingFinieId, setEditingFinieId] = useState<string | null>(null);
   const [inputFinieValue, setInputFinieValue] = useState<string>('');
@@ -35,6 +64,13 @@ export const CardTable: React.FC<CardTableProps> = ({
     setCopiedRef(ref);
     setTimeout(() => setCopiedRef(null), 1800);
   };
+
+  // L'en-tête suit le catalogue : RDL garde sa colonne dédiée, les autres jalons
+  // partagent une colonne dont le libellé est reconstruite à chaque changement.
+  const enteteRDL = catalogue.find((j) => j.code === 'RDL');
+  const jalonRDLPresent = Boolean(enteteRDL);
+  const codeRDL = enteteRDL?.code ?? 'RDL';
+  const enteteJalons = catalogue.filter((j) => j.code !== 'RDL');
 
   const handleStartEditFinie = (card: CardItem) => {
     setEditingFinieId(card.id);
@@ -121,13 +157,22 @@ export const CardTable: React.FC<CardTableProps> = ({
             <tr className="bg-slate-50/80 border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase tracking-wider">
               <th className="py-3.5 px-4">Client</th>
               <th className="py-3.5 px-4">Modèle & Nom</th>
-              <th className="py-3.5 px-4">Référence & RDL</th>
+              <th className="py-3.5 px-4">
+                Référence
+                {jalonRDLPresent && <span className="ml-1 font-normal normal-case">& {codeRDL}</span>}
+              </th>
               <th className="py-3.5 px-4 text-center">
                 <span className="inline-flex items-center gap-1">
-                  DT / TC / SMS
+                  {enteteJalons.length > 0
+                    ? enteteJalons.map((j) => j.code).join(' / ')
+                    : 'Jalons'}
                   <span
                     className="cursor-help text-slate-400 hover:text-slate-600"
-                    title="DT: Dossier Technique | TC: Type Conforme | SMS: Sales Man's Sample"
+                    title={
+                      enteteJalons.length > 0
+                        ? enteteJalons.map((j) => `${j.code}: ${j.libelle}`).join('\n')
+                        : 'Aucun jalon de suivi dans le catalogue'
+                    }
                   >
                     <HelpCircle className="w-3 h-3" />
                   </span>
@@ -155,6 +200,20 @@ export const CardTable: React.FC<CardTableProps> = ({
           <tbody className="divide-y divide-slate-100 text-sm">
             {cards.map((card) => {
               const statusInfo = getStatusBadge(card.statut);
+              const jalons = getJalonsCard(card, catalogue);
+              // RDL a sa propre pastille dans la colonne « Référence », on l'exclut
+              // donc de la colonne Jalons pour ne pas la montrer deux fois.
+              const jRDL = jalons.find((j) => j.code === 'RDL');
+              const autresJalons = jalons.filter((j) => j.code !== 'RDL');
+              const detailRDL = jRDL
+                ? `${jRDL.code} : ${
+                    jRDL.etat === 'VALIDE'
+                      ? 'Validé'
+                      : jRDL.semaine != null
+                      ? `En attente, attendu S${jRDL.semaine}${jRDL.enRetard ? ' — en retard' : ''}`
+                      : 'En attente'
+                  }`
+                : '';
               const progressPct =
                 card.quantiteDemandee > 0
                   ? Math.min(
@@ -238,74 +297,111 @@ export const CardTable: React.FC<CardTableProps> = ({
                       </button>
                     </div>
 
-                    {/* Jalon RDL */}
-                    <div className="mt-1">
-                      <button
-                        type="button"
-                        onClick={() => onUpdateCard(card.id, { rdl: !card.rdl })}
-                        title={`RDL (Réunion De Lancement) : ${
-                          card.rdl ? 'OF programmé en RDL' : 'OF à programmer en RDL'
-                        } - Cliquer pour changer`}
-                        className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border transition-colors cursor-pointer inline-flex items-center gap-1 ${
-                          card.rdl
-                            ? 'bg-purple-50 text-purple-700 border-purple-200 hover:bg-purple-100'
-                            : 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
-                        }`}
-                      >
-                        <span
-                          className={`w-1.5 h-1.5 rounded-full ${
-                            card.rdl ? 'bg-purple-600' : 'bg-amber-500 animate-pulse'
-                          }`}
-                        />
-                        <span>{card.rdl ? 'RDL Programmé' : 'À programmer RDL'}</span>
-                      </button>
-                    </div>
+                    {/* Jalon de réunion (RDL) — compact au repos, liste box au survol.
+                        Le bloc disparaît si le catalogue ne contient plus de jalon RDL. */}
+                    {jRDL && (
+                      <div className="mt-1">
+                        <span className="group/j relative inline-grid" title={detailRDL}>
+                          <span
+                            className={`col-start-1 row-start-1 relative z-0 inline-flex items-center justify-center gap-1 min-w-[64px] px-1.5 py-0.5 rounded border text-[10px] font-semibold ${
+                              jRDL.enRetard
+                                ? 'bg-rose-600 text-white border-rose-700 motion-safe:animate-pulse'
+                                : jRDL.etat === 'VALIDE'
+                                ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                : 'bg-amber-50 text-amber-800 border-amber-300'
+                            }`}
+                          >
+                            {jRDL.enRetard && <AlertTriangle className="w-3 h-3" />}
+                            <span>
+                              {jRDL.code}:{' '}
+                              {jRDL.etat === 'VALIDE'
+                                ? '✓'
+                                : jRDL.etat === 'SEMAINE'
+                                ? `S${jRDL.semaine}`
+                                : '—'}
+                            </span>
+                          </span>
+                          <select
+                            value={jRDL.etat}
+                            onChange={(e) =>
+                              onUpdateCard(
+                                card.id,
+                                patchJalonEtat(card, jRDL.code, e.target.value as JalonEtat)
+                              )
+                            }
+                            aria-label={`État du jalon ${jRDL.code}`}
+                            title={detailRDL}
+                            className={`col-start-1 row-start-1 relative z-10 w-full cursor-pointer rounded border px-1 text-[10px] font-semibold opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto ${
+                              jRDL.enRetard
+                                ? 'bg-rose-600 text-white border-rose-700'
+                                : jRDL.etat === 'VALIDE'
+                                ? 'bg-purple-50 text-purple-700 border-purple-200'
+                                : 'bg-amber-50 text-amber-800 border-amber-300'
+                            }`}
+                          >
+                            <option value="EN_ATTENTE">En attente</option>
+                            <option value="SEMAINE">Semaine</option>
+                            <option value="VALIDE">Validé</option>
+                          </select>
+                        </span>
+                      </div>
+                    )}
                   </td>
 
-                  {/* DT / TC / SMS */}
+                  {/* Jalons de suivi — chaque code du catalogue a sa pastille */}
                   <td className="py-3.5 px-4 whitespace-nowrap text-center">
-                    <div className="inline-flex items-center gap-1 bg-slate-50 p-1 rounded-lg border border-slate-200/60">
-                      {/* DT */}
-                      <button
-                        onClick={() => onUpdateCard(card.id, { dt: !card.dt })}
-                        title={`DT (Dossier Technique): ${card.dt ? 'Validé' : 'Non validé'}`}
-                        className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                          card.dt
-                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                            : 'bg-slate-200/60 text-slate-400 hover:text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        {card.dt ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
-                        <span>DT</span>
-                      </button>
+                    <div className="inline-flex flex-wrap gap-1 bg-slate-50 p-1 rounded-lg border border-slate-200/60">
+                      {autresJalons.map((j) => {
+                        const colors = j.enRetard
+                          ? 'bg-rose-600 text-white border-rose-700'
+                          : j.etat === 'VALIDE'
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                          : 'bg-slate-200/60 text-slate-500 border border-transparent';
+                        const marque =
+                          j.etat === 'VALIDE' ? '✓' : j.etat === 'SEMAINE' ? `S${j.semaine}` : '—';
+                        const detail = `${j.code} : ${
+                          j.etat === 'VALIDE'
+                            ? 'Validé'
+                            : j.etat === 'SEMAINE'
+                            ? `Semaine S${j.semaine}${j.enRetard ? ' — en retard' : ''}`
+                            : 'En attente'
+                        }`;
 
-                      {/* TC */}
-                      <button
-                        onClick={() => onUpdateCard(card.id, { tc: !card.tc })}
-                        title={`TC (Type Conforme): ${card.tc ? 'Validé' : 'Non validé'}`}
-                        className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                          card.tc
-                            ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                            : 'bg-slate-200/60 text-slate-400 hover:text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        {card.tc ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
-                        <span>TC</span>
-                      </button>
-
-                      {/* SMS */}
-                      <button
-                        onClick={() => onUpdateCard(card.id, { sms: !card.sms })}
-                        title={`SMS (Sales Man's Sample): ${card.sms ? 'Validé' : 'Non validé'}`}
-                        className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[11px] font-bold transition-all cursor-pointer ${
-                          card.sms
-                            ? 'bg-indigo-100 text-indigo-800 border border-indigo-300'
-                            : 'bg-slate-200/60 text-slate-400 hover:text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        {card.sms ? <Check className="w-3 h-3" /> : <X className="w-3 h-3" />}
-                        <span>SMS</span>
-                      </button>
+                        return (
+                          <span
+                            key={j.code}
+                            className="group/j relative inline-grid shrink-0"
+                            title={detail}
+                          >
+                            <span
+                              className={`col-start-1 row-start-1 relative z-0 inline-flex items-center justify-center gap-0.5 min-w-[64px] px-1.5 py-0.5 rounded text-[11px] font-bold border ${colors} ${
+                                j.enRetard ? 'motion-safe:animate-pulse' : ''
+                              }`}
+                            >
+                              {j.enRetard && <AlertTriangle className="w-3 h-3" />}
+                              <span>
+                                {j.code}: {marque}
+                              </span>
+                            </span>
+                            <select
+                              value={j.etat}
+                              onChange={(e) =>
+                                onUpdateCard(
+                                  card.id,
+                                  patchJalonEtat(card, j.code, e.target.value as JalonEtat)
+                                )
+                              }
+                              aria-label={`État du jalon ${j.code}`}
+                              title={detail}
+                              className={`col-start-1 row-start-1 relative z-10 w-full cursor-pointer rounded border px-1 text-[11px] font-bold opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto ${colors}`}
+                            >
+                              <option value="EN_ATTENTE">En attente</option>
+                              <option value="SEMAINE">Semaine</option>
+                              <option value="VALIDE">Validé</option>
+                            </select>
+                          </span>
+                        );
+                      })}
                     </div>
                   </td>
 
@@ -332,7 +428,14 @@ export const CardTable: React.FC<CardTableProps> = ({
                         </>
                       ) : (
                         <button
-                          onClick={() => onUpdateCard(card.id, { okProd: true, rdl: true })}
+                          onClick={() =>
+                            onUpdateCard(
+                              card.id,
+                              codeRDL
+                                ? { okProd: true, ...patchJalonEtat(card, codeRDL, 'VALIDE') }
+                                : { okProd: true }
+                            )
+                          }
                           title="Valider l'OK Prod durant la RDL pour débloquer la répartition des OFs dans la carte"
                           className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-50 text-amber-800 border border-amber-300 hover:bg-amber-100 transition-colors cursor-pointer shadow-2xs"
                         >
@@ -530,26 +633,16 @@ export const CardTable: React.FC<CardTableProps> = ({
             <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
             OK Prod: Accord préalable de lancement
           </span>
-          <span>•</span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-            DT: Dossier Technique
-          </span>
-          <span>•</span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block"></span>
-            TC: Type Conforme
-          </span>
-          <span>•</span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-indigo-500 inline-block"></span>
-            SMS: Sales Man's Sample
-          </span>
-          <span>•</span>
-          <span className="flex items-center gap-1">
-            <span className="w-2 h-2 rounded-full bg-purple-500 inline-block"></span>
-            RDL: Réunion De Lancement
-          </span>
+          {catalogue.map((j) => (
+            <span key={j.code} className="flex items-center gap-1">
+              <span
+                className={`w-2 h-2 rounded-full inline-block ${
+                  j.code === codeRDL ? 'bg-purple-500' : 'bg-emerald-500'
+                }`}
+              ></span>
+              {j.code}: {j.libelle}
+            </span>
+          ))}
         </div>
         <div className="text-[11px] text-slate-500">
           💡 Cliquez sur le nom ou la référence d'un modèle pour <strong>ouvrir sa carte</strong>

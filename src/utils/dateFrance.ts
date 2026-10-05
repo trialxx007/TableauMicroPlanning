@@ -41,3 +41,29 @@ export function formatTimeParis(date = new Date()) {
     minute: '2-digit',
   }).format(date);
 }
+
+/**
+ * Numéro de semaine ISO (1 à 53) de la date, calculé sur le fuseau Europe/Paris.
+ * ex: lundi 05/10/2026 -> semaine 41.
+ */
+export function getSemaineISO(date = new Date()): number {
+  const [annee, mois, jour] = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Paris',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  })
+    .format(date)
+    .split('-')
+    .map(Number);
+
+  // On travaille en UTC pour neutraliser les changements d'heure.
+  const d = new Date(Date.UTC(annee, mois - 1, jour));
+  const jourSemaine = d.getUTCDay() || 7; // lundi = 1 ... dimanche = 7
+  d.setUTCDate(d.getUTCDate() + 4 - jourSemaine); // jeudi de la semaine courante
+
+  const premierJanvier = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
+  const joursEcoules = Math.round((d.getTime() - premierJanvier.getTime()) / 86400000) + 1;
+
+  return Math.ceil(joursEcoules / 7);
+}

@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { CardItem } from '../types/card.ts';
-import { ChaineRow, ChaineSlotCard } from '../types/suiviGlobal.ts';
+import { ChaineRow, ChaineSlotCard, CategorieConfig } from '../types/suiviGlobal.ts';
 import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS } from '../data/mockSuiviGlobal.ts';
 import { CardPickerModal } from './CardPickerModal.tsx';
+import { getJalonsEnRetard } from '../utils/jalons.ts';
+import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
 import {
   ArrowLeft,
   Plus,
@@ -17,6 +19,7 @@ import {
   ExternalLink,
   X,
   ArrowLeftRight,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface SuiviGlobalViewProps {
@@ -32,11 +35,71 @@ interface ActiveSlotPicker {
   slotTitle: string;
 }
 
+const BANNER_LINE_RATIO = 1.06;
+const BANNER_WORD_GAP = 0.45;
+const BANNER_FILL_W = 0.72;
+const BANNER_FILL_H = 0.88;
+const BANNER_GLYPH_W_RATIO = 0.66;
+
+function computeCardProgress(card?: CardItem): number | null {
+  return card && card.quantiteDemandee > 0
+    ? Math.min(100, Math.round((card.quantiteFinie / card.quantiteDemandee) * 100))
+    : null;
+}
+
+function buildBanner(
+  catConfig: CategorieConfig,
+  availW: number,
+  availH: number
+): {
+  glyphs: { char: string; x: number; y: number; size: number }[];
+  vbW: number;
+  vbH: number;
+} {
+  const lines = catConfig.titreVerticalLignes;
+  const totalChars = lines.reduce((sum, line) => sum + line.length, 0);
+  const stackUnits =
+    totalChars * BANNER_LINE_RATIO + (lines.length - 1) * BANNER_WORD_GAP;
+
+  if (!(availW > 0) || !(availH > 0) || !(stackUnits > 0)) {
+    return { glyphs: [], vbW: 1, vbH: 1 };
+  }
+
+  const size = Math.min(
+    (availW * BANNER_FILL_W) / BANNER_GLYPH_W_RATIO,
+    (availH * BANNER_FILL_H) / stackUnits
+  );
+
+  const glyphs: { char: string; x: number; y: number; size: number }[] = [];
+  let cursor = 0;
+
+  lines.forEach((line, lineIdx) => {
+    if (lineIdx > 0) cursor += size * BANNER_WORD_GAP;
+    line.forEach((char) => {
+      cursor += size * BANNER_LINE_RATIO;
+      glyphs.push({
+        char,
+        x: availW / 2,
+        y: cursor - size * 0.18,
+        size,
+      });
+    });
+  });
+
+  const offset = (availH - cursor) / 2;
+  return {
+    vbW: availW,
+    vbH: availH,
+    glyphs: glyphs.map((glyph) => ({ ...glyph, y: glyph.y + offset })),
+  };
+}
+
 export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   onBackToPointJournalier,
   cards,
   onOpenCardModal,
 }) => {
+  const catalogue = useJalonCatalogue();
   const [rows, setRows] = useState<ChaineRow[]>(() => {
     try {
       const saved = localStorage.getItem('suivi_global_rows_v2');
@@ -53,6 +116,62 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [savedFeedback, setSavedFeedback] = useState(false);
   const [activePicker, setActivePicker] = useState<ActiveSlotPicker | null>(null);
+  const [alertRowIds, setAlertRowIds] = useState<Set<string>>(() => new Set(['bm-petunia']));
+
+  // Taille réelle de chaque bandeau vertical, pour dimensionner le texte
+  // proportionnellement à la hauteur cumulée des modèles en cours de la catégorie.
+  const [bannerSizes, setBannerSizes] = useState<Record<string, { w: number; h: number }>>({});
+  const bannerNodesRef = useRef<Record<string, HTMLTableCellElement | null>>({});
+  const bannerObserverRef = useRef<ResizeObserver | null>(null);
+  const bannerRefCacheRef = useRef<Record<string, (el: HTMLTableCellElement | null) => void>>({});
+
+  const getBannerRef = (catId: string) => {
+    const cache = bannerRefCacheRef.current;
+    if (!cache[catId]) {
+      cache[catId] = (el: HTMLTableCellElement | null) => {
+        const previous = bannerNodesRef.current[catId];
+        if (previous && previous !== el) {
+          bannerObserverRef.current?.unobserve(previous);
+        }
+        bannerNodesRef.current[catId] = el;
+        if (el) {
+          bannerObserverRef.current?.observe(el);
+        } else {
+          delete bannerNodesRef.current[catId];
+        }
+      };
+    }
+    return cache[catId];
+  };
+
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver((entries) => {
+      setBannerSizes((prev) => {
+        let changed = false;
+        const next: Record<string, { w: number; h: number }> = { ...prev };
+        for (const entry of entries) {
+          const catId = (entry.target as HTMLTableCellElement).dataset.bannerCat;
+          if (!catId) continue;
+          const w = Math.round(entry.contentRect.width);
+          const h = Math.round(entry.contentRect.height);
+          if (prev[catId]?.w !== w || prev[catId]?.h !== h) {
+            next[catId] = { w, h };
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    });
+    bannerObserverRef.current = observer;
+    Object.values(bannerNodesRef.current).forEach((node) => {
+      if (node) observer.observe(node);
+    });
+    return () => {
+      observer.disconnect();
+      bannerObserverRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     try {
@@ -218,6 +337,24 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     );
   });
 
+  // Jalons en retard sur les cartes liées à une ligne. Le catalogue global fait foi :
+  // ajouter un jalon ajoute automatiquement une pastille d'alerte ici.
+  const getJalonsEnRetardLigne = (row: ChaineRow) => {
+    const slots = [
+      row.modeleEnCoursCard,
+      ...(row.prochainsLancementsCards || []),
+      row.expeditionCard,
+    ];
+    // Une même carte peut occuper plusieurs colonnes de la ligne : on la ne compte qu'une fois.
+    const cartes = new Map<string, CardItem>();
+    for (const slot of slots) {
+      if (!slot?.cardId) continue;
+      const card = getCardById(slot.cardId);
+      if (card) cartes.set(card.id, card);
+    }
+    return [...cartes.values()].flatMap((card) => getJalonsEnRetard(card, catalogue));
+  };
+
   // Helper to render card chip inside table cell
   const renderCardSlotContent = (
     slotCard: ChaineSlotCard | null | undefined,
@@ -280,8 +417,15 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       }
     };
 
+    const isMergedModele = slotType === 'modeleEnCours';
+    const progress = computeCardProgress(linkedCard);
+
     return (
-      <div className="group relative w-full h-full min-h-[52px] flex flex-col justify-center px-2 py-1.5 rounded-xl bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left">
+      <div
+        className={`group relative w-full min-h-[52px] flex flex-col justify-center px-2 py-1.5 rounded-xl bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left ${
+          isMergedModele ? 'flex-1' : 'h-full'
+        }`}
+      >
         <div
           onClick={handleSlotClick}
           className="cursor-pointer"
@@ -292,7 +436,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           }
         >
           <div className="flex items-center gap-1.5">
-            {linkedCard && (
+            {linkedCard && !isMergedModele && (
               <span
                 className={`w-2 h-2 rounded-full shrink-0 ${
                   linkedCard.statut === 'TERMINE'
@@ -305,15 +449,51 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                 }`}
               />
             )}
-            <span className="font-bold text-[11px] sm:text-xs text-slate-900 leading-snug line-clamp-1">
+            <span
+              className={`font-bold text-[11px] sm:text-xs leading-snug line-clamp-1 ${
+                isMergedModele ? 'text-blue-700 pr-12' : 'text-slate-900'
+              }`}
+            >
               {label}
             </span>
           </div>
 
-          {subLabel && (
-            <div className="text-[10px] text-slate-500 font-mono truncate mt-0.5">
-              {subLabel}
+          {isMergedModele ? (
+            <div className="flex items-center justify-between gap-2 mt-1">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
+                  Réf.
+                </span>
+                <span className="text-[10px] font-mono font-semibold text-slate-600 truncate">
+                  {linkedCard?.reference || '—'}
+                </span>
+              </div>
+              {progress !== null ? (
+                <div className="flex items-center gap-1 shrink-0">
+                  <div className="w-14 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                    <div
+                      className={`h-full ${
+                        progress === 100 ? 'bg-emerald-500' : 'bg-blue-600'
+                      }`}
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
+                  <span className="text-[10px] font-bold font-mono text-slate-600">
+                    {progress}%
+                  </span>
+                </div>
+              ) : (
+                <span className="text-[10px] font-semibold text-slate-300 shrink-0">
+                  —%
+                </span>
+              )}
             </div>
+          ) : (
+            subLabel && (
+              <div className="text-[10px] text-slate-500 font-mono truncate mt-0.5">
+                {subLabel}
+              </div>
+            )
           )}
 
           {/* Expedition Specific Tags */}
@@ -508,12 +688,12 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
         {/* The Exact Table matching the PNG + Expedition column */}
         <div className="bg-[#eef2f6]/90 p-3 sm:p-4 rounded-2xl border border-slate-200/90 shadow-xs overflow-x-auto">
-          <table className="w-full border-separate border-spacing-x-2 border-spacing-y-2 min-w-[1450px]">
+          <table className="w-full border-separate border-spacing-x-2 border-spacing-y-2 min-w-[1580px]">
             {/* Header Row */}
             <thead>
               <tr>
                 {/* Divers */}
-                <th className="w-16 min-w-[64px] max-w-[72px]">
+                <th className="w-14 min-w-[56px] max-w-[56px]">
                   <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
                     Divers
                   </div>
@@ -527,7 +707,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                 </th>
 
                 {/* Modèle en cours (Carte) */}
-                <th className="w-60 min-w-[200px]">
+                <th className="w-[330px] min-w-[290px]">
                   <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 shadow-2xs">
                     Modèle en cours
                   </div>
@@ -581,43 +761,57 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
                 return catRows.map((row, index) => {
                   const isFirstRowOfCategory = index === 0;
+                      const jalonsEnRetard = getJalonsEnRetardLigne(row);
+                      const isRowAlert = alertRowIds.has(row.id) || jalonsEnRetard.length > 0;
+                      // Bandeau volontairement minimal : « ALERTE : TC: S22, SMS: S31 ».
+                      // Pas de numérotation ni de phrase, la cause se lit d'un coup d'œil ;
+                      // le détail complet reste disponible au survol via le title.
+                      const causesAlerte = [
+                        ...jalonsEnRetard.map((j) => `${j.code}: S${j.semaine}`),
+                        ...(alertRowIds.has(row.id) ? ['ATELIER'] : []),
+                      ];
+                      const detailAlerte = [
+                        ...jalonsEnRetard.map((j) => `${j.code} : semaine S${j.semaine} dépassée`),
+                        ...(alertRowIds.has(row.id) ? ['Alerte atelier'] : []),
+                      ].join(', ');
+                  const bannerSize = bannerSizes[catKey];
+                  const catBanner = buildBanner(catConfig, bannerSize?.w ?? 0, bannerSize?.h ?? 0);
 
                   return (
                     <tr key={row.id}>
                       {/* Column 1: Divers (Vertical category banner spanning all rows of this category) */}
                       {isFirstRowOfCategory && (
                         <td
+                          ref={getBannerRef(catKey)}
+                          data-banner-cat={catKey}
                           rowSpan={catRows.length}
-                          className="align-middle p-0"
+                          className={`relative align-middle border-2 rounded-xl sm:rounded-2xl shadow-2xs overflow-hidden ${catConfig.bgClass} ${catConfig.borderClass}`}
                         >
-                          <div
-                            className={`h-full w-full min-h-[160px] rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center p-2 shadow-2xs ${catConfig.bgClass} ${catConfig.borderClass}`}
+                          <svg
+                            viewBox={`0 0 ${catBanner.vbW} ${catBanner.vbH}`}
+                            preserveAspectRatio="xMidYMid meet"
+                            className="absolute inset-0 w-full h-full select-none"
                           >
-                            <div
-                              className={`flex flex-col items-center justify-center font-extrabold text-[11px] sm:text-xs tracking-widest uppercase select-none ${catConfig.textClass}`}
-                            >
-                              {catConfig.titreVerticalLignes.map((line, lIdx) => (
-                                <React.Fragment key={lIdx}>
-                                  {lIdx > 0 && <span className="h-3 my-0.5"></span>}
-                                  {line.map((char, cIdx) => (
-                                    <span key={cIdx} className="leading-tight py-[1px]">
-                                      {char}
-                                    </span>
-                                  ))}
-                                </React.Fragment>
-                              ))}
-                            </div>
-                          </div>
+                            {catBanner.glyphs.map((glyph, glyphIdx) => (
+                              <text
+                                key={glyphIdx}
+                                x={glyph.x}
+                                y={glyph.y}
+                                textAnchor="middle"
+                                fontSize={glyph.size}
+                                fontWeight={800}
+                                fill={catConfig.textColor}
+                              >
+                                {glyph.char}
+                              </text>
+                            ))}
+                          </svg>
                         </td>
                       )}
 
-                      {/* Column 2: Chaîne (Dot + Name) */}
-                      <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs h-full min-h-[58px] flex items-center gap-2.5">
-                          <span
-                            className="w-3.5 h-3.5 rounded-full shrink-0 shadow-2xs"
-                            style={{ backgroundColor: row.dotColor }}
-                          />
+                      {/* Column 2: Chaîne (Name) */}
+                        <td className="p-0">
+                          <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs h-full min-h-[96px] flex items-center justify-center">
                           {isEditMode ? (
                             <input
                               type="text"
@@ -625,10 +819,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                               onChange={(e) =>
                                 handleCellChange(row.id, 'nom', e.target.value)
                               }
-                              className="w-full font-bold text-xs sm:text-sm text-slate-800 bg-slate-50 border border-slate-300 rounded px-1.5 py-1 focus:bg-white focus:outline-hidden"
+                              className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 bg-slate-50 border border-slate-300 rounded px-1.5 py-1 focus:bg-white focus:outline-hidden"
                             />
                           ) : (
-                            <span className="font-bold text-xs sm:text-sm text-slate-800 truncate">
+                            <span className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 truncate">
                               {row.nom}
                             </span>
                           )}
@@ -637,7 +831,26 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
                       {/* Column 3: Modèle en cours (Carte du Point Commande Journalière) */}
                       <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[58px] flex items-center">
+                        <div
+                          className={`group relative bg-white border rounded-xl sm:rounded-2xl p-1.5 shadow-2xs h-full min-h-[96px] flex flex-col ${
+                            isRowAlert
+                              ? 'border-rose-400 ring-1 ring-rose-200'
+                              : 'border-slate-200/90'
+                          }`}
+                        >
+                          {isRowAlert && (
+                            <div
+                              className="flex items-center gap-1.5 px-2.5 py-1 mb-1.5 rounded-lg bg-rose-600 text-white shadow-2xs motion-safe:animate-pulse"
+                              title={`ALERTE : ${detailAlerte}`}
+                            >
+                              <AlertTriangle className="w-3 h-3 shrink-0" />
+                              <span className="text-[10px] font-extrabold uppercase tracking-wider truncate">
+                                ALERTE : {causesAlerte.join(', ')}
+                              </span>
+                              <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white shrink-0 motion-safe:animate-ping" />
+                            </div>
+                          )}
+
                           {renderCardSlotContent(
                             row.modeleEnCoursCard,
                             row,
@@ -647,34 +860,23 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                       </td>
 
                       {/* Column 4: Objectif/Jour */}
-                      <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-2 py-2 shadow-2xs h-full min-h-[58px] flex items-center justify-center">
-                          {isEditMode ? (
+                        <td className="p-0">
+                          <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-2 py-2 shadow-2xs h-full min-h-[96px] flex items-center justify-center">
                             <input
                               type="text"
                               value={row.objectifJour}
                               placeholder="0"
                               onChange={(e) =>
-                                handleCellChange(
-                                  row.id,
-                                  'objectifJour',
-                                  e.target.value
-                                )
+                                handleCellChange(row.id, 'objectifJour', e.target.value)
                               }
-                              className="w-16 text-center text-xs font-bold text-slate-900 bg-slate-50 border border-slate-300 rounded px-1 py-1.5 focus:bg-white focus:outline-hidden"
+                              className="w-full text-center text-sm font-bold text-slate-900 bg-slate-50 border border-slate-300 rounded-lg px-2 py-2 focus:bg-white focus:border-blue-400 focus:outline-hidden focus:ring-1 focus:ring-blue-400"
                             />
-                          ) : (
-                            <span className="text-xs sm:text-sm font-bold text-slate-800 font-mono">
-                              {row.objectifJour || '—'}
-                            </span>
-                          )}
-                        </div>
-                      </td>
+                          </div>
+                        </td>
 
                       {/* Column 5: Réalisation/Jour */}
-                      <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-2 py-2 shadow-2xs h-full min-h-[58px] flex items-center justify-center">
-                          {isEditMode ? (
+                        <td className="p-0">
+                          <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-2 py-2 shadow-2xs h-full min-h-[96px] flex items-center justify-center">
                             <input
                               type="text"
                               value={row.realisationJour}
@@ -686,28 +888,19 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                                   e.target.value
                                 )
                               }
-                              className="w-16 text-center text-xs font-bold text-slate-900 bg-slate-50 border border-slate-300 rounded px-1 py-1.5 focus:bg-white focus:outline-hidden"
-                            />
-                          ) : (
-                            <span
-                              className={`text-xs sm:text-sm font-bold font-mono ${
-                                Number(row.realisationJour) >=
-                                  Number(row.objectifJour) &&
+                              className={`w-full text-center text-sm font-bold font-mono bg-slate-50 border rounded-lg px-2 py-2 focus:bg-white focus:border-blue-400 focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${
+                                Number(row.realisationJour) >= Number(row.objectifJour) &&
                                 Number(row.realisationJour) > 0
-                                  ? 'text-emerald-700'
-                                  : 'text-slate-800'
+                                  ? 'text-emerald-700 border-emerald-300'
+                                  : 'text-slate-900 border-slate-300'
                               }`}
-                            >
-                              {row.realisationJour || '—'}
-                            </span>
-                          )}
-                        </div>
-                      </td>
+                            />
+                          </div>
+                        </td>
 
                       {/* Column 6: Remarque */}
-                      <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs h-full min-h-[58px] flex items-center">
-                          {isEditMode ? (
+                        <td className="p-0">
+                          <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs h-full min-h-[96px] flex items-center">
                             <input
                               type="text"
                               value={row.remarque}
@@ -715,29 +908,18 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                               onChange={(e) =>
                                 handleCellChange(row.id, 'remarque', e.target.value)
                               }
-                              className="w-full text-xs text-slate-700 bg-slate-50 border border-slate-300 rounded px-2 py-1.5 focus:bg-white focus:outline-hidden"
+                              className="w-full text-xs text-slate-700 bg-slate-50 border border-slate-300 rounded-lg px-2 py-2 focus:bg-white focus:border-blue-400 focus:outline-hidden focus:ring-1 focus:ring-blue-400"
                             />
-                          ) : (
-                            <span
-                              className={`text-xs ${
-                                row.remarque
-                                  ? 'text-slate-700 font-medium'
-                                  : 'text-slate-300 italic'
-                              }`}
-                            >
-                              {row.remarque || '—'}
-                            </span>
-                          )}
-                        </div>
-                      </td>
+                          </div>
+                        </td>
 
                       {/* Columns 7 to 11: 5 Slots under PROCHAINS LANCEMENTS (Cartes) */}
                       {[0, 1, 2, 3, 4].map((slotIdx) => {
                         const slotCard = row.prochainsLancementsCards[slotIdx];
                         return (
                           <td key={slotIdx} className="p-0 min-w-[125px]">
-                            <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[58px] flex flex-col justify-center items-center">
-                              {renderCardSlotContent(
+                            <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[96px] flex flex-col justify-center items-center">
+                          {renderCardSlotContent(
                                 slotCard,
                                 row,
                                 'lancement',
@@ -750,7 +932,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
                       {/* Column 12: EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
                       <td className="p-0 min-w-[145px]">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[58px] flex flex-col justify-center items-center">
+                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[96px] flex flex-col justify-center items-center">
                           {renderCardSlotContent(
                             row.expeditionCard,
                             row,

@@ -2,8 +2,19 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { CardItem } from './src/types/card.ts';
-import { INITIAL_CARDS } from './src/data/mockData.ts';
+import type { CardItem, CardJalon } from './src/types/card.ts';
+import {
+  createJalon,
+  deleteCard,
+  deleteJalon,
+  getCard,
+  insertCard,
+  listCards,
+  listJalons,
+  renameJalon,
+  resetDatabase,
+  updateCardData,
+} from './db.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,9 +44,6 @@ app.use(
 
 app.use(express.json());
 
-// In-memory fallback database
-let cardsStore: CardItem[] = [...INITIAL_CARDS];
-
 // Helper to compute resteAProduire
 function calculateReste(demandee: number, finie: number): number {
   return Math.max(0, demandee - finie);
@@ -59,10 +67,46 @@ function getCurrentDateTime() {
 // REST API v1
 const apiRouter = express.Router();
 
+/* ------------------------------------------------------------------ jalons */
+
+// Catalogue global des types de jalons, partagé par toutes les cartes.
+apiRouter.get('/jalons', (_req: Request, res: Response) => {
+  res.json({ success: true, count: listJalons().length, data: listJalons() });
+});
+
+// Ajout d'un type de jalon au catalogue. Il devient disponible sur toutes les cartes.
+apiRouter.post('/jalons', (req: Request, res: Response) => {
+  try {
+    const created = createJalon(req.body?.code, req.body?.libelle);
+    res.status(201).json({ success: true, data: created, message: `Jalon ${created.code} ajouté` });
+  } catch (err) {
+    res.status(400).json({ success: false, error: (err as Error).message });
+  }
+});
+
+apiRouter.patch('/jalons/:code', (req: Request, res: Response) => {
+  try {
+    res.json({ success: true, data: renameJalon(req.params.code, req.body?.libelle) });
+  } catch (err) {
+    res.status(400).json({ success: false, error: (err as Error).message });
+  }
+});
+
+apiRouter.delete('/jalons/:code', (req: Request, res: Response) => {
+  try {
+    deleteJalon(req.params.code);
+    res.json({ success: true, message: `Jalon ${req.params.code} supprimé` });
+  } catch (err) {
+    res.status(400).json({ success: false, error: (err as Error).message });
+  }
+});
+
+/* ------------------------------------------------------------------ cartes */
+
 // GET all cards with optional search query
 apiRouter.get('/cards', (req: Request, res: Response) => {
   const { search, statut, client } = req.query;
-  let results = [...cardsStore];
+  let results = listCards();
 
   if (typeof search === 'string' && search.trim() !== '') {
     const q = search.toLowerCase().trim();
@@ -92,12 +136,29 @@ apiRouter.get('/cards', (req: Request, res: Response) => {
 
 // GET single card
 apiRouter.get('/cards/:id', (req: Request, res: Response) => {
-  const card = cardsStore.find((c) => c.id === req.params.id);
+  const card = getCard(req.params.id);
   if (!card) {
     return res.status(404).json({ success: false, error: 'Carte non trouvée' });
   }
   res.json({ success: true, data: card });
 });
+
+/** Nettoie les états de jalons reçus : seuls les codes connus du catalogue sont gardés. */
+function parseJalons(value: unknown): CardJalon[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const connus = new Set(listJalons().map((j) => j.code));
+  return value
+    .filter((j): j is CardJalon => Boolean(j) && typeof (j as CardJalon).code === 'string')
+    .map((j) => {
+      const semaine = Number(j.semaine);
+      return {
+        code: (j as CardJalon).code,
+        valide: Boolean((j as CardJalon).valide),
+        ...(Number.isFinite(semaine) && semaine >= 1 && semaine <= 53 ? { semaine } : {}),
+      };
+    })
+    .filter((j) => connus.has(j.code));
+}
 
 // POST new card
 apiRouter.post('/cards', (req: Request, res: Response) => {
@@ -114,16 +175,18 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
   const quantiteFinie = Number(body.quantiteFinie) || 0;
 
   const { dateStr, timeStr } = getCurrentDateTime();
+  // Une nouvelle carte démarre avec tous les jalons du catalogue à « En attente ».
+  const jalons: CardJalon[] = Array.isArray(body.jalons)
+    ? (parseJalons(body.jalons) as CardJalon[])
+    : listJalons().map((j) => ({ code: j.code, valide: false }));
+
   const newCard: CardItem = {
     id: `CRD-${Date.now().toString().slice(-4)}`,
     client: String(body.client).trim(),
     nom: String(body.nom).trim(),
     reference: String(body.reference).trim(),
     modele: String(body.modele).trim(),
-    dt: Boolean(body.dt),
-    tc: Boolean(body.tc),
-    sms: Boolean(body.sms),
-    rdl: Boolean(body.rdl),
+    jalons,
     okProd: Boolean(body.okProd),
     ofs: Array.isArray(body.ofs) ? body.ofs : [],
     quantiteDemandee,
@@ -138,19 +201,19 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
     notes: body.notes ? String(body.notes).trim() : undefined,
   };
 
-  cardsStore.unshift(newCard);
+  const created = insertCard(newCard);
 
   res.status(201).json({
     success: true,
-    data: newCard,
+    data: created,
     message: 'Carte créée avec succès',
   });
 });
 
 // PUT full update
 apiRouter.put('/cards/:id', (req: Request, res: Response) => {
-  const index = cardsStore.findIndex((c) => c.id === req.params.id);
-  if (index === -1) {
+  const existant = getCard(req.params.id);
+  if (!existant) {
     return res.status(404).json({ success: false, error: 'Carte non trouvée' });
   }
 
@@ -159,30 +222,25 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
   const quantiteFinie = Number(body.quantiteFinie) || 0;
   const { dateStr, timeStr } = getCurrentDateTime();
 
-  const updated: CardItem = {
-    ...cardsStore[index],
-    client: body.client ?? cardsStore[index].client,
-    nom: body.nom ?? cardsStore[index].nom,
-    reference: body.reference ?? cardsStore[index].reference,
-    modele: body.modele ?? cardsStore[index].modele,
-    dt: typeof body.dt === 'boolean' ? body.dt : cardsStore[index].dt,
-    tc: typeof body.tc === 'boolean' ? body.tc : cardsStore[index].tc,
-    sms: typeof body.sms === 'boolean' ? body.sms : cardsStore[index].sms,
-    rdl: typeof body.rdl === 'boolean' ? body.rdl : cardsStore[index].rdl,
-    okProd: typeof body.okProd === 'boolean' ? body.okProd : cardsStore[index].okProd,
-    ofs: Array.isArray(body.ofs) ? body.ofs : cardsStore[index].ofs,
+  const updated = updateCardData(req.params.id, {
+    client: body.client ?? existant.client,
+    nom: body.nom ?? existant.nom,
+    reference: body.reference ?? existant.reference,
+    modele: body.modele ?? existant.modele,
+    jalons: parseJalons(body.jalons) ?? existant.jalons,
+    okProd: typeof body.okProd === 'boolean' ? body.okProd : existant.okProd,
+    ofs: Array.isArray(body.ofs) ? body.ofs : existant.ofs,
     quantiteDemandee,
     quantiteFinie,
     resteAProduire: calculateReste(quantiteDemandee, quantiteFinie),
-    statut: body.statut ?? cardsStore[index].statut,
+    statut: body.statut ?? existant.statut,
     dateDernierPoint: dateStr,
     heureDernierPoint: timeStr,
     pointFaitAujourdhui: true,
-    decisionReunion: body.decisionReunion !== undefined ? body.decisionReunion : cardsStore[index].decisionReunion,
-    notes: body.notes !== undefined ? body.notes : cardsStore[index].notes,
-  };
-
-  cardsStore[index] = updated;
+    decisionReunion:
+      body.decisionReunion !== undefined ? body.decisionReunion : existant.decisionReunion,
+    notes: body.notes !== undefined ? body.notes : existant.notes,
+  });
 
   res.json({
     success: true,
@@ -193,16 +251,17 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
 
 // PATCH partial update (daily point quantity, status, flags, meeting decisions)
 apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
-  const index = cardsStore.findIndex((c) => c.id === req.params.id);
-  if (index === -1) {
+  const existing = getCard(req.params.id);
+  if (!existing) {
     return res.status(404).json({ success: false, error: 'Carte non trouvée' });
   }
 
-  const existing = cardsStore[index];
   const body = req.body;
 
-  const quantiteDemandee = body.quantiteDemandee !== undefined ? Number(body.quantiteDemandee) : existing.quantiteDemandee;
-  const quantiteFinie = body.quantiteFinie !== undefined ? Number(body.quantiteFinie) : existing.quantiteFinie;
+  const quantiteDemandee =
+    body.quantiteDemandee !== undefined ? Number(body.quantiteDemandee) : existing.quantiteDemandee;
+  const quantiteFinie =
+    body.quantiteFinie !== undefined ? Number(body.quantiteFinie) : existing.quantiteFinie;
   const resteAProduire = calculateReste(quantiteDemandee, quantiteFinie);
   const { dateStr, timeStr } = getCurrentDateTime();
 
@@ -215,9 +274,10 @@ apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
     }
   }
 
-  const updated: CardItem = {
-    ...existing,
-    ...body,
+  // Les jalons sont des lignes dédiées : on ne les laisse pas passer par le spread.
+  const { jalons, ...reste } = body as Partial<CardItem> & { jalons?: unknown };
+  const updated = updateCardData(req.params.id, {
+    ...reste,
     quantiteDemandee,
     quantiteFinie,
     resteAProduire,
@@ -225,9 +285,8 @@ apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
     dateDernierPoint: dateStr,
     heureDernierPoint: timeStr,
     pointFaitAujourdhui: true,
-  };
-
-  cardsStore[index] = updated;
+    ...(jalons !== undefined ? { jalons: parseJalons(jalons) ?? existing.jalons } : {}),
+  });
 
   res.json({
     success: true,
@@ -238,12 +297,11 @@ apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
 
 // DELETE card
 apiRouter.delete('/cards/:id', (req: Request, res: Response) => {
-  const index = cardsStore.findIndex((c) => c.id === req.params.id);
-  if (index === -1) {
+  const removed = deleteCard(req.params.id);
+  if (!removed) {
     return res.status(404).json({ success: false, error: 'Carte non trouvée' });
   }
 
-  const removed = cardsStore.splice(index, 1)[0];
   res.json({
     success: true,
     data: removed,
@@ -251,16 +309,28 @@ apiRouter.delete('/cards/:id', (req: Request, res: Response) => {
   });
 });
 
+// Reset demo data : rejoue le seed (cartes d'exemple + catalogue initial)
+apiRouter.post('/reset', (_req: Request, res: Response) => {
+  resetDatabase();
+
+  res.json({
+    success: true,
+    data: listCards(),
+    message: 'Données réinitialisées (Atelier Textile Haut de Gamme)',
+  });
+});
+
 // Stats summary for dashboard header
 apiRouter.get('/stats', (_req: Request, res: Response) => {
-  const totalCards = cardsStore.length;
-  const totalDemandee = cardsStore.reduce((acc, c) => acc + c.quantiteDemandee, 0);
-  const totalFinie = cardsStore.reduce((acc, c) => acc + c.quantiteFinie, 0);
-  const totalReste = cardsStore.reduce((acc, c) => acc + c.resteAProduire, 0);
-  const enCours = cardsStore.filter((c) => c.statut === 'EN_COURS').length;
-  const terminees = cardsStore.filter((c) => c.statut === 'TERMINE').length;
-  const bloquees = cardsStore.filter((c) => c.statut === 'BLOQUE').length;
-  const enAttente = cardsStore.filter((c) => c.statut === 'EN_ATTENTE').length;
+  const cards = listCards();
+  const totalCards = cards.length;
+  const totalDemandee = cards.reduce((acc, c) => acc + c.quantiteDemandee, 0);
+  const totalFinie = cards.reduce((acc, c) => acc + c.quantiteFinie, 0);
+  const totalReste = cards.reduce((acc, c) => acc + c.resteAProduire, 0);
+  const enCours = cards.filter((c) => c.statut === 'EN_COURS').length;
+  const terminees = cards.filter((c) => c.statut === 'TERMINE').length;
+  const bloquees = cards.filter((c) => c.statut === 'BLOQUE').length;
+  const enAttente = cards.filter((c) => c.statut === 'EN_ATTENTE').length;
 
   res.json({
     success: true,

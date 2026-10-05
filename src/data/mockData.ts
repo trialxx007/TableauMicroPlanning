@@ -1,6 +1,22 @@
 import { CardItem } from '../types/card.ts';
 
-export const INITIAL_CARDS: CardItem[] = [
+/**
+ * Jeu de démonstration d'origine, encore au format figé d'avant les jalons dynamiques
+ * (colonnes dt/tc/sms/rdl). Il n'est lu qu'une fois, au premier démarrage de la base,
+ * où il est converti en lignes `card_jalons`. Le reste de l'application lit `CardItem`.
+ */
+export interface LegacyCard extends Omit<CardItem, 'jalons'> {
+  dt: boolean;
+  tc: boolean;
+  sms: boolean;
+  rdl?: boolean;
+  dtSemaine?: number;
+  tcSemaine?: number;
+  smsSemaine?: number;
+  rdlSemaine?: number;
+}
+
+export const INITIAL_CARDS: LegacyCard[] = [
   {
     id: 'CRD-001',
     client: 'Christian Dior',

@@ -1,19 +1,39 @@
-import { CardFormData, CardItem } from '../types/card.ts';
-import { INITIAL_CARDS } from '../data/mockData.ts';
+import { CardFormData, CardItem, JalonCatalogue } from '../types/card.ts';
+import { CATALOGUE_INITIAL } from '../data/mockJalons.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
+import { normaliserSemaine } from '../utils/jalons.ts';
 
-const STORAGE_KEY = 'point_commande_cards_cache_textile_v5';
+/**
+ * Cache hors ligne. La v6 correspond au passage aux jalons dynamiques : un cache
+ * plus ancien contient les colonnes dt/tc/sms/rdl et doit être jeté, sinon les
+ * cartes s'afficheraient sans aucun jalon.
+ */
+const STORAGE_KEY = 'point_commande_cards_cache_textile_v6';
+
+function estCacheCompatible(raw: unknown): raw is CardItem[] {
+  return (
+    Array.isArray(raw) &&
+    raw.every(
+      (c) =>
+        Boolean(c) &&
+        typeof c === 'object' &&
+        Array.isArray((c as CardItem).jalons)
+    )
+  );
+}
 
 function getLocalFallback(): CardItem[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      return JSON.parse(raw);
+      const parsed: unknown = JSON.parse(raw);
+      if (estCacheCompatible(parsed)) return parsed;
+      localStorage.removeItem(STORAGE_KEY);
     }
   } catch (e) {
     console.warn('localStorage non accessible', e);
   }
-  return [...INITIAL_CARDS];
+  return [];
 }
 
 function saveLocalFallback(cards: CardItem[]) {
@@ -69,10 +89,15 @@ export const cardApi = {
       nom: data.nom,
       reference: data.reference,
       modele: data.modele,
-      dt: Boolean(data.dt),
-      tc: Boolean(data.tc),
-      sms: Boolean(data.sms),
-      rdl: Boolean(data.rdl),
+      jalons: Array.isArray(data.jalons)
+        ? data.jalons.map((j) => ({
+            code: j.code,
+            valide: Boolean(j.valide),
+            ...(normaliserSemaine(j.semaine) != null
+              ? { semaine: normaliserSemaine(j.semaine) as number }
+              : {}),
+          }))
+        : CATALOGUE_INITIAL.map((j) => ({ code: j.code, valide: false })),
       okProd: Boolean(data.okProd),
       ofs: data.ofs || [],
       quantiteDemandee,
@@ -156,8 +181,61 @@ export const cardApi = {
     saveLocalFallback(current);
   },
 
-  resetDefaults(): CardItem[] {
-    saveLocalFallback([...INITIAL_CARDS]);
-    return [...INITIAL_CARDS];
+  /**
+   * Remet la base dans son état de démonstration. Le seed vit côté serveur,
+   * la seule source de vérité : on ne se contente plus de vider le cache local.
+   */
+  async resetDefaults(): Promise<CardItem[]> {
+    try {
+      const res = await fetch('/api/v1/reset', { method: 'POST' });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) {
+          saveLocalFallback(json.data);
+          return json.data;
+        }
+      }
+    } catch {
+      // Hors ligne : on garde l'affichage actuel plutôt que de vider l'écran.
+    }
+    return getLocalFallback();
+  },
+};
+
+/** Catalogue des types de jalons, source de vérité côté serveur. */
+export const jalonApi = {
+  async getAll(): Promise<JalonCatalogue[]> {
+    try {
+      const res = await fetch('/api/v1/jalons');
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && Array.isArray(json.data)) return json.data as JalonCatalogue[];
+      }
+    } catch {
+      // Hors ligne : on garde le catalogue de départ, l'affichage reste utilisable.
+    }
+    return CATALOGUE_INITIAL;
+  },
+
+  /** Ajoute un type de jalon au catalogue global, donc disponible sur toutes les cartes. */
+  async create(code: string, libelle: string): Promise<JalonCatalogue> {
+    const res = await fetch('/api/v1/jalons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, libelle }),
+    });
+    const json = await res.json().catch(() => ({ success: false }));
+    if (!res.ok || !json.success) {
+      throw new Error(json?.error || `Erreur ${res.status}`);
+    }
+    return json.data as JalonCatalogue;
+  },
+
+  async remove(code: string): Promise<void> {
+    const res = await fetch(`/api/v1/jalons/${encodeURIComponent(code)}`, { method: 'DELETE' });
+    const json = await res.json().catch(() => ({ success: false }));
+    if (!res.ok || !json.success) {
+      throw new Error(json?.error || `Erreur ${res.status}`);
+    }
   },
 };

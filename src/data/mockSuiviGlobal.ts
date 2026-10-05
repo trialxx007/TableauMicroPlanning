@@ -11,6 +11,7 @@ export const CATEGORIES_CONFIG: Record<string, CategorieConfig> = {
     bgClass: 'bg-[#fbe7e2]',
     borderClass: 'border-[#f6c2b7]',
     textClass: 'text-[#881337]',
+    textColor: '#881337',
     defaultDotColor: '#f8b4a6',
   },
   CONFECTION: {
@@ -22,6 +23,7 @@ export const CATEGORIES_CONFIG: Record<string, CategorieConfig> = {
     bgClass: 'bg-[#e0f2fe]',
     borderClass: 'border-[#bae6fd]',
     textClass: 'text-[#0369a1]',
+    textColor: '#0369a1',
     defaultDotColor: '#7dd3fc',
   },
 };

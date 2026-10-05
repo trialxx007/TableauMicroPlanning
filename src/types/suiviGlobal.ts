@@ -35,5 +35,6 @@ export interface CategorieConfig {
   bgClass: string;
   borderClass: string;
   textClass: string;
+  textColor: string;
   defaultDotColor: string;
 }

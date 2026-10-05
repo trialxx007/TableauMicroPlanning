@@ -1,18 +1,21 @@
 import { useState, useEffect, useMemo } from 'react';
-import { CardFormData, CardItem, CardStatus } from './types/card.ts';
-import { cardApi } from './services/api.ts';
+import { CardFormData, CardItem, CardStatus, JalonCatalogue } from './types/card.ts';
+import { cardApi, jalonApi } from './services/api.ts';
 import { Header } from './components/Header.tsx';
 import { StatsOverview, KpiFilterType } from './components/StatsOverview.tsx';
 import { FilterBar, SortField, SortOrder } from './components/FilterBar.tsx';
 import { CardTable } from './components/CardTable.tsx';
 import { CardModal } from './components/CardModal.tsx';
 import { SuiviGlobalView } from './components/SuiviGlobalView.tsx';
+import { JalonCatalogueProvider } from './context/JalonCatalogueContext.tsx';
+import { getEtatJalon, PREFIXE_JALON_MANQUANT } from './utils/jalons.ts';
 import { getNowParis } from './utils/dateFrance.ts';
 import { RefreshCw, Download, FileSpreadsheet, Check } from 'lucide-react';
 
 export default function App() {
   const [currentPage, setCurrentPage] = useState<'point-journalier' | 'suivi-global'>('point-journalier');
   const [cards, setCards] = useState<CardItem[]>([]);
+  const [catalogue, setCatalogue] = useState<JalonCatalogue[]>([]);
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -28,7 +31,9 @@ export default function App() {
 
   const fetchCards = async () => {
     try {
-      const data = await cardApi.getAll();
+      // Le catalogue d'abord : les jalons affichés en dépendent.
+      const [jalons, data] = await Promise.all([jalonApi.getAll(), cardApi.getAll()]);
+      setCatalogue(jalons);
       setCards(data);
     } catch (e) {
       console.error('Erreur chargement cartes', e);
@@ -90,8 +95,8 @@ export default function App() {
         showNotification(
           `Point enregistré : ${updated.nom} (${updated.quantiteFinie}/${updated.quantiteDemandee}) à ${timeStr}`
         );
-      } else if (updates.dt !== undefined || updates.tc !== undefined || updates.sms !== undefined) {
-        showNotification(`Validation technique mise à jour pour ${updated.nom}`);
+      } else if (updates.jalons !== undefined) {
+        showNotification(`Jalons mis à jour pour ${updated.nom}`);
       }
     } catch (e) {
       console.error('Erreur mise à jour', e);
@@ -108,9 +113,9 @@ export default function App() {
     }
   };
 
-  const handleResetData = () => {
+  const handleResetData = async () => {
     if (window.confirm('Voulez-vous réinitialiser les données avec les cartes d’exemple ?')) {
-      const defaults = cardApi.resetDefaults();
+      const defaults = await cardApi.resetDefaults();
       setCards(defaults);
       showNotification('Données réinitialisées (Atelier Textile Haut de Gamme)');
     }
@@ -178,7 +183,7 @@ export default function App() {
           return false;
         }
 
-        // DT, TC, SMS, RDL, OK Prod, Sous-traitance
+        // OK Prod, Sous-traitance et jalons (le catalogue décide des codes disponibles)
         if (flagFilter === 'OK_PROD' && !card.okProd) return false;
         if (flagFilter === 'OK_PROD_PENDING' && card.okProd) return false;
         if (
@@ -187,15 +192,23 @@ export default function App() {
         ) {
           return false;
         }
-        if (flagFilter === 'RDL_MISSING' && card.rdl) return false;
-        if (flagFilter === 'DT_MISSING' && card.dt) return false;
-        if (flagFilter === 'TC_MISSING' && card.tc) return false;
-        if (flagFilter === 'SMS_MISSING' && card.sms) return false;
-        if (flagFilter === 'ALL_VALIDATED' && (!card.dt || !card.tc || !card.sms)) return false;
+        // JALON_MISSING:<CODE> fonctionne pour n'importe quel jalon du catalogue.
+        const codeManquant = flagFilter.startsWith(PREFIXE_JALON_MANQUANT)
+          ? flagFilter.slice(PREFIXE_JALON_MANQUANT.length)
+          : null;
+        if (codeManquant && getEtatJalon(card, codeManquant).valide) return false;
+        if (
+          flagFilter === 'ALL_VALIDATED' &&
+          !catalogue.every((j) => getEtatJalon(card, j.code).valide)
+        ) {
+          return false;
+        }
 
         // Filtre cliquable depuis les 3 cartes du bandeau (Cartes / Modèles, RDL, Alerte et priorité)
         if (kpiFilter === 'RDL') {
-          if (!card.rdl) return false;
+          // Si RDL a quitté le catalogue, le filtre n'a plus de sens : on ne filtre rien.
+          const rdlExiste = catalogue.some((j) => j.code === 'RDL');
+          if (rdlExiste && !getEtatJalon(card, 'RDL').valide) return false;
         } else if (kpiFilter === 'ALERTE') {
           if (card.statut !== 'BLOQUE') return false;
         }
@@ -232,15 +245,23 @@ export default function App() {
   // Export CSV for daily point report (formatted for French Excel)
   const handleExportCSV = () => {
     const { dateStr, timeStr } = getNowParis();
+
+    // Une colonne par jalon du catalogue : l'export suit l'ajout de jalons
+    // sans intervention. OUI = validé, S40 = planifié, NON = en attente.
+    const enteteJalon = catalogue.map((j) => `${j.code} (${j.libelle})`);
+    const valeurJalon = (card: CardItem, code: string) => {
+      const etat = getEtatJalon(card, code);
+      if (etat.valide) return 'OUI';
+      const semaine = etat.semaine;
+      return semaine != null ? `S${semaine}` : 'NON';
+    };
+
     const headers = [
       'Client',
       'Modèle',
       'Nom',
       'Référence (OF)',
-      'RDL (Réunion De Lancement)',
-      'DT (Dossier Technique)',
-      'TC (Type Conforme)',
-      'SMS (Sales Man Sample)',
+      ...enteteJalon,
       'Quantité Demandée',
       'Quantité Finie',
       'Reste à Produire',
@@ -256,10 +277,7 @@ export default function App() {
       `"${c.modele.replace(/"/g, '""')}"`,
       `"${c.nom.replace(/"/g, '""')}"`,
       `"${c.reference.replace(/"/g, '""')}"`,
-      c.rdl ? 'PROGRAMMÉ' : 'À PROGRAMMER',
-      c.dt ? 'OUI' : 'NON',
-      c.tc ? 'OUI' : 'NON',
-      c.sms ? 'OUI' : 'NON',
+      ...catalogue.map((j) => valeurJalon(c, j.code)),
       c.quantiteDemandee,
       c.quantiteFinie,
       c.resteAProduire,
@@ -313,8 +331,14 @@ export default function App() {
     );
   }
 
+  /** Le catalogue a changé : on le recharge pour que tableaux et alertes suivent. */
+  const handleJalonAjoute = async () => {
+    setCatalogue(await jalonApi.getAll());
+  };
+
   return (
-    <div className="min-h-screen bg-slate-50 flex flex-col text-slate-800">
+    <JalonCatalogueProvider catalogue={catalogue}>
+      <div className="min-h-screen bg-slate-50 flex flex-col text-slate-800">
       {/* Toast Notification */}
       {notification && (
         <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-lg text-xs font-semibold flex items-center gap-2 border border-slate-700 animate-in fade-in slide-in-from-bottom-2">
@@ -449,7 +473,9 @@ export default function App() {
         }}
         onSubmit={handleCreateOrUpdate}
         initialData={editingCard}
+        onJalonAjoute={handleJalonAjoute}
       />
-    </div>
+      </div>
+    </JalonCatalogueProvider>
   );
 }

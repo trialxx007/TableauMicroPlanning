@@ -1,5 +1,7 @@
 import React from 'react';
 import { CardItem } from '../types/card.ts';
+import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
+import { getEtatJalon } from '../utils/jalons.ts';
 import {
   Layers,
   CalendarCheck,
@@ -21,15 +23,20 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({
   activeFilter = 'ALL',
   onSelectFilter,
 }) => {
+  const catalogue = useJalonCatalogue();
   const totalCards = cards.length;
   const enCoursCount = cards.filter((c) => c.statut === 'EN_COURS').length;
   const termineesCount = cards.filter((c) => c.statut === 'TERMINE').length;
   const bloqueesCount = cards.filter((c) => c.statut === 'BLOQUE').length;
   const enAttenteCount = cards.filter((c) => c.statut === 'EN_ATTENTE').length;
 
-  // RDL : Réunion De Lancement
-  const rdlProgrammes = cards.filter((c) => c.rdl).length;
-  const rdlAProgrammer = cards.filter((c) => !c.rdl && c.statut !== 'TERMINE').length;
+  // RDL : Réunion De Lancement. La carte RDL disparaît du tableau des KPI si
+  // le jalon sort du catalogue global, sinon le décompte resterait figé à zéro.
+  const jalonRDL = catalogue.find((j) => j.code === 'RDL');
+  const rdlProgrammes = jalonRDL ? cards.filter((c) => getEtatJalon(c, 'RDL').valide).length : 0;
+  const rdlAProgrammer = jalonRDL
+    ? cards.filter((c) => !getEtatJalon(c, 'RDL').valide && c.statut !== 'TERMINE').length
+    : 0;
 
   const handleCardClick = (filter: KpiFilterType) => {
     if (onSelectFilter) {
@@ -100,9 +107,10 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({
         </div>
       </div>
 
-      {/* 2. RDL (Réunion De Lancement) */}
-      <div
-        onClick={() => handleCardClick('RDL')}
+      {/* 2. RDL (Réunion De Lancement) — masqué si le jalon a quitté le catalogue */}
+      {jalonRDL && (
+        <div
+          onClick={() => handleCardClick('RDL')}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => e.key === 'Enter' && handleCardClick('RDL')}
@@ -157,7 +165,8 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({
             Afficher les cartes →
           </span>
         </div>
-      </div>
+        </div>
+      )}
 
       {/* 3. Alerte et priorité (anciennement Points d'Arbitrage Réunion) */}
       <div

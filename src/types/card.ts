@@ -2,6 +2,35 @@ export type CardStatus = 'EN_ATTENTE' | 'EN_COURS' | 'TERMINE' | 'BLOQUE';
 
 export type OFType = 'INTERNE' | 'SOUS_TRAITANCE';
 
+/**
+ * Code d'un jalon technique. Dynamique : le catalogue est alimenté par l'utilisateur,
+ * il n'est plus figé à DT/TC/SMS/RDL.
+ */
+export type JalonCode = string;
+
+/** Entrée du catalogue global des types de jalons, partagé par toutes les cartes. */
+export interface JalonCatalogue {
+  code: JalonCode;
+  /** Intitulé long, affiché dans les infobulles et la légende : « Dossier Technique ». */
+  libelle: string;
+  /** Rang d'affichage dans la section JALONS. */
+  ordre: number;
+}
+
+/**
+ * État d'un jalon pour une carte donnée.
+ * Trois combinaisons possibles, sans ambiguïté :
+ *   valide=true                    -> VALIDE      (la semaine est ignorée)
+ *   valide=false, semaine renseignée -> SEMAINE
+ *   valide=false, pas de semaine     -> EN_ATTENTE
+ */
+export interface CardJalon {
+  code: JalonCode;
+  valide: boolean;
+  /** Semaine ISO cible (1-53), uniquement pour l'état SEMAINE. */
+  semaine?: number;
+}
+
 export interface OrdreFabrication {
   id: string;
   codeOF: string; // ex: OF1, OF2, OF3
@@ -21,10 +50,11 @@ export interface CardItem {
   nom: string;
   reference: string; // Référence modèle / commande
   modele: string;
-  dt: boolean; // Dossier Technique
-  tc: boolean; // Type Conforme
-  sms: boolean; // Sales Man's Sample
-  rdl?: boolean; // Réunion De Lancement
+  /**
+   * États des jalons techniques de la carte. Le contenu suit le catalogue global :
+   * un code absent de la table est lu comme « En attente » sans échéance.
+   */
+  jalons: CardJalon[];
   dateRdl?: string;
   okProd: boolean; // Accord OK Prod avant ventilation et lancement des OF
   dateOkProd?: string;
@@ -45,7 +75,7 @@ export type CardFormData = Omit<
   CardItem,
   'id' | 'resteAProduire' | 'dateCreation' | 'dateDernierPoint' | 'heureDernierPoint' | 'pointFaitAujourdhui'
 > & {
-  rdl?: boolean;
+  jalons?: CardJalon[];
   dateRdl?: string;
   okProd?: boolean;
   dateOkProd?: string;
