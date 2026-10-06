@@ -1,14 +1,21 @@
-import { CardFormData, CardItem } from '../types/card.ts';
+import { CardFormData, CardItem, normalizeOFType } from '../types/card.ts';
 import { INITIAL_CARDS } from '../data/mockData.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 
 const STORAGE_KEY = 'point_commande_cards_cache_textile_v6';
 
+function normalizeCards(cards: CardItem[]): CardItem[] {
+  return (cards || []).map((c) => ({
+    ...c,
+    ofs: (c.ofs || []).map((o) => ({ ...o, type: normalizeOFType(o.type) })),
+  }));
+}
+
 function getLocalFallback(): CardItem[] {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
-      return JSON.parse(raw);
+      return normalizeCards(JSON.parse(raw));
     }
   } catch (e) {
     console.warn('localStorage non accessible', e);
@@ -31,8 +38,9 @@ export const cardApi = {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
-        saveLocalFallback(json.data);
-        return json.data;
+        const normalized = normalizeCards(json.data);
+        saveLocalFallback(normalized);
+        return normalized;
       }
     } catch {
       // Fallback
@@ -50,10 +58,11 @@ export const cardApi = {
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.data) {
+          const created = normalizeCards([json.data])[0];
           const list = getLocalFallback();
-          list.unshift(json.data);
+          list.unshift(created);
           saveLocalFallback(list);
-          return json.data;
+          return created;
         }
       }
     } catch {
@@ -103,9 +112,10 @@ export const cardApi = {
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.data) {
-          const list = getLocalFallback().map((c) => (c.id === id ? json.data : c));
+          const updated = normalizeCards([json.data])[0];
+          const list = getLocalFallback().map((c) => (c.id === id ? updated : c));
           saveLocalFallback(list);
-          return json.data;
+          return updated;
         }
       }
     } catch {

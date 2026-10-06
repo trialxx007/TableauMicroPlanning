@@ -3,7 +3,8 @@ import { Pencil, Check } from 'lucide-react';
 
 interface EditableItemNameProps {
   value?: string;
-  defaultValue: string;
+  defaultValue?: string;
+  placeholder?: string;
   onSave: (newName: string) => void;
   className?: string;
   prefix?: string;
@@ -11,7 +12,8 @@ interface EditableItemNameProps {
 
 export const EditableItemName: React.FC<EditableItemNameProps> = ({
   value,
-  defaultValue,
+  defaultValue = '',
+  placeholder = 'Nom...',
   onSave,
   className = '',
   prefix,
@@ -65,7 +67,7 @@ export const EditableItemName: React.FC<EditableItemNameProps> = ({
             }
           }}
           onBlur={handleSave}
-          placeholder={defaultValue}
+          placeholder={placeholder || defaultValue}
           className="text-xs font-bold text-slate-900 bg-white border-2 border-slate-900 rounded px-2 py-1 focus:outline-hidden shadow-xs min-w-[140px] max-w-[220px]"
         />
         <button
@@ -86,14 +88,18 @@ export const EditableItemName: React.FC<EditableItemNameProps> = ({
   return (
     <div
       onClick={() => setIsEditing(true)}
-      className={`group inline-flex items-center gap-1.5 cursor-pointer py-1 px-1.5 rounded hover:bg-slate-200/80 transition-all ${className}`}
+      className={`group inline-flex items-center gap-1 cursor-pointer py-0 px-1 rounded hover:bg-slate-200/80 transition-all ${className}`}
       title="Cliquer pour personnaliser le nom"
     >
-      {prefix && <span className="text-slate-400 font-mono text-xs">{prefix}</span>}
-      <span className="font-bold text-slate-900 text-xs truncate max-w-[180px] sm:max-w-[240px]">
-        {displayName}
+      {prefix && <span className="text-slate-400 font-mono text-[11px]">{prefix}</span>}
+      <span
+        className={`font-bold text-[11px] truncate max-w-[140px] sm:max-w-[200px] ${
+          displayName ? 'text-slate-900' : 'text-slate-400 italic'
+        }`}
+      >
+        {displayName || placeholder}
       </span>
-      <Pencil className="w-3 h-3 text-slate-400 group-hover:text-slate-900 transition-colors opacity-70 group-hover:opacity-100 shrink-0" />
+      <Pencil className="w-2.5 h-2.5 text-slate-400 group-hover:text-slate-900 transition-colors opacity-70 group-hover:opacity-100 shrink-0" />
     </div>
   );
 };

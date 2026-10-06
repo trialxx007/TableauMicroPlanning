@@ -189,7 +189,7 @@ export default function App() {
         if (flagFilter === 'OK_PROD_PENDING' && card.okProd) return false;
         if (
           flagFilter === 'HAS_SOUS_TRAITANCE' &&
-          (!card.ofs || !card.ofs.some((o) => o.type === 'SOUS_TRAITANCE'))
+          (!card.ofs || !card.ofs.some((o) => o.type !== 'I'))
         ) {
           return false;
         }

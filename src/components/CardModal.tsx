@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { CardFormData, CardItem, CardStatus, OrdreFabrication } from '../types/card.ts';
-import { OFSubTable } from './OFSubTable.tsx';
+import { OFSubTable, computeOfQuantiteFinie } from './OFSubTable.tsx';
 import { PRODUCTION_CHAINS } from '../data/mockSuiviGlobal.ts';
 import {
   X,
@@ -18,6 +18,7 @@ import {
   AlertCircle,
   Layers,
   ChevronDown,
+  Plus,
 } from 'lucide-react';
 
 interface CardModalProps {
@@ -54,11 +55,13 @@ export const CardModal: React.FC<CardModalProps> = ({
   const [chaineNom, setChaineNom] = useState<string | undefined>(undefined);
   const [chaineCategorie, setChaineCategorie] = useState<string | undefined>(undefined);
   const [isChaineSelectorOpen, setIsChaineSelectorOpen] = useState(false);
+  const [isAddingOF, setIsAddingOF] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
+    setIsAddingOF(false);
     if (initialData) {
       setClient(initialData.client);
       setNom(initialData.nom);
@@ -69,9 +72,16 @@ export const CardModal: React.FC<CardModalProps> = ({
       setSms(initialData.sms);
       setRdl(Boolean(initialData.rdl));
       setOkProd(Boolean(initialData.okProd));
-      setOfs(initialData.ofs || []);
+      const normalizedOfs = (initialData.ofs || []).map((o) => ({
+        ...o,
+        quantiteFinie: computeOfQuantiteFinie(o),
+      }));
+      setOfs(normalizedOfs);
       setQuantiteDemandee(initialData.quantiteDemandee);
       setQuantiteFinie(initialData.quantiteFinie);
+      if (normalizedOfs.length > 0) {
+        setQuantiteFinie(normalizedOfs.reduce((sum, o) => sum + o.quantiteFinie, 0));
+      }
       setStatut(initialData.statut);
       setDecisionReunion(initialData.decisionReunion || '');
       setNotes(initialData.notes || '');
@@ -88,9 +98,16 @@ export const CardModal: React.FC<CardModalProps> = ({
       setSms(Boolean(prefillData?.sms));
       setRdl(Boolean(prefillData?.rdl));
       setOkProd(Boolean(prefillData?.okProd));
-      setOfs(prefillData?.ofs || []);
+      const normalizedPrefillOfs = (prefillData?.ofs || []).map((o) => ({
+        ...o,
+        quantiteFinie: computeOfQuantiteFinie(o),
+      }));
+      setOfs(normalizedPrefillOfs);
       setQuantiteDemandee(prefillData?.quantiteDemandee || 200);
       setQuantiteFinie(prefillData?.quantiteFinie || 0);
+      if (normalizedPrefillOfs.length > 0) {
+        setQuantiteFinie(normalizedPrefillOfs.reduce((sum, o) => sum + o.quantiteFinie, 0));
+      }
       setStatut(prefillData?.statut || 'EN_ATTENTE');
       setDecisionReunion(prefillData?.decisionReunion || '');
       setNotes(prefillData?.notes || '');
@@ -330,137 +347,13 @@ export const CardModal: React.FC<CardModalProps> = ({
                       <span className="text-indigo-900 font-semibold">
                         Affectée à la chaîne : <span className="underline decoration-indigo-300">{chaineNom}</span>
                       </span>
+                    ) : okProd ? (
+                      'Aucune chaîne attribuée (utilisez le bouton "Chaîne (Sélectionner)" situé à côté du bouton "OK Prod Validé")'
                     ) : (
-                      'Aucune chaîne attribuée (cliquez sur le bouton "Chaîne" pour assigner)'
+                      "Aucune chaîne attribuée (le bouton de sélection devient disponible une fois l'OK Prod validé)"
                     )}
                   </div>
                 </div>
-              </div>
-
-              {/* Bouton "Chaîne" */}
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => setIsChaineSelectorOpen(!isChaineSelectorOpen)}
-                  className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer shadow-2xs ${
-                    chaineNom
-                      ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-300 ring-2 ring-indigo-500/20'
-                      : 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700'
-                  }`}
-                  title="Sélectionner la chaîne de production pour cette carte"
-                >
-                  <Layers className="w-3.5 h-3.5" />
-                  <span>{chaineNom ? `Chaîne : ${chaineNom}` : 'Chaîne (Sélectionner)'}</span>
-                  <ChevronDown
-                    className={`w-3.5 h-3.5 transition-transform ${
-                      isChaineSelectorOpen ? 'rotate-180' : ''
-                    }`}
-                  />
-                </button>
-
-                {/* Dropdown Menu de sélection des Chaînes */}
-                {isChaineSelectorOpen && (
-                  <div className="absolute right-0 mt-1.5 w-72 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
-                    <div className="px-2 py-1 text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-                      <span>Sélectionner la chaîne</span>
-                      <span className="text-[10px] font-normal text-slate-400">Atelier</span>
-                    </div>
-
-                    {/* Broderie Main */}
-                    <div className="mt-1.5">
-                      <div className="px-2 py-0.5 text-[10px] font-bold text-[#881337] bg-[#fbe7e2]/70 rounded mb-1">
-                        Broderie Main
-                      </div>
-                      <div className="grid grid-cols-2 gap-1">
-                        {PRODUCTION_CHAINS.filter((c) => c.categorieId === 'BRODERIE_MAIN').map(
-                          (chain) => {
-                            const isSelected = chaineNom === chain.nom || chaineId === chain.id;
-                            return (
-                              <button
-                                key={chain.id}
-                                type="button"
-                                onClick={() => {
-                                  setChaineId(chain.id);
-                                  setChaineNom(chain.nom);
-                                  setChaineCategorie(chain.categorieId);
-                                  setIsChaineSelectorOpen(false);
-                                }}
-                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all text-left cursor-pointer ${
-                                  isSelected
-                                    ? 'bg-indigo-600 text-white shadow-2xs font-bold'
-                                    : 'text-slate-700 hover:bg-slate-100'
-                                }`}
-                              >
-                                <span
-                                  className="w-2 h-2 rounded-full shrink-0"
-                                  style={{ backgroundColor: chain.dotColor }}
-                                />
-                                <span className="truncate">{chain.nom}</span>
-                                {isSelected && <Check className="w-3 h-3 ml-auto shrink-0" />}
-                              </button>
-                            );
-                          }
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Confection */}
-                    <div className="mt-2 pt-1.5 border-t border-slate-100">
-                      <div className="px-2 py-0.5 text-[10px] font-bold text-[#0369a1] bg-[#e0f2fe]/70 rounded mb-1">
-                        Confection
-                      </div>
-                      <div className="grid grid-cols-2 gap-1">
-                        {PRODUCTION_CHAINS.filter((c) => c.categorieId === 'CONFECTION').map(
-                          (chain) => {
-                            const isSelected = chaineNom === chain.nom || chaineId === chain.id;
-                            return (
-                              <button
-                                key={chain.id}
-                                type="button"
-                                onClick={() => {
-                                  setChaineId(chain.id);
-                                  setChaineNom(chain.nom);
-                                  setChaineCategorie(chain.categorieId);
-                                  setIsChaineSelectorOpen(false);
-                                }}
-                                className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all text-left cursor-pointer ${
-                                  isSelected
-                                    ? 'bg-indigo-600 text-white shadow-2xs font-bold'
-                                    : 'text-slate-700 hover:bg-slate-100'
-                                }`}
-                              >
-                                <span
-                                  className="w-2 h-2 rounded-full shrink-0"
-                                  style={{ backgroundColor: chain.dotColor }}
-                                />
-                                <span className="truncate">{chain.nom}</span>
-                                {isSelected && <Check className="w-3 h-3 ml-auto shrink-0" />}
-                              </button>
-                            );
-                          }
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Option: Retirer l'affectation */}
-                    {chaineNom && (
-                      <div className="mt-2 pt-1.5 border-t border-slate-100 text-center">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setChaineId(undefined);
-                            setChaineNom(undefined);
-                            setChaineCategorie(undefined);
-                            setIsChaineSelectorOpen(false);
-                          }}
-                          className="text-[11px] text-rose-600 hover:text-rose-800 hover:underline cursor-pointer"
-                        >
-                          ✕ Retirer l'affectation de chaîne
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                )}
               </div>
             </div>
           </div>
@@ -667,7 +560,7 @@ export const CardModal: React.FC<CardModalProps> = ({
             </div>
           </div>
 
-          {/* Section: Accord OK Prod & Répartition des OFs (Interne / Sous-traitance) */}
+          {/* Section: Accord OK Prod & Répartition des OFs (Initiatives / ONY / LOI) */}
           <div className="space-y-3 p-4 rounded-xl border border-slate-200 bg-slate-50/60">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div>
@@ -687,33 +580,163 @@ export const CardModal: React.FC<CardModalProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-slate-500 mt-1">
-                  Une fois l'accord "OK Prod" validé durant la RDL pour cette carte, la répartition des OFs (OF1 Interne, OF2 & OF3 Sous-traitants) s'affiche pour ventiler proprement la production.
+                  Une fois l'accord "OK Prod" validé durant la RDL pour cette carte, la répartition des OFs (ex: OF1 chez Initiatives, OF2 chez ONY, OF3 chez LOI) s'affiche pour ventiler proprement la production.
                 </p>
               </div>
 
-              {/* RÈGLE : Tant que DT, TC, SMS et RDL ne sont pas tous cochés, on masque le bouton "Valider OK Prod" */}
-              {allJalonsChecked ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const nextOk = !okProd;
-                    setOkProd(nextOk);
-                  }}
-                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap shadow-2xs ${
-                    okProd
-                      ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
-                      : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 animate-pulse'
-                  }`}
-                >
-                  <CheckCheck className="w-3.5 h-3.5" />
-                  <span>{okProd ? 'OK Prod Validé ✓ (Cliquer pour révoquer)' : 'Valider OK Prod'}</span>
-                </button>
-              ) : (
-                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 border border-slate-200 text-slate-500 whitespace-nowrap">
-                  <Lock className="w-3.5 h-3.5 text-slate-400" />
-                  <span>Bouton OK Prod masqué (Attente DT, TC, SMS & RDL)</span>
-                </div>
-              )}
+              <div className="flex flex-wrap items-center gap-2.5">
+                {/* Bouton "Chaîne" : apparaît à côté du bouton "OK Prod Validé" uniquement une fois l'OK Prod validé */}
+                {okProd && (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsChaineSelectorOpen(!isChaineSelectorOpen)}
+                      className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer shadow-2xs whitespace-nowrap ${
+                        chaineNom
+                          ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-300 ring-2 ring-indigo-500/20'
+                          : 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700 animate-pulse'
+                      }`}
+                      title="Sélectionner la chaîne de production pour cette carte"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>{chaineNom ? `Chaîne : ${chaineNom}` : 'Chaîne (Sélectionner)'}</span>
+                      <ChevronDown
+                        className={`w-3.5 h-3.5 transition-transform ${
+                          isChaineSelectorOpen ? 'rotate-180' : ''
+                        }`}
+                      />
+                    </button>
+
+                    {/* Dropdown Menu de sélection des Chaînes */}
+                    {isChaineSelectorOpen && (
+                      <div className="absolute right-0 mt-1.5 w-72 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                        <div className="px-2 py-1 text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+                          <span>Sélectionner la chaîne</span>
+                          <span className="text-[10px] font-normal text-slate-400">Atelier</span>
+                        </div>
+
+                        {/* Broderie Main */}
+                        <div className="mt-1.5">
+                          <div className="px-2 py-0.5 text-[10px] font-bold text-[#881337] bg-[#fbe7e2]/70 rounded mb-1">
+                            Broderie Main
+                          </div>
+                          <div className="grid grid-cols-2 gap-1">
+                            {PRODUCTION_CHAINS.filter((c) => c.categorieId === 'BRODERIE_MAIN').map(
+                              (chain) => {
+                                const isSelected = chaineNom === chain.nom || chaineId === chain.id;
+                                return (
+                                  <button
+                                    key={chain.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setChaineId(chain.id);
+                                      setChaineNom(chain.nom);
+                                      setChaineCategorie(chain.categorieId);
+                                      setIsChaineSelectorOpen(false);
+                                    }}
+                                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all text-left cursor-pointer ${
+                                      isSelected
+                                        ? 'bg-indigo-600 text-white shadow-2xs font-bold'
+                                        : 'text-slate-700 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    <span
+                                      className="w-2 h-2 rounded-full shrink-0"
+                                      style={{ backgroundColor: chain.dotColor }}
+                                    />
+                                    <span className="truncate">{chain.nom}</span>
+                                    {isSelected && <Check className="w-3 h-3 ml-auto shrink-0" />}
+                                  </button>
+                                );
+                              }
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Confection */}
+                        <div className="mt-2 pt-1.5 border-t border-slate-100">
+                          <div className="px-2 py-0.5 text-[10px] font-bold text-[#0369a1] bg-[#e0f2fe]/70 rounded mb-1">
+                            Confection
+                          </div>
+                          <div className="grid grid-cols-2 gap-1">
+                            {PRODUCTION_CHAINS.filter((c) => c.categorieId === 'CONFECTION').map(
+                              (chain) => {
+                                const isSelected = chaineNom === chain.nom || chaineId === chain.id;
+                                return (
+                                  <button
+                                    key={chain.id}
+                                    type="button"
+                                    onClick={() => {
+                                      setChaineId(chain.id);
+                                      setChaineNom(chain.nom);
+                                      setChaineCategorie(chain.categorieId);
+                                      setIsChaineSelectorOpen(false);
+                                    }}
+                                    className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all text-left cursor-pointer ${
+                                      isSelected
+                                        ? 'bg-indigo-600 text-white shadow-2xs font-bold'
+                                        : 'text-slate-700 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    <span
+                                      className="w-2 h-2 rounded-full shrink-0"
+                                      style={{ backgroundColor: chain.dotColor }}
+                                    />
+                                    <span className="truncate">{chain.nom}</span>
+                                    {isSelected && <Check className="w-3 h-3 ml-auto shrink-0" />}
+                                  </button>
+                                );
+                              }
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Option: Retirer l'affectation */}
+                        {chaineNom && (
+                          <div className="mt-2 pt-1.5 border-t border-slate-100 text-center">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setChaineId(undefined);
+                                setChaineNom(undefined);
+                                setChaineCategorie(undefined);
+                                setIsChaineSelectorOpen(false);
+                              }}
+                              className="text-[11px] text-rose-600 hover:text-rose-800 hover:underline cursor-pointer"
+                            >
+                              ✕ Retirer l'affectation de chaîne
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* RÈGLE : Tant que DT, TC, SMS et RDL ne sont pas tous cochés, on masque le bouton "Valider OK Prod" */}
+                {allJalonsChecked ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const nextOk = !okProd;
+                      setOkProd(nextOk);
+                    }}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap shadow-2xs ${
+                      okProd
+                        ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700'
+                        : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 animate-pulse'
+                    }`}
+                  >
+                    <CheckCheck className="w-3.5 h-3.5" />
+                    <span>{okProd ? 'OK Prod Validé ✓ (Cliquer pour révoquer)' : 'Valider OK Prod'}</span>
+                  </button>
+                ) : (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 border border-slate-200 text-slate-500 whitespace-nowrap">
+                    <Lock className="w-3.5 h-3.5 text-slate-400" />
+                    <span>Bouton OK Prod masqué (Attente DT, TC, SMS & RDL)</span>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Alerte explicative si les jalons ne sont pas tous cochés */}
@@ -729,24 +752,31 @@ export const CardModal: React.FC<CardModalProps> = ({
             {/* Répartition des OF & Sous-OFs */}
             {okProd || rdl || (ofs && ofs.length > 0) ? (
               <div className="pt-2 border-t border-slate-200/80">
-                <div className="text-xs font-bold text-slate-800 mb-2 flex items-center justify-between">
-                  <div className="flex items-center gap-1.5">
+                <div className="text-xs font-bold text-slate-800 mb-2 flex items-center gap-2">
+                  <span className="flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-purple-600"></span>
-                    <span>Répartition des OF & Sous-OFs de cette carte</span>
-                  </div>
-                  {okProd && (
-                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                      Accord OK Prod Validé ✓
-                    </span>
+                    <span>OF</span>
+                  </span>
+                  {!isAddingOF && (
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingOF(true)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold text-slate-900 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg shadow-2xs transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Ajouter un OF</span>
+                    </button>
                   )}
                 </div>
                 <OFSubTable
                   cardId={initialData?.id || 'NOUVELLE-CARTE'}
                   totalDemandee={quantiteDemandee}
                   ofs={ofs}
+                  isAddingOF={isAddingOF}
+                  onCloseAddOF={() => setIsAddingOF(false)}
                   onUpdateOFs={(newOfs) => {
                     setOfs(newOfs);
-                    const totalFinie = newOfs.reduce((sum, o) => sum + o.quantiteFinie, 0);
+                    const totalFinie = newOfs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0);
                     if (newOfs.length > 0) {
                       setQuantiteFinie(totalFinie);
                     }

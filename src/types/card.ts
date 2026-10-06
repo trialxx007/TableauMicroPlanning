@@ -1,6 +1,23 @@
 export type CardStatus = 'EN_ATTENTE' | 'EN_COURS' | 'TERMINE' | 'BLOQUE';
 
-export type OFType = 'INTERNE' | 'SOUS_TRAITANCE';
+export type OFType = 'I' | 'O' | 'L';
+
+export const OF_TYPES: Record<OFType, { label: string; classe: string }> = {
+  I: { label: 'Initiatives', classe: 'bg-blue-50 text-blue-800 border-blue-200' },
+  O: { label: 'ONY', classe: 'bg-violet-50 text-violet-800 border-violet-200' },
+  L: { label: 'LOI', classe: 'bg-amber-50 text-amber-800 border-amber-200' },
+};
+
+const LEGACY_OF_TYPES: Record<string, OFType> = {
+  INTERNE: 'I',
+  SOUS_TRAITANCE: 'O',
+};
+
+export function normalizeOFType(type: unknown): OFType {
+  if (type === 'I' || type === 'O' || type === 'L') return type;
+  const legacy = typeof type === 'string' ? LEGACY_OF_TYPES[type] : undefined;
+  return legacy || 'I';
+}
 
 export interface SousOrdreFabrication {
   id: string;
@@ -22,8 +39,8 @@ export interface OrdreFabrication {
   codeOF: string; // ex: OF1, OF2, OF3
   titre?: string; // Nom personnalisé de l'OF (ex: 'OF1', 'Veste Principale', etc. par défaut codeOF)
   ordreRDL: number; // Ordre de passage / priorité déterminé durant la RDL
-  type: OFType; // Interne (Atelier de l'entreprise) ou Sous-traitance (en dehors de l'entreprise)
-  nomExecutant: string; // 'Atelier Interne' ou nom du sous-traitant (ex: 'Atelier Duval', 'Couture Marigny')
+  type: OFType; // 'I' = Initiatives (entreprise), 'O' = ONY, 'L' = LOI
+  nomExecutant: string; // Nom du traitant (ex: 'Initiatives', 'ONY', 'LOI')
   quantiteDemandee: number;
   quantiteFinie: number;
   resteAProduire: number;

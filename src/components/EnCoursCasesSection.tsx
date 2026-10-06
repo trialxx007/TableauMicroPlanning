@@ -21,7 +21,7 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
 
   const currentNb = Math.min(5, Math.max(3, nbCases || 5));
   const values = Array.from({ length: currentNb }, (_, i) => casesEnCours[i] ?? 0);
-  const totalEnCours = values.reduce((sum, v) => sum + (Number(v) || 0), 0);
+  const totalAssigne = Number(values[values.length - 1]) || 0;
 
   // Close picker when clicking outside
   useEffect(() => {
@@ -39,24 +39,33 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
   }, [isPickerOpen]);
 
   return (
-    <div className="inline-flex items-center gap-2 flex-wrap">
+    <div className="inline-flex items-center gap-1.5 flex-wrap">
       {/* Grille de cases contiguës noires (identique au fichier PNG) */}
-      <div className="inline-flex border-2 border-slate-900 divide-x-2 divide-slate-900 bg-white shadow-2xs">
-        {values.map((val, idx) => (
-          <input
-            key={idx}
-            type="number"
-            min="0"
-            value={val === 0 ? '' : val}
-            placeholder=""
-            onChange={(e) => {
-              const num = parseInt(e.target.value, 10);
-              onChangeCaseValue(idx, isNaN(num) ? 0 : Math.max(0, num));
-            }}
-            className="w-10 h-11 sm:w-11 sm:h-12 text-center font-bold text-sm text-slate-900 bg-white focus:bg-amber-50 focus:outline-hidden transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-            title={`Case ${idx + 1} (saisie manuelle)`}
-          />
-        ))}
+      <div className="inline-flex border border-slate-900 divide-x divide-slate-900 bg-white shadow-2xs">
+        {values.map((val, idx) => {
+          const isTotalCase = idx === values.length - 1;
+          return (
+            <input
+              key={idx}
+              type="number"
+              min="0"
+              value={val === 0 ? '' : val}
+              placeholder=""
+              onChange={(e) => {
+                const num = parseInt(e.target.value, 10);
+                onChangeCaseValue(idx, isNaN(num) ? 0 : Math.max(0, num));
+              }}
+              className={`w-7 h-7 sm:w-8 sm:h-8 text-center font-bold text-[11px] text-slate-900 focus:bg-amber-50 focus:outline-hidden transition-colors [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                isTotalCase ? 'bg-slate-200/70 font-extrabold' : 'bg-white'
+              }`}
+              title={
+                isTotalCase
+                  ? 'Dernière case : total des pièces assignées à cet OF'
+                  : `Case ${idx + 1} : quantité ayant atteint cette étape (cumulée)`
+              }
+            />
+          );
+        })}
       </div>
 
       {/* Clic sur le nombre de cases pour choisir combien on en veut (3 à 5) */}
@@ -65,11 +74,11 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
           <button
             type="button"
             onClick={() => setIsPickerOpen(!isPickerOpen)}
-            className="inline-flex items-center gap-1 px-2 py-1 bg-white hover:bg-slate-100 text-slate-800 text-[11px] font-bold rounded border border-slate-400 shadow-2xs cursor-pointer transition-colors"
+            className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-white hover:bg-slate-100 text-slate-800 text-[10px] font-bold rounded border border-slate-400 shadow-2xs cursor-pointer transition-colors"
             title="Cliquer pour choisir le nombre de cases"
           >
             <span>{currentNb} cases</span>
-            <ChevronDown className={`w-3 h-3 text-slate-500 transition-transform ${isPickerOpen ? 'rotate-180' : ''}`} />
+            <ChevronDown className={`w-2.5 h-2.5 text-slate-500 transition-transform ${isPickerOpen ? 'rotate-180' : ''}`} />
           </button>
 
           {isPickerOpen && (
@@ -100,9 +109,12 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
         </div>
       )}
 
-      {/* Total discret */}
-      <div className="text-[11px] font-mono text-slate-500 font-semibold whitespace-nowrap ml-1">
-        Total : <span className="text-slate-900 font-bold">{totalEnCours}</span>
+      {/* Total = valeur de la dernière case (total assigné à l'OF) */}
+      <div
+        className="text-[10px] font-mono text-slate-500 font-semibold whitespace-nowrap ml-0.5"
+        title="La dernière case (à droite) contient le total des pièces assignées à l'OF"
+      >
+        Total : <span className="text-slate-900 font-bold">{totalAssigne}</span>
       </div>
     </div>
   );
