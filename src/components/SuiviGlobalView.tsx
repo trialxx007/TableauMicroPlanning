@@ -35,8 +35,9 @@ import {
   Truck,
   ExternalLink,
   X,
+  AlertTriangle,
+  ArrowLeftRight,
 } from 'lucide-react';
-import { AlertTriangle, ArrowLeftRight } from 'lucide-react';
 
 
 interface SuiviGlobalViewProps {
@@ -554,18 +555,6 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           const jalonsCarte = linkedCard ? getJalonsCard(linkedCard, catalogue) : [];
           const jalonsNomenclatures = jalonsCarte.filter((j) => j.categorie === 'NOMENCLATURE');
           const jalonsStatuts = jalonsCarte.filter((j) => j.categorie === 'STATUT');
-          const afficheNomenclature =
-            jalonsNomenclatures.length > 0
-              ? jalonsNomenclatures
-                  .map((j) => (j.etat === 'SEMAINE' ? `${j.code} S${j.semaine}` : j.code))
-                  .join(' ')
-              : slotCard?.customLabel ?? null;
-          const afficheStatut =
-            jalonsStatuts.length > 0
-              ? jalonsStatuts
-                  .map((j) => (j.etat === 'SEMAINE' ? `${j.code} S${j.semaine}` : j.code))
-                  .join(' ')
-              : null;
 
     if (!label) {
       return (
@@ -620,30 +609,36 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
     return (
       <div className={`flex flex-col gap-1 ${isMergedModele ? 'flex-1' : 'h-full'}`}>
-        {/* Bande d'alerte de la carte : rien que le mot, le détail est au clic. */}
-        {enAlerte && linkedCard && (
-          <button
-            type="button"
-            onClick={(event) =>
-              setAlerteOuverte({
-                card: linkedCard,
-                slotTitle: titreSlot,
-                anchor: event.currentTarget,
-              })
-            }
-            className="shrink-0 w-full flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-red-600 text-white shadow-2xs motion-safe:animate-pulse text-[10px] font-extrabold uppercase tracking-wider cursor-pointer hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-white/80 transition-colors relative z-20"
-            title="Voir le détail de l'alerte"
-            aria-haspopup="dialog"
-          >
-            <AlertTriangle className="w-3 h-3 shrink-0" />
-            Alerte
-          </button>
-        )}
+        {/* Conteneur unifié : la ring relie la bande Alerte + la carte */}
         <div
-          className={`group relative w-full min-h-[52px] flex flex-col justify-center px-2 py-1.5 rounded-xl bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left flex-1 ${
-            enAlerte ? 'border-rose-400 ring-1 ring-rose-200' : ''
+          className={`relative w-full flex flex-col ${
+            enAlerte ? 'ring-2 ring-rose-300/60 shadow-[0_0_0_1px_rgba(251,113,133,0.5)] rounded-xl' : 'rounded-xl'
           }`}
         >
+          {/* Bande d'alerte de la carte : rien que le mot, le détail est au clic. */}
+          {enAlerte && linkedCard && (
+            <button
+              type="button"
+              onClick={(event) =>
+                setAlerteOuverte({
+                  card: linkedCard,
+                  slotTitle: titreSlot,
+                  anchor: event.currentTarget,
+                })
+              }
+              className="shrink-0 w-full flex items-center justify-center gap-1 px-2 py-1 rounded-t-xl bg-red-600 text-white shadow-2xs motion-safe:animate-pulse text-[10px] font-extrabold uppercase tracking-wider cursor-pointer hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-white/80 transition-colors relative z-20"
+              title="Voir le détail de l'alerte"
+              aria-haspopup="dialog"
+            >
+              <AlertTriangle className="w-3 h-3 shrink-0" />
+              Alerte
+            </button>
+          )}
+          <div
+            className={`group relative w-full min-h-[52px] flex flex-col justify-center px-2 py-1.5 bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left flex-1 ${
+              enAlerte ? 'rounded-b-xl border-t-0' : 'rounded-b-xl'
+            }`}
+          >
         <div
           onClick={handleSlotClick}
           className="cursor-pointer"
@@ -653,47 +648,79 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               : 'Cliquer pour modifier ou assigner une carte'
           }
         >
-          <div className="flex items-center gap-1.5">
+          <div className="flex items-center justify-between gap-2">
             <span
               className={`font-bold text-[11px] sm:text-xs leading-snug line-clamp-1 ${
-                isMergedModele ? 'text-slate-900 pr-12' : 'text-slate-900'
-              }`}
+                isMergedModele ? 'text-slate-900' : 'text-slate-900'
+              } truncate`}
             >
               {label}
             </span>
+            {isMergedModele && progress !== null && (
+              <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                <div className="w-14 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full ${
+                      progress === 100 ? 'bg-emerald-500' : 'bg-blue-600'
+                    }`}
+                    style={{ width: `${progress}%` }}
+                  />
+                </div>
+                <span className="text-[10px] font-bold font-mono text-slate-600 w-[28px] text-right">
+                  {progress}%
+                </span>
+              </div>
+            )}
           </div>
 
           {isMergedModele ? (
-            <div className="relative z-10 flex flex-col gap-1 mt-1">
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
-                  Statut
-                </span>
-                <span className="text-[9px] font-semibold uppercase tracking-wider truncate text-blue-600">
-                  {afficheStatut ?? (linkedCard?.statut === 'TERMINE' ? 'Termin�' : linkedCard?.statut === 'EN_COURS' ? 'En cours' : linkedCard?.statut === 'BLOQUE' ? 'Bloqu�' : 'A d�marrer')}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5 min-w-0">
-                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
-                  Nomenclature
-                </span>
-                <span className="text-[9px] font-semibold uppercase tracking-wider truncate text-emerald-700">
-                  {afficheNomenclature ?? '—'}
-                </span>
-              </div>
-              {progress !== null && (
-                <div className="flex items-center justify-end gap-1 mt-0.5">
-                  <div className="w-14 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+            <div className="relative z-10 flex flex-col gap-2 mt-1">
+              {/* Nomenclatures (vert) - ligne du haut */}
+              {jalonsNomenclatures.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1">
+                  {jalonsNomenclatures.map((j, i) => (
                     <div
-                      className={`h-full ${
-                        progress === 100 ? 'bg-emerald-500' : 'bg-blue-600'
-                      }`}
-                      style={{ width: `${progress}%` }}
-                    />
+                      key={`${j.code}-${i}`}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-semibold shadow-xs w-fit"
+                      title={j.titre}
+                    >
+                      <span className="font-bold">{j.code}</span>
+                      {j.etat === 'SEMAINE' && j.semaine != null ? (
+                        <span className="font-mono">S{j.semaine}</span>
+                      ) : j.etat === 'VALIDE' ? (
+                        <span className="text-emerald-600">✓</span>
+                      ) : (
+                        <span className="text-emerald-600/70">—</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {/* Statuts (bleu) - ligne du bas */}
+              {jalonsStatuts.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1">
+                  {jalonsStatuts.map((j, i) => (
+                    <div
+                      key={`${j.code}-${i}`}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-800 text-[10px] font-semibold shadow-xs w-fit"
+                      title={j.titre}
+                    >
+                      <span className="font-bold">{j.code}</span>
+                      {j.etat === 'SEMAINE' && j.semaine != null ? (
+                        <span className="font-mono">S{j.semaine}</span>
+                      ) : j.etat === 'VALIDE' ? (
+                        <span className="text-blue-600">✓</span>
+                      ) : (
+                        <span className="text-blue-600/70">—</span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-wrap items-center gap-1">
+                  <div className="inline-flex items-center justify-center px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-500 text-[10px] font-medium w-fit">
+                    {linkedCard?.statut === 'TERMINE' ? 'Terminé' : linkedCard?.statut === 'EN_COURS' ? 'En cours' : linkedCard?.statut === 'BLOQUE' ? 'Bloqué' : 'À démarrer'}
                   </div>
-                  <span className="text-[10px] font-bold font-mono text-slate-600">
-                    {progress}%
-                  </span>
                 </div>
               )}
             </div>
@@ -747,6 +774,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         </div>
         </div>
       </div>
+    </div>
     );
   };
 
@@ -770,7 +798,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       {/* Top Banner / Actions Bar */}
       <div className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-xs">
         <div className="max-w-[1850px] mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3">
-          {/* Back button & Page title */}
+          {/* Left: Back button & Page title */}
           <div className="flex items-center gap-3">
             <button
               onClick={onBackToPointJournalier}
@@ -798,7 +826,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
             </div>
           </div>
 
-          {/* Controls & Quick Actions */}
+          {/* Right: Controls & Quick Actions */}
           <div className="flex flex-wrap items-center gap-2">
             {/* Search */}
             <div className="relative">
@@ -1024,11 +1052,9 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
                       {/* Column 3: Modèle en cours (Carte du Point Commande Journalière) */}
                         <td
-                          className={`group bg-white border rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle ${
-                            isRowAlert ? 'border-rose-400 ring-1 ring-rose-200' : 'border-slate-200/90'
-                          }`}
+                          className="group bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle"
                         >
-                          <div className="min-h-[84px] flex flex-col gap-1">
+                          <div className="h-full min-h-[84px] flex flex-col gap-1">
 
                             {row.modeleEnCoursCards.map((slot, pileIdx) => (
                               <React.Fragment key={pileIdx}>
@@ -1119,18 +1145,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                         return (
                           <td
                             key={slotIdx}
-                            className={`min-w-[125px] bg-white border rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle ${
-                              pile.some((s) => {
-                                if (!s?.cardId) return false;
-                                const c = getCardById(s.cardId);
-                                return c ? carteEnAlerte(c) : false;
-                              })
-                                ? 'border-rose-400 ring-1 ring-rose-200'
-                                : 'border-slate-200/90'
-                            }`}
+                            className="min-w-[125px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle"
                           >
-                            <div className="min-h-[88px] flex flex-col justify-center items-center">
-                              <div className="flex flex-col gap-1 w-full">
+                            <div className="h-full min-h-[88px] flex flex-col justify-center items-center">
+                              <div className="flex flex-col gap-1 w-full h-full">
                                 {pile.map((slotCard, pileIdx) => (
                                   <React.Fragment key={pileIdx}>
                                     {renderCardSlotContent(
@@ -1149,12 +1167,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                       })}
 
                       {/* Column 12: EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
-                        <td className={`min-w-[145px] bg-white border rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle ${
-                          row.expeditionCard?.cardId && carteEnAlerte(getCardById(row.expeditionCard.cardId) as CardItem)
-                            ? 'border-rose-400 ring-1 ring-rose-200'
-                            : 'border-slate-200/90'
-                        }`}>
-                        <div className="min-h-[88px] flex flex-col justify-center items-center">
+                        <td className="min-w-[145px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle">
+                        <div className="h-full min-h-[88px] flex flex-col justify-center items-center">
                           {renderCardSlotContent(
                             row.expeditionCard,
                             row,

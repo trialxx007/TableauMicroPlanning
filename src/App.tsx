@@ -338,31 +338,6 @@ export default function App() {
     setCards(data);
   };
 
-  if (currentPage === 'point-journalier') {
-    return (
-      <JalonCatalogueProvider catalogue={catalogue}>
-        <SuiviGlobalView
-          onBackToPointJournalier={() => setCurrentPage('point-journalier')}
-          cards={cards}
-          onOpenCardModal={(card) => {
-            setEditingCard(card);
-            setIsModalOpen(true);
-          }}
-        />
-        <CardModal
-          isOpen={isModalOpen}
-          onClose={() => {
-            setIsModalOpen(false);
-            setEditingCard(null);
-          }}
-          onSubmit={handleCreateOrUpdate}
-          initialData={editingCard}
-          onJalonAjoute={handleJalonAjoute}
-        />
-      </JalonCatalogueProvider>
-    );
-  }
-
   return (
     <JalonCatalogueProvider catalogue={catalogue}>
       <div className="min-h-screen bg-slate-50 flex flex-col text-slate-800">
@@ -388,12 +363,14 @@ export default function App() {
 
       {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* KPI Summary Cards (Surbrillance au survol & Filtrage au clic) */}
-        <StatsOverview
-          cards={cards}
-          activeFilter={kpiFilter}
-          onSelectFilter={setKpiFilter}
-        />
+        {currentPage === 'point-journalier' ? (
+          <>
+            {/* KPI Summary Cards (Surbrillance au survol & Filtrage au clic) */}
+            <StatsOverview
+              cards={cards}
+              activeFilter={kpiFilter}
+              onSelectFilter={setKpiFilter}
+            />
 
         {/* Bannière de filtrage actif depuis le tableau de bord */}
         {kpiFilter !== 'ALL' && (
@@ -480,6 +457,17 @@ export default function App() {
           onDeleteCard={handleDeleteCard}
           onOpenCreate={handleOpenCreate}
         />
+          </>
+        ) : (
+          <SuiviGlobalView
+            onBackToPointJournalier={() => setCurrentPage('point-journalier')}
+            cards={cards}
+            onOpenCardModal={(card) => {
+              setEditingCard(card);
+              setIsModalOpen(true);
+            }}
+          />
+        )}
       </main>
 
       {/* Footer */}

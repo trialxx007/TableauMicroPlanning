@@ -222,20 +222,6 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
             <div className="space-y-3">
               {groupesAlertes.map((groupe) => (
                 <div key={groupe.categorie}>
-                  {/* Titre de groupe : la grandeur portée par les jalons suivants,
-                      reprise de l'intitulé pluriel utilisé partout ailleurs. */}
-                  <div className="flex items-center gap-1.5 mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full ${
-                        groupe.categorie === 'NOMENCLATURE'
-                          ? 'bg-emerald-500'
-                          : 'bg-blue-500'
-                      }`}
-                    />
-                    <span>
-                      {titreCategorie(groupe.categorie)} ({groupe.jalons.length})
-                    </span>
-                  </div>
                   <ul className="space-y-2">
                     {groupe.jalons.map((j) => {
                       const retard = semaineCourante - (j.semaine ?? semaineCourante);

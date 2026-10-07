@@ -237,35 +237,15 @@ export const CardTable: React.FC<CardTableProps> = ({
                 )}
               </th>
               <th className="py-3.5 px-4 align-top">
-                {/* Deux lignes d'en-tête : les catégories, puis les codes. Chaque
-                    intitulé couvre exactement les colonnes de son groupe, donc les
-                    pastilles des lignes restent en dessous du bon titre. */}
+                {/* Une seule ligne d'en-tête : les codes des jalons. Les catégories sont
+                    distinguées par la couleur des pastilles (vert=nomenclature, bleu=statut)
+                    et une bordure verticale entre les deux groupes. */}
                 <div
                   className="grid gap-1 justify-items-center w-fit"
                   style={{
                     gridTemplateColumns: `repeat(${Math.max(colonnesJalons.length, 1)}, 4.25rem)`,
                   }}
                 >
-                  {groupesEntete.map((groupe, indexGroupe) => (
-                    <span
-                      key={groupe.categorie}
-                      style={{ gridColumn: `span ${Math.max(groupe.jalons.length, 1)}` }}
-                      className={`justify-self-stretch flex items-center justify-center gap-1 pb-0.5 text-[10px] font-bold tracking-wider whitespace-nowrap ${
-                        indexGroupe > 0 ? 'border-l border-slate-300' : ''
-                      } ${
-                        groupe.categorie === 'NOMENCLATURE' ? 'text-emerald-600' : 'text-blue-600'
-                      }`}
-                    >
-                      <span
-                        aria-hidden="true"
-                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                          groupe.categorie === 'NOMENCLATURE' ? 'bg-emerald-500' : 'bg-blue-500'
-                        }`}
-                      />
-                      {titreCategorie(groupe.categorie)}
-                    </span>
-                  ))}
-
                   {colonnesJalons.map((code, indexColonne) => {
                     const j = enteteComplet.find((x) => x.code === code);
                     return (
