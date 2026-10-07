@@ -1,14 +1,26 @@
 import React, { useState } from 'react';
 import { CardItem } from '../types/card.ts';
 import { ChaineSlotCard } from '../types/suiviGlobal.ts';
-import { Search, X, Check, Package, Sparkles, Plus, Trash2 } from 'lucide-react';
+import {
+  Search,
+  X,
+  Check,
+  Package,
+  Sparkles,
+  Plus,
+  Trash2,
+  CheckCheck,
+  ShieldAlert,
+  Lock,
+} from 'lucide-react';
 
 interface CardPickerModalProps {
   isOpen: boolean;
   onClose: () => void;
   cards: CardItem[];
   currentSlot: ChaineSlotCard | null | undefined;
-  slotTitle: string; // e.g., "Modèle en cours pour Glaïeul" or "Lancement #2 pour Pétunia" or "Expédition pour Tan"
+  slotTitle: string;
+  slotType?: 'modeleEnCours' | 'lancement' | 'expedition';
   isExpeditionSlot?: boolean;
   onSelectCard: (slotCard: ChaineSlotCard | null) => void;
 }
@@ -19,10 +31,12 @@ export const CardPickerModal: React.FC<CardPickerModalProps> = ({
   cards,
   currentSlot,
   slotTitle,
+  slotType,
   isExpeditionSlot = false,
   onSelectCard,
 }) => {
   const [search, setSearch] = useState('');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [customText, setCustomText] = useState(currentSlot?.customLabel || '');
   const [expeditionDate, setExpeditionDate] = useState(
     currentSlot?.dateExpedition ||
@@ -33,6 +47,9 @@ export const CardPickerModal: React.FC<CardPickerModalProps> = ({
   );
 
   if (!isOpen) return null;
+
+  const isModeleEnCours = slotType === 'modeleEnCours';
+  const isLancement = slotType === 'lancement';
 
   const filteredCards = cards.filter((c) => {
     if (!search.trim()) return true;
@@ -46,6 +63,23 @@ export const CardPickerModal: React.FC<CardPickerModalProps> = ({
   });
 
   const handleChooseExistingCard = (card: CardItem) => {
+    // RÈGLE MÉTIER STRICTE :
+    // 1) Seules les cartes avec accord OK Prod validé sont acceptées dans "Modèle en cours" !
+    if (isModeleEnCours && !card.okProd) {
+      setErrorMessage(
+        `Action refusée : Seules les cartes avec accord "OK Prod validé" sont acceptées dans la colonne "Modèle en cours". La carte "${card.modele}" est en attente d'OK Prod et doit être placée dans "PROCHAINS LANCEMENTS".`
+      );
+      return;
+    }
+
+    // 2) Seules les cartes en attente d'accord OK Prod sont acceptées dans "PROCHAINS LANCEMENTS" !
+    if (isLancement && card.okProd) {
+      setErrorMessage(
+        `Action refusée : La carte "${card.modele}" a déjà son accord "OK Prod validé". Elle est strictement réservée à la colonne "Modèle en cours" et ne peut pas être placée dans "PROCHAINS LANCEMENTS".`
+      );
+      return;
+    }
+
     onSelectCard({
       cardId: card.id,
       customLabel: card.modele,
@@ -77,7 +111,7 @@ export const CardPickerModal: React.FC<CardPickerModalProps> = ({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in">
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-xl w-full overflow-hidden flex flex-col max-h-[85vh]">
+      <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-xl w-full overflow-hidden flex flex-col max-h-[88vh]">
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between bg-slate-50/80">
           <div>
@@ -86,7 +120,11 @@ export const CardPickerModal: React.FC<CardPickerModalProps> = ({
               <span>Placer une carte : {slotTitle}</span>
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Sélectionnez une carte existante du Point Commande Journalière ou saisissez un libellé
+              {isModeleEnCours
+                ? 'Sélectionnez une carte avec accord "OK Prod validé" pour lancer la production'
+                : isLancement
+                ? 'Les cartes en attente d\'accord OK Prod sont destinées à cette colonne'
+                : 'Sélectionnez une carte existante ou saisissez un libellé'}
             </p>
           </div>
           <button
@@ -96,6 +134,41 @@ export const CardPickerModal: React.FC<CardPickerModalProps> = ({
             <X className="w-5 h-5" />
           </button>
         </div>
+
+        {/* Banner rule */}
+        {isModeleEnCours && (
+          <div className="px-4 py-2.5 bg-blue-50 border-b border-blue-100 flex items-center gap-2 text-xs text-blue-800">
+            <CheckCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>
+              <strong>Règle active :</strong> Seules les cartes en état <strong>« OK Prod Validé »</strong> sont autorisées dans la colonne <em>Modèle en cours</em>.
+            </span>
+          </div>
+        )}
+
+        {isLancement && (
+          <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-100 flex items-center gap-2 text-xs text-amber-800">
+            <Lock className="w-4 h-4 text-amber-600 shrink-0" />
+            <span>
+              <strong>Prochains Lancements :</strong> Les cartes en attente d'accord OK Prod sont automatiquement dirigées vers cette colonne.
+            </span>
+          </div>
+        )}
+
+        {/* Error notification banner if user clicked a non-eligible card */}
+        {errorMessage && (
+          <div className="px-4 py-2.5 bg-rose-50 border-b border-rose-200 flex items-start justify-between gap-2 text-xs text-rose-800 animate-in fade-in">
+            <div className="flex items-start gap-1.5">
+              <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <span>{errorMessage}</span>
+            </div>
+            <button
+              onClick={() => setErrorMessage(null)}
+              className="text-rose-500 hover:text-rose-700 font-bold p-0.5"
+            >
+              ✕
+            </button>
+          </div>
+        )}
 
         {/* Search & Expedition settings if applicable */}
         <div className="p-4 border-b border-slate-100 bg-white space-y-3">
@@ -150,7 +223,9 @@ export const CardPickerModal: React.FC<CardPickerModalProps> = ({
           <div className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2 flex items-center justify-between">
             <span>Cartes du Point Commande ({filteredCards.length})</span>
             <span className="text-[11px] font-normal text-slate-400">
-              Cliquez pour assigner
+              {isModeleEnCours
+                ? 'Seules les cartes OK Prod Validé sont cliquables'
+                : 'Cliquez pour assigner'}
             </span>
           </div>
 
@@ -161,16 +236,30 @@ export const CardPickerModal: React.FC<CardPickerModalProps> = ({
           ) : (
             filteredCards.map((card) => {
               const isSelected = currentSlot?.cardId === card.id;
+              const isAllowed = isModeleEnCours
+                ? card.okProd
+                : isLancement
+                ? !card.okProd
+                : true;
 
               return (
                 <div
                   key={card.id}
                   onClick={() => handleChooseExistingCard(card)}
-                  className={`pt-2.5 first:pt-0 p-2.5 rounded-xl cursor-pointer transition-all flex items-center justify-between gap-3 border ${
+                  className={`pt-2.5 first:pt-0 p-2.5 rounded-xl transition-all flex items-center justify-between gap-3 border ${
                     isSelected
                       ? 'bg-blue-50 border-blue-300 shadow-xs'
-                      : 'hover:bg-slate-50 border-transparent hover:border-slate-200'
+                      : !isAllowed
+                      ? 'opacity-60 bg-slate-50/70 border-slate-200 hover:border-amber-300 cursor-not-allowed'
+                      : 'hover:bg-slate-50 border-transparent hover:border-slate-200 cursor-pointer'
                   }`}
+                  title={
+                    !isAllowed
+                      ? isModeleEnCours
+                        ? 'Non éligible en Modèle en cours (Attente validation OK Prod)'
+                        : 'Non éligible en Prochains Lancements (OK Prod validé, réservé à Modèle en cours)'
+                      : 'Cliquer pour assigner'
+                  }
                 >
                   <div className="flex items-center gap-3">
                     <div className="w-8 h-8 rounded-lg bg-slate-100 border border-slate-200 flex items-center justify-center font-bold text-xs text-slate-700">
@@ -198,8 +287,21 @@ export const CardPickerModal: React.FC<CardPickerModalProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
+                    {/* OK Prod indicator badge */}
+                    {card.okProd ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-emerald-50 text-emerald-800 border-emerald-300 flex items-center gap-1">
+                        <CheckCheck className="w-3 h-3 text-emerald-600" />
+                        <span>OK Prod Validé (Modèle en cours)</span>
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full border bg-amber-50 text-amber-800 border-amber-300 flex items-center gap-1">
+                        <Lock className="w-2.5 h-2.5 text-amber-600" />
+                        <span>Attente OK Prod (Prochains Lancements)</span>
+                      </span>
+                    )}
+
                     <span
-                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full border hidden sm:inline-block ${
                         card.statut === 'TERMINE'
                           ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                           : card.statut === 'EN_COURS'
@@ -217,6 +319,7 @@ export const CardPickerModal: React.FC<CardPickerModalProps> = ({
                         ? 'Bloqué'
                         : 'En attente'}
                     </span>
+
                     {isSelected && (
                       <span className="p-1 rounded-full bg-blue-600 text-white">
                         <Check className="w-3.5 h-3.5" />

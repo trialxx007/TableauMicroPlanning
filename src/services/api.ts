@@ -1,4 +1,4 @@
-import { CardFormData, CardItem, JalonCategorie, JalonCatalogue } from '../types/card.ts';
+import { CardFormData, CardItem, JalonCategorie, JalonCatalogue, normalizeOFType } from '../types/card.ts';
 import { CATALOGUE_INITIAL, cataloguePourType, categorieParCode } from '../data/mockJalons.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 import { normaliserSemaine } from '../utils/jalons.ts';
@@ -9,6 +9,18 @@ import { normaliserSemaine } from '../utils/jalons.ts';
  * cartes s'afficheraient sans aucun jalon.
  */
 const STORAGE_KEY = 'point_commande_cards_cache_textile_v6';
+
+/**
+ * Normalise les types d'OF arrivant du serveur ou d'un ancien cache :
+ * les libellés historiques (INTERNE / SOUS_TRAITANCE) deviennent I / O,
+ * toute valeur inconnue retombe sur I.
+ */
+function normalizeCards(cards: CardItem[]): CardItem[] {
+  return (cards || []).map((c) => ({
+    ...c,
+    ofs: (c.ofs || []).map((o) => ({ ...o, type: normalizeOFType(o.type) })),
+  }));
+}
 
 function estCacheCompatible(raw: unknown): raw is CardItem[] {
   return (
@@ -27,7 +39,7 @@ function getLocalFallback(): CardItem[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed: unknown = JSON.parse(raw);
-      if (estCacheCompatible(parsed)) return parsed;
+      if (estCacheCompatible(parsed)) return normalizeCards(parsed);
       localStorage.removeItem(STORAGE_KEY);
     }
   } catch (e) {
@@ -51,8 +63,9 @@ export const cardApi = {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
-        saveLocalFallback(json.data);
-        return json.data;
+        const normalized = normalizeCards(json.data);
+        saveLocalFallback(normalized);
+        return normalized;
       }
     } catch {
       // Fallback
@@ -70,10 +83,11 @@ export const cardApi = {
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.data) {
+          const created = normalizeCards([json.data])[0];
           const list = getLocalFallback();
-          list.unshift(json.data);
+          list.unshift(created);
           saveLocalFallback(list);
-          return json.data;
+          return created;
         }
       }
     } catch {
@@ -105,7 +119,7 @@ export const cardApi = {
             valide: false,
           })),
       okProd: Boolean(data.okProd),
-      ofs: data.ofs || [],
+      ofs: (data.ofs || []).map((o) => ({ ...o, type: normalizeOFType(o.type) })),
       quantiteDemandee,
       quantiteFinie,
       resteAProduire: Math.max(0, quantiteDemandee - quantiteFinie),
@@ -116,6 +130,9 @@ export const cardApi = {
       pointFaitAujourdhui: true,
       decisionReunion: data.decisionReunion,
       notes: data.notes,
+      ...(data.chaineId ? { chaineId: data.chaineId } : {}),
+      ...(data.chaineNom ? { chaineNom: data.chaineNom } : {}),
+      ...(data.chaineCategorie ? { chaineCategorie: data.chaineCategorie } : {}),
     };
 
     const current = getLocalFallback();
@@ -134,9 +151,10 @@ export const cardApi = {
       const json = await res.json().catch(() => null);
       if (res.ok) {
         if (json?.success && json.data) {
-          const list = getLocalFallback().map((c) => (c.id === id ? json.data : c));
+          const patched = normalizeCards([json.data])[0];
+          const list = getLocalFallback().map((c) => (c.id === id ? patched : c));
           saveLocalFallback(list);
-          return json.data;
+          return patched;
         }
       } else {
         // Réponse explicite du serveur (404, 400…) : c'est une erreur métier,
@@ -200,9 +218,10 @@ export const cardApi = {
       const json = await res.json().catch(() => null);
       if (res.ok) {
         if (json?.success && json.data) {
-          const list = getLocalFallback().map((c) => (c.id === id ? json.data : c));
+          const replaced = normalizeCards([json.data])[0];
+          const list = getLocalFallback().map((c) => (c.id === id ? replaced : c));
           saveLocalFallback(list);
-          return json.data;
+          return replaced;
         }
       } else {
         throw new Error(json?.error || `Erreur ${res.status}`);
@@ -257,8 +276,9 @@ export const cardApi = {
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
-          saveLocalFallback(json.data);
-          return json.data;
+          const normalized = normalizeCards(json.data);
+          saveLocalFallback(normalized);
+          return normalized;
         }
       }
     } catch {
