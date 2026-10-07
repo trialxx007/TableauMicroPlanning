@@ -1,10 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { CardItem } from '../types/card.ts';
-import { ChaineRow, ChaineSlotCard, CategorieConfig } from '../types/suiviGlobal.ts';
+import {
+  ChaineRow,
+  ChaineSlotCard,
+  CategorieConfig,
+  InspectionBloc,
+  InspectionValeur,
+} from '../types/suiviGlobal.ts';
 import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS } from '../data/mockSuiviGlobal.ts';
 import { CardPickerModal } from './CardPickerModal.tsx';
+import { InspectionCell } from './InspectionCell.tsx';
+import { InspectionEtatMenu } from './InspectionEtatMenu.tsx';
 import { getJalonsEnRetard } from '../utils/jalons.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
+import {
+  blocEnTexte,
+  blocInspectionVide,
+  dateDuJourISO,
+  normaliserBloc,
+} from '../utils/inspections.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
 import {
   ArrowLeft,
@@ -32,8 +46,80 @@ interface SuiviGlobalViewProps {
 interface ActiveSlotPicker {
   rowId: string;
   slotType: 'modeleEnCours' | 'lancement' | 'expedition';
+  /** Colonne « Prochain Lancement » (0..4). */
   lancementIndex?: number;
+  /** Rang dans la pile de 2 cartes de la case (0 = haut, 1 = bas). */
+  slotIndex?: number;
   slotTitle: string;
+}
+
+/** Menu Pass/Fail ouvert sur un contrôle d'inspection. */
+interface MenuEtatInspection {
+  rowId: string;
+  blocIndex: number;
+  valeurId: string;
+  anchor: HTMLElement;
+  actuel: 'P' | 'F' | null;
+}
+
+/** Une case du tableau : au plus 2 cartes empilées. */
+type PileDeCartes = [ChaineSlotCard | null, ChaineSlotCard | null];
+
+/** Ligne telle que vue ici : le modèle de base, plus la colonne Remarque qui
+ *  n'existe que dans ce tableau (et dans le localStorage). */
+type SuiviRow = ChaineRow & { remarque?: string };
+
+/** Un ancien cache peut stocker une carte seule : on la remonte en pile. */
+function enPile(brut: unknown): PileDeCartes {
+  if (Array.isArray(brut)) return [brut[0] ?? null, brut[1] ?? null];
+  if (brut && typeof brut === 'object') return [brut as ChaineSlotCard, null];
+  return [null, null];
+}
+
+function lancementsVides(): ChaineRow['prochainsLancementsCards'] {
+  return Array.from({ length: NOMBRE_LANCEMENTS }, () => [
+    null,
+    null,
+  ]) as unknown as ChaineRow['prochainsLancementsCards'];
+}
+
+/** Reconstruit des lignes valides quel que soit le format du cache :
+ *  cartes uniques, lancements à plat, inspections manquantes… */
+function normaliserLignes(brut: unknown): SuiviRow[] {
+  if (!Array.isArray(brut)) return INITIAL_CHAINE_ROWS;
+  const lignes = brut
+    .filter((r) => r && typeof r === 'object')
+    .map((brutLigne) => {
+      const r = brutLigne as Record<string, unknown>;
+      // L'ancien champ unique « modeleEnCoursCard » est remplacé par la pile.
+      const { modeleEnCoursCard: _ancienneCarte, ...reste } = r;
+      const lancements = Array.isArray(reste.prochainsLancementsCards)
+        ? reste.prochainsLancementsCards
+        : [];
+      const inspections = Array.isArray(reste.inspections) ? reste.inspections : [];
+      return {
+        ...reste,
+        id: typeof reste.id === 'string' ? reste.id : `chaine-${Math.random().toString(36).slice(2, 8)}`,
+        categorieId:
+          reste.categorieId === 'BRODERIE_MAIN' || reste.categorieId === 'CONFECTION'
+            ? reste.categorieId
+            : 'CONFECTION',
+        nom: typeof reste.nom === 'string' ? reste.nom : '',
+        dotColor: typeof reste.dotColor === 'string' ? reste.dotColor : '#94a3b8',
+        modeleEnCoursCards: enPile(reste.modeleEnCoursCards),
+        inspections: [
+          inspections[0] ? normaliserBloc(inspections[0]) : blocInspectionVide(),
+          inspections[1] ? normaliserBloc(inspections[1]) : blocInspectionVide(),
+        ] as ChaineRow['inspections'],
+        prochainsLancementsCards: Array.from(
+          { length: NOMBRE_LANCEMENTS },
+          (_, i) => enPile(lancements[i])
+        ) as unknown as ChaineRow['prochainsLancementsCards'],
+        expeditionCard: (reste.expeditionCard as ChaineSlotCard | null | undefined) ?? null,
+        remarque: typeof r.remarque === 'string' ? r.remarque : '',
+      } satisfies SuiviRow;
+    });
+  return lignes.length > 0 ? lignes : INITIAL_CHAINE_ROWS;
 }
 
 /** Nombre de colonnes « Prochains Lancements ». Source unique pour l'affichage
@@ -105,17 +191,13 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   onOpenCardModal,
 }) => {
   const catalogue = useJalonCatalogue();
-  const [rows, setRows] = useState<ChaineRow[]>(() => {
+  const [rows, setRows] = useState<SuiviRow[]>(() => {
       try {
         const saved = localStorage.getItem('suivi_global_rows_v2');
         if (saved) {
-          const parsed = JSON.parse(saved) as ChaineRow[];
-          // Un cache corrompu ou d'un autre format rendrait les accès
-          // `prochainsLancementsCards[i]` infructueux : on retombe sur le défaut.
-          const valide =
-            Array.isArray(parsed) &&
-            parsed.every((r) => Array.isArray(r.prochainsLancementsCards));
-          if (valide) return parsed;
+          // Le normalisateur accepte les anciens formats (carte unique,
+          // lancements à plat) comme le format actuel en piles de 2.
+          return normaliserLignes(JSON.parse(saved));
         }
       } catch {
         // Fallback
@@ -200,8 +282,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
   const handleCellChange = (
     rowId: string,
-    field: 'nom' | 'objectifJour' | 'realisationJour' | 'remarque',
-    value: string | number
+    field: 'nom' | 'remarque',
+    value: string
   ) => {
     setRows((prev) =>
       prev.map((r) => (r.id === rowId ? { ...r, [field]: value } : r))
@@ -212,29 +294,81 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     rowId: string,
     slotType: 'modeleEnCours' | 'lancement' | 'expedition',
     slotCard: ChaineSlotCard | null,
-    lancementIndex?: number
+    lancementIndex?: number,
+    slotIndex = 0
   ) => {
     setRows((prev) =>
       prev.map((r) => {
         if (r.id !== rowId) return r;
         if (slotType === 'modeleEnCours') {
-          return { ...r, modeleEnCoursCard: slotCard || undefined };
+          const pile = [...r.modeleEnCoursCards] as PileDeCartes;
+          pile[slotIndex] = slotCard;
+          return { ...r, modeleEnCoursCards: pile };
         }
         if (slotType === 'expedition') {
           return { ...r, expeditionCard: slotCard || null };
         }
         if (slotType === 'lancement' && typeof lancementIndex === 'number') {
-          const nextLancements = Array.from(
-            { length: NOMBRE_LANCEMENTS },
-            (_, i) => r.prochainsLancementsCards?.[i] ?? null
-          ) as ChaineRow['prochainsLancementsCards'];
-          nextLancements[lancementIndex] = slotCard;
+          const nextLancements = [...r.prochainsLancementsCards] as ChaineRow['prochainsLancementsCards'];
+          const pile = [...(nextLancements[lancementIndex] ?? [null, null])] as PileDeCartes;
+          pile[slotIndex] = slotCard;
+          nextLancements[lancementIndex] = pile;
           return { ...r, prochainsLancementsCards: nextLancements };
         }
         return r;
       })
     );
   };
+
+  // --- Inspections (un bloc par modèle en cours) -------------------------
+  const majBlocInspection = (
+    rowId: string,
+    blocIndex: number,
+    maj: (bloc: InspectionBloc) => InspectionBloc
+  ) => {
+    setRows((prev) =>
+      prev.map((r) => {
+        if (r.id !== rowId) return r;
+        const inspections = [...r.inspections] as ChaineRow['inspections'];
+        if (!inspections[blocIndex]) return r;
+        inspections[blocIndex] = maj(inspections[blocIndex]);
+        return { ...r, inspections };
+      })
+    );
+  };
+
+  const majValeur = (
+    rowId: string,
+    blocIndex: number,
+    valeurId: string,
+    maj: (valeur: InspectionValeur) => InspectionValeur
+  ) =>
+    majBlocInspection(rowId, blocIndex, (bloc) => ({
+      ...bloc,
+      valeurs: bloc.valeurs.map((v) => (v.id === valeurId ? maj(v) : v)),
+    }));
+
+  const ajouterValeur = (
+    rowId: string,
+    blocIndex: number,
+    type: 'I' | 'OF',
+    pct?: 50 | 100
+  ) =>
+    majBlocInspection(rowId, blocIndex, (bloc) => ({
+      ...bloc,
+      valeurs: [
+        ...bloc.valeurs,
+        {
+          id: `val-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          type,
+          ...(type === 'I' ? { pct: pct ?? 50 } : {}),
+          date: dateDuJourISO(),
+          resultat: null,
+        },
+      ],
+    }));
+
+  const [menuEtat, setMenuEtat] = useState<MenuEtatInspection | null>(null);
 
   const handleResetToDefault = () => {
     if (
@@ -256,32 +390,50 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     );
     if (!nomPrompt || !nomPrompt.trim()) return;
 
-    const newRow: ChaineRow = {
+    const newRow: SuiviRow = {
       id: `${categorieId.toLowerCase()}-${Date.now()}`,
       categorieId,
       nom: nomPrompt.trim(),
       dotColor: CATEGORIES_CONFIG[categorieId]?.defaultDotColor || '#94a3b8',
-      modeleEnCoursCard: undefined,
-      objectifJour: '',
-      realisationJour: '',
-      remarque: '',
-      prochainsLancementsCards: Array.from(
-        { length: NOMBRE_LANCEMENTS },
-        () => null
-      ) as ChaineRow['prochainsLancementsCards'],
+      modeleEnCoursCards: [null, null],
+      inspections: [blocInspectionVide(), blocInspectionVide()],
+      prochainsLancementsCards: lancementsVides(),
       expeditionCard: null,
+      remarque: '',
     };
 
     setRows((prev) => [...prev, newRow]);
+  };
+
+  /** Texte d'une case : modèle lié, sinon libellé saisi, sinon vide. */
+  const texteSlot = (slot?: ChaineSlotCard | null) =>
+    slot ? getCardById(slot.cardId)?.modele || slot.customLabel || '' : '';
+
+  /** Libellé court d'un modèle en cours, pour l'en-tête du bloc d'inspection. */
+  const libelleModele = (row: SuiviRow, blocIndex: number) => {
+    const slot = row.modeleEnCoursCards[blocIndex];
+    return texteSlot(slot) || `Modèle ${blocIndex + 1}`;
+  };
+
+  /** Blocs d'inspection à afficher : un par modèle en cours occupé
+   *  (le premier seul tant que la deuxième case est vide). */
+  const blocsInspectionAffiches = (row: SuiviRow) => {
+    const indices = row.modeleEnCoursCards
+      .map((slot, i) => (slot ? i : -1))
+      .filter((i) => i >= 0);
+    return (indices.length > 0 ? indices : [0]).map((blocIndex) => ({
+      blocIndex,
+      bloc: row.inspections[blocIndex] ?? blocInspectionVide(),
+      libelle: libelleModele(row, blocIndex),
+    }));
   };
 
   const handleExportCSV = () => {
     const headers = [
       'Divers',
       'Chaîne',
-      'Modèle en cours (Carte)',
-      'Objectif/Jour',
-      'Réalisation/Jour',
+      'Modèle en cours',
+      'Inspection',
       'Remarque',
       ...Array.from(
         { length: NOMBRE_LANCEMENTS },
@@ -294,32 +446,23 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     const csvRows = [headers.map(echapper).join(';')];
     rows.forEach((r) => {
       const catTitle = CATEGORIES_CONFIG[r.categorieId]?.titre || r.categorieId;
-      const modeleEnCoursText =
-        getCardById(r.modeleEnCoursCard?.cardId)?.modele ||
-        r.modeleEnCoursCard?.customLabel ||
-        '';
+      const modeleEnCoursText = r.modeleEnCoursCards.map(texteSlot).filter(Boolean).join(' / ');
 
       const lancementsTexts = Array.from(
         { length: NOMBRE_LANCEMENTS },
-        (_, i) => {
-          const l = r.prochainsLancementsCards?.[i];
-          if (!l) return '';
-          return getCardById(l.cardId)?.modele || l.customLabel || '';
-        }
+        (_, i) => (r.prochainsLancementsCards?.[i] ?? []).map(texteSlot).filter(Boolean).join(' / ')
       );
 
-      const expeditionText =
-        getCardById(r.expeditionCard?.cardId)?.modele ||
-        r.expeditionCard?.customLabel ||
-        '';
+      const inspectionText = r.inspections.map(blocEnTexte).filter(Boolean).join(' | ');
+
+      const expeditionText = texteSlot(r.expeditionCard);
 
       const values = [
         catTitle,
         r.nom,
         modeleEnCoursText,
-        r.objectifJour,
-        r.realisationJour,
-        r.remarque,
+        inspectionText,
+        r.remarque ?? '',
         ...lancementsTexts,
         expeditionText,
       ].map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`);
@@ -343,13 +486,15 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   const filteredRows = rows.filter((r) => {
     if (!searchQuery.trim()) return true;
     const q = searchQuery.toLowerCase();
-    const modeleCard = getCardById(r.modeleEnCoursCard?.cardId);
+    const libellesModeles = [
+      ...r.modeleEnCoursCards.map((slot) => getCardById(slot?.cardId)?.modele),
+      ...r.modeleEnCoursCards.map((slot) => slot?.customLabel),
+    ];
     return (
       r.nom.toLowerCase().includes(q) ||
-      (modeleCard && modeleCard.modele.toLowerCase().includes(q)) ||
-      (r.modeleEnCoursCard?.customLabel &&
-        r.modeleEnCoursCard.customLabel.toLowerCase().includes(q)) ||
-      r.remarque.toLowerCase().includes(q)
+      libellesModeles.some((l) => l && l.toLowerCase().includes(q)) ||
+      (r.remarque ?? '').toLowerCase().includes(q) ||
+      r.inspections.some((b) => b.commentaire.toLowerCase().includes(q))
     );
   });
 
@@ -357,8 +502,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   // ajouter un jalon ajoute automatiquement une pastille d'alerte ici.
   const getJalonsEnRetardLigne = (row: ChaineRow) => {
     const slots = [
-      row.modeleEnCoursCard,
-      ...(row.prochainsLancementsCards || []),
+      ...row.modeleEnCoursCards,
+      ...row.prochainsLancementsCards.flat(),
       row.expeditionCard,
     ];
     // Une même carte peut occuper plusieurs colonnes de la ligne : on la ne compte qu'une fois.
@@ -376,8 +521,16 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     slotCard: ChaineSlotCard | null | undefined,
     row: ChaineRow,
     slotType: 'modeleEnCours' | 'lancement' | 'expedition',
-    lancementIndex?: number
+    lancementIndex?: number,
+    slotIndex?: number
   ) => {
+    const rangSuffixe = slotIndex === 1 ? ' — 2ᵉ carte' : '';
+    const titreSlot =
+      slotType === 'modeleEnCours'
+        ? `Modèle en cours${rangSuffixe} (${row.nom})`
+        : slotType === 'expedition'
+        ? `Expédition (${row.nom})`
+        : `Prochain Lancement #${(lancementIndex || 0) + 1}${rangSuffixe} (${row.nom})`;
     const linkedCard = slotCard?.cardId ? getCardById(slotCard.cardId) : undefined;
     const label = linkedCard ? linkedCard.modele : slotCard?.customLabel;
     const subLabel = linkedCard ? `${linkedCard.reference} • ${linkedCard.client}` : null;
@@ -390,12 +543,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               rowId: row.id,
               slotType,
               lancementIndex,
-              slotTitle:
-                slotType === 'modeleEnCours'
-                  ? `Modèle en cours (${row.nom})`
-                  : slotType === 'expedition'
-                  ? `Expédition (${row.nom})`
-                  : `Prochain Lancement #${(lancementIndex || 0) + 1} (${row.nom})`,
+              slotIndex,
+              slotTitle: titreSlot,
             })
           }
           className="w-full h-full min-h-[50px] flex items-center justify-center text-[11px] font-medium text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 rounded-xl transition-all border border-dashed border-slate-200 hover:border-blue-300 cursor-pointer p-1"
@@ -407,7 +556,11 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               {slotType === 'expedition'
                 ? '+ Expédition'
                 : slotType === 'modeleEnCours'
-                ? '+ Carte'
+                ? slotIndex === 1
+                  ? '+ Carte 2'
+                  : '+ Carte'
+                : slotIndex === 1
+                ? '+'
                 : `#${(lancementIndex || 0) + 1}`}
             </span>
           </span>
@@ -423,12 +576,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           rowId: row.id,
           slotType,
           lancementIndex,
-          slotTitle:
-            slotType === 'modeleEnCours'
-              ? `Modèle en cours (${row.nom})`
-              : slotType === 'expedition'
-              ? `Expédition (${row.nom})`
-              : `Prochain Lancement #${(lancementIndex || 0) + 1} (${row.nom})`,
+          slotIndex,
+          slotTitle: titreSlot,
         });
       }
     };
@@ -532,12 +681,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                 rowId: row.id,
                 slotType,
                 lancementIndex,
-                slotTitle:
-                  slotType === 'modeleEnCours'
-                    ? `Modèle en cours (${row.nom})`
-                    : slotType === 'expedition'
-                    ? `Expédition (${row.nom})`
-                    : `Prochain Lancement #${(lancementIndex || 0) + 1} (${row.nom})`,
+                slotIndex,
+                slotTitle: titreSlot,
               });
             }}
             title="Changer / Réassigner une autre carte"
@@ -548,7 +693,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           <button
             onClick={(e) => {
               e.stopPropagation();
-              handleAssignSlotCard(row.id, slotType, null, lancementIndex);
+              handleAssignSlotCard(row.id, slotType, null, lancementIndex, slotIndex);
             }}
             title="Retirer la carte de cette case"
             className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
@@ -561,15 +706,19 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   };
 
   // Currently selected slot for CardPickerModal
-  const currentSlotForPicker = activePicker
-    ? activePicker.slotType === 'modeleEnCours'
-      ? rows.find((r) => r.id === activePicker.rowId)?.modeleEnCoursCard
-      : activePicker.slotType === 'expedition'
-      ? rows.find((r) => r.id === activePicker.rowId)?.expeditionCard
-      : rows.find((r) => r.id === activePicker.rowId)?.prochainsLancementsCards[
-          activePicker.lancementIndex || 0
-        ]
-    : null;
+  const currentSlotForPicker = (() => {
+    if (!activePicker) return null;
+    const row = rows.find((r) => r.id === activePicker.rowId);
+    if (!row) return null;
+    const slotIndex = activePicker.slotIndex ?? 0;
+    if (activePicker.slotType === 'modeleEnCours') {
+      return row.modeleEnCoursCards[slotIndex] ?? null;
+    }
+    if (activePicker.slotType === 'expedition') {
+      return row.expeditionCard ?? null;
+    }
+    return row.prochainsLancementsCards[activePicker.lancementIndex ?? 0]?.[slotIndex] ?? null;
+  })();
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
@@ -618,7 +767,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               />
             </div>
 
-            {/* Quick edit mode toggle for Objectif / Réalisation / Remarque */}
+            {/* Quick edit mode toggle for Chaîne / Remarque */}
             <button
               onClick={() => {
                 setIsEditMode(!isEditMode);
@@ -632,17 +781,17 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                   ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
                   : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-300'
               }`}
-              title="Modifier directement les objectifs, réalisations et remarques"
+              title="Modifier directement le nom de la chaîne et sa remarque"
             >
               {isEditMode ? (
                 <>
                   <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span>Enregistrer Objectifs/Réalisations</span>
+                  <span>Enregistrer</span>
                 </>
               ) : (
                 <>
                   <Edit3 className="w-3.5 h-3.5" />
-                  <span>Édition Objectifs & Remarques</span>
+                  <span>Édition Chaîne & Remarque</span>
                 </>
               )}
             </button>
@@ -683,7 +832,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           <div className="flex items-center gap-2">
             <Info className="w-4 h-4 text-blue-600 shrink-0" />
             <span>
-              <strong>Attribution des cartes :</strong> Cliquez sur n'importe quelle case de <em>Modèle en cours</em>, <em>Prochains Lancements (1 à 5)</em> ou <em>Expédition</em> pour choisir la carte de commande correspondante. Les colonnes <em>Objectif/Jour</em>, <em>Réalisation/Jour</em> et <em>Remarque</em> sont spécifiques à chaque chaîne.
+              <strong>Attribution des cartes :</strong> Cliquez sur n'importe quelle case de <em>Modèle en cours</em>, <em>Prochains Lancements (1 à 5)</em> ou <em>Expédition</em> pour choisir la carte de commande correspondante. Chaque case accueille <strong>2 cartes empilées</strong>. La colonne <em>Inspection</em> suit les contrôles OF / I du jour et la colonne <em>Remarque</em> reste propre à chaque chaîne.
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -731,17 +880,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                   </div>
                 </th>
 
-                {/* Objectif/Jour */}
-                <th className="w-28 min-w-[95px]">
+                {/* Inspection (OF / I du jour, un bloc par modèle en cours) */}
+                <th className="w-[260px] min-w-[230px]">
                   <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
-                    Objectif/Jour
-                  </div>
-                </th>
-
-                {/* Réalisation/Jour */}
-                <th className="w-28 min-w-[95px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
-                    Réalisation/Jour
+                    Inspection
                   </div>
                 </th>
 
@@ -828,8 +970,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                       )}
 
                       {/* Column 2: Chaîne (Name) */}
-                        <td className="p-0">
-                          <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs h-full min-h-[96px] flex items-center justify-center">
+                        <td className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs align-middle">
+                          <div className="min-h-[72px] flex items-center justify-center">
                           {isEditMode ? (
                             <input
                               type="text"
@@ -848,14 +990,14 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                       </td>
 
                       {/* Column 3: Modèle en cours (Carte du Point Commande Journalière) */}
-                      <td className="p-0">
-                        <div
-                          className={`group relative bg-white border rounded-xl sm:rounded-2xl p-1.5 shadow-2xs h-full min-h-[96px] flex flex-col ${
-                            isRowAlert
-                              ? 'border-rose-400 ring-1 ring-rose-200'
-                              : 'border-slate-200/90'
-                          }`}
-                        >
+                      <td
+                        className={`group bg-white border rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle ${
+                          isRowAlert
+                            ? 'border-rose-400 ring-1 ring-rose-200'
+                            : 'border-slate-200/90'
+                        }`}
+                      >
+                        <div className="min-h-[84px] flex flex-col">
 {isRowAlert && (
                               <div
                                 className="flex items-center gap-1.5 px-2.5 py-1 mb-1.5 rounded-lg bg-red-600 text-white shadow-2xs motion-safe:animate-pulse"
@@ -869,59 +1011,81 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                               </div>
                             )}
 
-                          {renderCardSlotContent(
-                            row.modeleEnCoursCard,
-                            row,
-                            'modeleEnCours'
-                          )}
+                          <div className="flex flex-col gap-1">
+                            {row.modeleEnCoursCards.map((slot, pileIdx) => (
+                              <React.Fragment key={pileIdx}>
+                                {renderCardSlotContent(
+                                  slot,
+                                  row,
+                                  'modeleEnCours',
+                                  undefined,
+                                  pileIdx
+                                )}
+                              </React.Fragment>
+                            ))}
+                          </div>
                         </div>
                       </td>
 
-                      {/* Column 4: Objectif/Jour */}
-                        <td className="p-0">
-                          <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-2 py-2 shadow-2xs h-full min-h-[96px] flex items-center justify-center">
-                            <input
-                              type="text"
-                              value={row.objectifJour}
-                              placeholder="0"
-                              onChange={(e) =>
-                                handleCellChange(row.id, 'objectifJour', e.target.value)
-                              }
-                              className="w-full text-center text-sm font-bold text-slate-900 bg-slate-50 border border-slate-300 rounded-lg px-2 py-2 focus:bg-white focus:border-blue-400 focus:outline-hidden focus:ring-1 focus:ring-blue-400"
-                            />
+                      {/* Column 4: Inspection (un bloc par modèle en cours) */}
+                        <td className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle">
+                          <div className="min-h-[84px] flex flex-col gap-1.5">
+                            {blocsInspectionAffiches(row).map(
+                              ({ blocIndex, bloc, libelle }) => (
+                                <div
+                                  key={blocIndex}
+                                  className="flex-1 min-w-0 flex flex-col border border-slate-200/80 bg-slate-50/40 rounded-lg px-1.5 py-1.5"
+                                >
+                                  <span className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400 truncate">
+                                    {libelle}
+                                  </span>
+                                  <InspectionCell
+                                    bloc={bloc}
+                                    onAjouterValeur={(type, pct) =>
+                                      ajouterValeur(row.id, blocIndex, type, pct)
+                                    }
+                                    onSupprimerValeur={(valeurId) =>
+                                      majBlocInspection(row.id, blocIndex, (b) => ({
+                                        ...b,
+                                        valeurs: b.valeurs.filter((v) => v.id !== valeurId),
+                                      }))
+                                    }
+                                    onMajDate={(valeurId, date) =>
+                                      majValeur(row.id, blocIndex, valeurId, (v) => ({
+                                        ...v,
+                                        date,
+                                      }))
+                                    }
+                                    onBadgeClick={(valeurId, anchor) =>
+                                      setMenuEtat({
+                                        rowId: row.id,
+                                        blocIndex,
+                                        valeurId,
+                                        anchor,
+                                        actuel:
+                                          bloc.valeurs.find((v) => v.id === valeurId)
+                                            ?.resultat ?? null,
+                                      })
+                                    }
+                                    onCommentaire={(texte) =>
+                                      majBlocInspection(row.id, blocIndex, (b) => ({
+                                        ...b,
+                                        commentaire: texte,
+                                      }))
+                                    }
+                                  />
+                                </div>
+                              )
+                            )}
                           </div>
                         </td>
 
-                      {/* Column 5: Réalisation/Jour */}
-                        <td className="p-0">
-                          <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-2 py-2 shadow-2xs h-full min-h-[96px] flex items-center justify-center">
+                      {/* Column 5: Remarque */}
+                        <td className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs align-middle">
+                          <div className="min-h-[80px] flex">
                             <input
                               type="text"
-                              value={row.realisationJour}
-                              placeholder="0"
-                              onChange={(e) =>
-                                handleCellChange(
-                                  row.id,
-                                  'realisationJour',
-                                  e.target.value
-                                )
-                              }
-                              className={`w-full text-center text-sm font-bold font-mono bg-slate-50 border rounded-lg px-2 py-2 focus:bg-white focus:border-blue-400 focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${
-                                Number(row.realisationJour) >= Number(row.objectifJour) &&
-                                Number(row.realisationJour) > 0
-                                  ? 'text-emerald-700 border-emerald-300'
-                                  : 'text-slate-900 border-slate-300'
-                              }`}
-                            />
-                          </div>
-                        </td>
-
-                      {/* Column 6: Remarque */}
-                        <td className="p-0">
-                          <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs h-full min-h-[96px] flex items-center">
-                            <input
-                              type="text"
-                              value={row.remarque}
+                              value={row.remarque ?? ''}
                               placeholder="Remarque, consigne..."
                               onChange={(e) =>
                                 handleCellChange(row.id, 'remarque', e.target.value)
@@ -933,24 +1097,34 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
                       {/* Columns 7 to 11: 5 Slots under PROCHAINS LANCEMENTS (Cartes) */}
                       {Array.from({ length: NOMBRE_LANCEMENTS }, (_, slotIdx) => {
-                        const slotCard = row.prochainsLancementsCards[slotIdx];
+                        const pile = row.prochainsLancementsCards[slotIdx] ?? [null, null];
                         return (
-                          <td key={slotIdx} className="p-0 min-w-[125px]">
-                            <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[96px] flex flex-col justify-center items-center">
-                          {renderCardSlotContent(
-                                slotCard,
-                                row,
-                                'lancement',
-                                slotIdx
-                              )}
+                          <td
+                            key={slotIdx}
+                            className="min-w-[125px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle"
+                          >
+                            <div className="min-h-[88px] flex flex-col justify-center items-center">
+                              <div className="flex flex-col gap-1 w-full">
+                                {pile.map((slotCard, pileIdx) => (
+                                  <React.Fragment key={pileIdx}>
+                                    {renderCardSlotContent(
+                                      slotCard,
+                                      row,
+                                      'lancement',
+                                      slotIdx,
+                                      pileIdx
+                                    )}
+                                  </React.Fragment>
+                                ))}
+                              </div>
                             </div>
                           </td>
                         );
                       })}
 
                       {/* Column 12: EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
-                      <td className="p-0 min-w-[145px]">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[96px] flex flex-col justify-center items-center">
+                      <td className="min-w-[145px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle">
+                        <div className="min-h-[88px] flex flex-col justify-center items-center">
                           {renderCardSlotContent(
                             row.expeditionCard,
                             row,
@@ -1014,9 +1188,26 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               activePicker.rowId,
               activePicker.slotType,
               slotCard,
-              activePicker.lancementIndex
+              activePicker.lancementIndex,
+              activePicker.slotIndex
             );
           }}
+        />
+      )}
+
+      {/* Menu Pass/Fail d'un contrôle d'inspection */}
+      {menuEtat && (
+        <InspectionEtatMenu
+          anchor={menuEtat.anchor}
+          actuel={menuEtat.actuel}
+          onChoisir={(etat) => {
+            majValeur(menuEtat.rowId, menuEtat.blocIndex, menuEtat.valeurId, (v) => ({
+              ...v,
+              resultat: etat,
+            }));
+            setMenuEtat(null);
+          }}
+          onClose={() => setMenuEtat(null)}
         />
       )}
     </div>
