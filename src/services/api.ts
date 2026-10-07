@@ -1,5 +1,5 @@
-import { CardFormData, CardItem, JalonCatalogue } from '../types/card.ts';
-import { CATALOGUE_INITIAL } from '../data/mockJalons.ts';
+import { CardFormData, CardItem, JalonCategorie, JalonCatalogue } from '../types/card.ts';
+import { CATALOGUE_INITIAL, cataloguePourType, categorieParCode } from '../data/mockJalons.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 import { normaliserSemaine } from '../utils/jalons.ts';
 
@@ -91,6 +91,7 @@ export const cardApi = {
       nom: data.nom,
       reference: data.reference,
       modele: data.modele,
+      ...(data.typeCarte ? { typeCarte: data.typeCarte } : {}),
       jalons: Array.isArray(data.jalons)
         ? data.jalons.map((j) => ({
             code: j.code,
@@ -99,7 +100,10 @@ export const cardApi = {
               ? { semaine: normaliserSemaine(j.semaine) as number }
               : {}),
           }))
-        : CATALOGUE_INITIAL.map((j) => ({ code: j.code, valide: false })),
+        : cataloguePourType(data.typeCarte ?? 'R').map((j) => ({
+            code: j.code,
+            valide: false,
+          })),
       okProd: Boolean(data.okProd),
       ofs: data.ofs || [],
       quantiteDemandee,
@@ -264,14 +268,24 @@ export const cardApi = {
   },
 };
 
-/** Catalogue des types de jalons, source de vérité côté serveur. */
+/**
+ * Jalons. Le catalogue (codes + intitulés + grandeur) est partagé par tout le monde,
+ * mais un jalon ajouté est propre à la carte visée : les autres cartes n'en portent pas.
+ */
 export const jalonApi = {
   async getAll(): Promise<JalonCatalogue[]> {
     try {
       const res = await fetch('/api/v1/jalons');
       if (res.ok) {
         const json = await res.json();
-        if (json.success && Array.isArray(json.data)) return json.data as JalonCatalogue[];
+        if (json.success && Array.isArray(json.data)) {
+          // Un serveur plus ancien n'envoie pas la grandeur : on la déduit du code
+          // plutôt que de laisser un jalon sans couleur.
+          return (json.data as JalonCatalogue[]).map((j) => ({
+            ...j,
+            categorie: j.categorie ?? categorieParCode(j.code),
+          }));
+        }
       }
     } catch {
       // Hors ligne : on garde le catalogue de départ, l'affichage reste utilisable.
@@ -279,12 +293,22 @@ export const jalonApi = {
     return CATALOGUE_INITIAL;
   },
 
-  /** Ajoute un type de jalon au catalogue global, donc disponible sur toutes les cartes. */
-  async create(code: string, libelle: string): Promise<JalonCatalogue> {
+  /**
+   * Ajoute un jalon à la carte `cardId`. Sans `cardId`, seul l'enregistrement au
+   * catalogue partagé est fait, ce qui ne crée aucun état sur les cartes.
+   * `categorie` détermine la couleur : vert pour une nomenclature, bleu pour un
+   * statut. Absente, elle est déduite du code.
+   */
+  async create(
+    code: string,
+    libelle: string,
+    categorie: JalonCategorie = 'STATUT',
+    cardId?: string
+  ): Promise<JalonCatalogue> {
     const res = await fetch('/api/v1/jalons', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, libelle }),
+      body: JSON.stringify({ code, libelle, categorie, ...(cardId ? { cardId } : {}) }),
     });
     const json = await res.json().catch(() => ({ success: false }));
     if (!res.ok || !json.success) {
@@ -293,8 +317,26 @@ export const jalonApi = {
     return json.data as JalonCatalogue;
   },
 
-  async remove(code: string): Promise<void> {
-    const res = await fetch(`/api/v1/jalons/${encodeURIComponent(code)}`, { method: 'DELETE' });
+  /** Change la grandeur d'un code du catalogue : toutes les cartes se recolent. */
+  async setCategorie(code: string, categorie: JalonCategorie): Promise<JalonCatalogue> {
+    const res = await fetch(`/api/v1/jalons/${encodeURIComponent(code)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ categorie }),
+    });
+    const json = await res.json().catch(() => ({ success: false }));
+    if (!res.ok || !json.success) {
+      throw new Error(json?.error || `Erreur ${res.status}`);
+    }
+    return json.data as JalonCatalogue;
+  },
+
+  /** Retire le jalon de cette carte seulement : le catalogue et les autres cartes restent intacts. */
+  async removeFromCard(cardId: string, code: string): Promise<void> {
+    const res = await fetch(
+      `/api/v1/cards/${encodeURIComponent(cardId)}/jalons/${encodeURIComponent(code)}`,
+      { method: 'DELETE' }
+    );
     const json = await res.json().catch(() => ({ success: false }));
     if (!res.ok || !json.success) {
       throw new Error(json?.error || `Erreur ${res.status}`);

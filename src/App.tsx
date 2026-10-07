@@ -7,13 +7,14 @@ import { FilterBar, SortField, SortOrder } from './components/FilterBar.tsx';
 import { CardTable } from './components/CardTable.tsx';
 import { CardModal } from './components/CardModal.tsx';
 import { SuiviGlobalView } from './components/SuiviGlobalView.tsx';
+import { AppPage } from './components/ViewSwitcher.tsx';
 import { JalonCatalogueProvider } from './context/JalonCatalogueContext.tsx';
 import { getEtatJalon, PREFIXE_JALON_MANQUANT } from './utils/jalons.ts';
 import { getNowParis } from './utils/dateFrance.ts';
 import { RefreshCw, Download, FileSpreadsheet, Check } from 'lucide-react';
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState<'point-journalier' | 'suivi-global'>('point-journalier');
+  const [currentPage, setCurrentPage] = useState<AppPage>('point-journalier');
   const [cards, setCards] = useState<CardItem[]>([]);
   const [catalogue, setCatalogue] = useState<JalonCatalogue[]>([]);
   const [loading, setLoading] = useState(true);
@@ -152,6 +153,13 @@ export default function App() {
     return Array.from(new Set(cards.map((c) => c.client))).sort();
   }, [cards]);
 
+  // Jalons proposés au filtre : ceux qu'au moins une carte porte. Un jalon ajouté
+  // sur une seule carte n'ouvre donc pas une entrée pour toutes les autres.
+  const jalonsUtilises = useMemo(() => {
+    const codes = new Set(cards.flatMap((c) => (c.jalons ?? []).map((j) => j.code)));
+    return catalogue.filter((j) => codes.has(j.code));
+  }, [cards, catalogue]);
+
   // Filter & sort logic
   const filteredCards = useMemo(() => {
     return cards
@@ -185,7 +193,7 @@ export default function App() {
           return false;
         }
 
-        // OK Prod, Sous-traitance et jalons (le catalogue décide des codes disponibles)
+        // OK Prod, Sous-traitance et jalons (la carte porte ses propres jalons)
         if (flagFilter === 'OK_PROD' && !card.okProd) return false;
         if (flagFilter === 'OK_PROD_PENDING' && card.okProd) return false;
         if (
@@ -194,23 +202,28 @@ export default function App() {
         ) {
           return false;
         }
-        // JALON_MISSING:<CODE> fonctionne pour n'importe quel jalon du catalogue.
+        // JALON_MISSING:<CODE> cible un code précis. Un jalon est propre à sa
+        // carte : ne pas le porter n'est pas « en attente », la carte est donc
+        // exclue seulement si elle porte le jalon sans l'avoir validé.
         const codeManquant = flagFilter.startsWith(PREFIXE_JALON_MANQUANT)
           ? flagFilter.slice(PREFIXE_JALON_MANQUANT.length)
           : null;
-        if (codeManquant && getEtatJalon(card, codeManquant).valide) return false;
-        if (
-          flagFilter === 'ALL_VALIDATED' &&
-          !catalogue.every((j) => getEtatJalon(card, j.code).valide)
-        ) {
-          return false;
+        if (codeManquant) {
+          const porte = (card.jalons ?? []).some((j) => j.code === codeManquant);
+          if (porte && !getEtatJalon(card, codeManquant).valide) return false;
+        }
+        // « Tous les jalons validés » : tous ceux que la carte porte, et au moins un.
+        if (flagFilter === 'ALL_VALIDATED') {
+          const ports = card.jalons ?? [];
+          if (ports.length === 0 || !ports.every((j) => j.valide)) return false;
         }
 
         // Filtre cliquable depuis les 3 cartes du bandeau (Cartes / Modèles, RDL, Alerte et priorité)
         if (kpiFilter === 'RDL') {
-          // Si RDL a quitté le catalogue, le filtre n'a plus de sens : on ne filtre rien.
-          const rdlExiste = catalogue.some((j) => j.code === 'RDL');
-          if (rdlExiste && !getEtatJalon(card, 'RDL').valide) return false;
+          // Le filtre n'a de sens que pour les cartes qui portent le jalon RDL.
+          if ((card.jalons ?? []).some((j) => j.code === 'RDL') && !getEtatJalon(card, 'RDL').valide) {
+            return false;
+          }
         } else if (kpiFilter === 'ALERTE') {
           if (card.statut !== 'BLOQUE') return false;
         }
@@ -252,10 +265,12 @@ export default function App() {
   const handleExportCSV = () => {
     const { dateStr, timeStr } = getNowParis();
 
-    // Une colonne par jalon du catalogue : l'export suit l'ajout de jalons
-    // sans intervention. OUI = validé, S40 = planifié, NON = en attente.
-    const enteteJalon = catalogue.map((j) => `${j.code} (${j.libelle})`);
+    // Une colonne par code réellement porté par les cartes exportées : l'export suit
+    // l'ajout de jalons sans intervention. OUI = validé, S40 = planifié, NON = en
+    // attente. Une carte qui ne porte pas le jalon laisse la cellule vide.
+    const enteteJalon = jalonsUtilises.map((j) => `${j.code} (${j.libelle})`);
     const valeurJalon = (card: CardItem, code: string) => {
+      if (!(card.jalons ?? []).some((j) => j.code === code)) return '';
       const etat = getEtatJalon(card, code);
       if (etat.valide) return 'OUI';
       const semaine = etat.semaine;
@@ -284,7 +299,7 @@ export default function App() {
       echapper(c.modele),
       echapper(c.nom),
       echapper(c.reference),
-      ...catalogue.map((j) => echapper(valeurJalon(c, j.code))),
+      ...jalonsUtilises.map((j) => echapper(valeurJalon(c, j.code))),
       c.quantiteDemandee,
       c.quantiteFinie,
       c.resteAProduire,
@@ -315,9 +330,12 @@ export default function App() {
     showNotification('Export CSV de la réunion généré');
   };
 
-  /** Le catalogue a changé : on le recharge pour que tableaux et alertes suivent. */
+  /** Un jalon a été ajouté ou retiré sur une carte : le catalogue partagé (intitulés)
+   *  et les cartes sont rechargés, pour que colonnes, filtres et pastilles suivent. */
   const handleJalonAjoute = async () => {
-    setCatalogue(await jalonApi.getAll());
+    const [jalons, data] = await Promise.all([jalonApi.getAll(), cardApi.getAll()]);
+    setCatalogue(jalons);
+    setCards(data);
   };
 
   if (currentPage === 'suivi-global') {
@@ -360,7 +378,8 @@ export default function App() {
       <Header
         onOpenCreateModal={handleOpenCreate}
         onResetData={handleResetData}
-        onOpenSuiviGlobal={() => setCurrentPage('suivi-global')}
+        currentPage={currentPage}
+        onChangePage={setCurrentPage}
         cardsCount={cards.length}
         isMeetingFilterActive={isMeetingFilterActive}
         onToggleMeetingFilter={() => setIsMeetingFilterActive((prev) => !prev)}
@@ -450,6 +469,7 @@ export default function App() {
           uniqueClients={uniqueClients}
           selectedClient={selectedClient}
           onClientChange={setSelectedClient}
+          jalonsUtilises={jalonsUtilises}
         />
 
         {/* Interactive Cards Table */}

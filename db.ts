@@ -3,8 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INITIAL_CARDS } from './src/data/mockData.ts';
-import { CATALOGUE_INITIAL } from './src/data/mockJalons.ts';
-import type { CardItem, CardJalon, JalonCatalogue, JalonCode } from './src/types/card.ts';
+import { CATALOGUE_INITIAL, CATEGORIES_PAR_CODE, cataloguePourType, categorieParCode } from './src/data/mockJalons.ts';
+import type {
+  CardItem,
+  CardJalon,
+  JalonCategorie,
+  JalonCatalogue,
+  JalonCode,
+} from './src/types/card.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -42,10 +48,11 @@ function openDb(): DatabaseSync {
 function initSchema(conn: DatabaseSync): void {
   conn.exec(`
     CREATE TABLE IF NOT EXISTS jalons (
-      code     TEXT PRIMARY KEY,
-      libelle  TEXT NOT NULL,
-      ordre    INTEGER NOT NULL DEFAULT 0,
-      cree_le  TEXT NOT NULL
+      code      TEXT PRIMARY KEY,
+      libelle   TEXT NOT NULL,
+      categorie TEXT NOT NULL DEFAULT 'STATUT',
+      ordre     INTEGER NOT NULL DEFAULT 0,
+      cree_le   TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS cards (
@@ -65,16 +72,73 @@ function initSchema(conn: DatabaseSync): void {
 
     CREATE INDEX IF NOT EXISTS idx_card_jalons_card ON card_jalons(card_id);
   `);
+
+  // Le classement des jalons par grandeur (vert / bleu) est arrivé après la création
+  // de la table : une base existante n'a pas la colonne. `CREATE TABLE IF NOT EXISTS`
+  // ne la rajoute pas, on l'ajoute donc ici, une fois, en idempotent.
+  const colonnes = conn.prepare('PRAGMA table_info(jalons)').all() as { name: string }[];
+  if (!colonnes.some((c) => c.name === 'categorie')) {
+    conn.exec("ALTER TABLE jalons ADD COLUMN categorie TEXT NOT NULL DEFAULT 'STATUT'");
+    // Les codes déjà saisis avant le classement retrouvent leur grandeur d'origine,
+    // déduite du code : personne n'a à les reprendre un par un.
+    for (const [code, categorie] of Object.entries(CATEGORIES_PAR_CODE)) {
+      conn.prepare('UPDATE jalons SET categorie = ? WHERE code = ?').run(categorie, code);
+    }
+  }
+
+  // Les nomenclatures sont désormais celles des deux natures de matière (R et T) :
+  // le code A devient AI, et le statut SMS disparaît du catalogue. Ses états sont
+  // repris sur AI quand elle existe, sinon supprimés, pour ne pas laisser un code
+  // orphelin ni perdre une saisie faite sous l'ancien nom.
+  const ancienA = conn.prepare('SELECT 1 FROM jalons WHERE code = ?').get('A');
+  if (ancienA) {
+    const cibleDejaLa = conn.prepare('SELECT 1 FROM jalons WHERE code = ?').get('AI');
+    if (!cibleDejaLa) {
+      conn.prepare(
+        "UPDATE jalons SET code = 'AI', libelle = 'Articles Inclus', categorie = 'NOMENCLATURE' WHERE code = 'A'"
+      ).run();
+    }
+    // `card_jalons` référence `jalons` : sans cascade en base, la FK est désactivée
+    // par défaut, on déplace donc les états à la main avant de retirer l'ancien code.
+    if (cibleDejaLa) {
+      const etats = conn.prepare('SELECT card_id, valide, semaine FROM card_jalons WHERE code = ?').all('A') as {
+        card_id: string;
+        valide: number;
+        semaine: number | null;
+      }[];
+      for (const e of etats) {
+        conn.prepare(
+          'INSERT OR REPLACE INTO card_jalons (card_id, code, valide, semaine) VALUES (?, ?, ?, ?)'
+        ).run(e.card_id, 'AI', e.valide, e.semaine);
+      }
+    }
+    conn.prepare('DELETE FROM card_jalons WHERE code = ?').run('A');
+    conn.prepare('DELETE FROM jalons WHERE code = ?').run('A');
+  }
+
+  // SMS a été remplacé par la nomenclature AI : ses états ne se reportent pas sur un
+  // autre code, ils sont simplement retirés avec lui.
+  conn.prepare('DELETE FROM card_jalons WHERE code = ?').run('SMS');
+  conn.prepare('DELETE FROM jalons WHERE code = ?').run('SMS');
+
+  // Les codes du catalogue commun absent d'une base existante (FT l'a rejoint) sont
+  // ajoutés, pour qu'une base créée avant ce changement ne les propose pas.
+  const insertManquant = conn.prepare(
+    'INSERT OR IGNORE INTO jalons (code, libelle, categorie, ordre, cree_le) VALUES (?, ?, ?, ?, ?)'
+  );
+  for (const j of CATALOGUE_INITIAL) {
+    insertManquant.run(j.code, j.libelle, j.categorie, j.ordre, now());
+  }
 }
 
 function now(): string {
   return new Date().toISOString();
 }
 
-/** Date du jour au format JJ/MM/AAAA sur le fuseau Europe/Paris, comme le client. */
+/** Date du jour au format JJ/MM/AAAA sur le fuseau du site (GMT+3), comme le client. */
 function dateDuJour(): string {
   return new Intl.DateTimeFormat('fr-FR', {
-    timeZone: 'Europe/Paris',
+    timeZone: 'Etc/GMT-3',
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
@@ -104,7 +168,7 @@ function seedIfEmpty(conn: DatabaseSync): void {
   if (count.n > 0) return;
 
   const insertJalon = conn.prepare(
-    'INSERT INTO jalons (code, libelle, ordre, cree_le) VALUES (?, ?, ?, ?)'
+    'INSERT INTO jalons (code, libelle, categorie, ordre, cree_le) VALUES (?, ?, ?, ?, ?)'
   );
   const insertCard = conn.prepare(
     'INSERT INTO cards (id, data, cree_le, maj_le) VALUES (?, ?, ?, ?)'
@@ -113,8 +177,8 @@ function seedIfEmpty(conn: DatabaseSync): void {
     'INSERT INTO card_jalons (card_id, code, valide, semaine) VALUES (?, ?, ?, ?)'
   );
 
-  for (const j of CATALOGUE_INITIAL) {
-    insertJalon.run(j.code, j.libelle, j.ordre, now());
+  for (const j of cataloguePourType('R')) {
+    insertJalon.run(j.code, j.libelle, j.categorie, j.ordre, now());
   }
 
   const stamp = now();
@@ -122,7 +186,7 @@ function seedIfEmpty(conn: DatabaseSync): void {
     // Les colonnes dt/tc/sms/rdl de l'ancien jeu de données sont converties ici
     // en lignes card_jalons : c'est l'unique point de bascule du format figé.
     const ancien = card as unknown as Record<string, unknown>;
-    const etats: CardJalon[] = CATALOGUE_INITIAL.map((j) => {
+    const etats: CardJalon[] = cataloguePourType('R').map((j) => {
       const champ = j.code.toLowerCase();
       const semaine = normaliserSemaineDb(ancien[`${champ}Semaine`]);
       return {
@@ -165,11 +229,37 @@ function getDb(): DatabaseSync {
 
 /* ------------------------------------------------------------------ jalons */
 
+/** Ligne de la table `jalons`, avec la grandeur qui décide de la couleur. */
+interface JalonRow {
+  code: string;
+  libelle: string;
+  categorie: string;
+  ordre: number;
+}
+
+/** Une grandeur en base peut être plus ancienne ou Alté : on retombe sur le code. */
+function lireCategorie(row: JalonRow): JalonCategorie {
+  return row.categorie === 'NOMENCLATURE' || row.categorie === 'STATUT'
+    ? row.categorie
+    : categorieParCode(row.code);
+}
+
+function versCatalogue(row: JalonRow): JalonCatalogue {
+  return {
+    code: row.code,
+    libelle: row.libelle,
+    categorie: lireCategorie(row),
+    ordre: row.ordre,
+  };
+}
+
+const SELECT_JALON = 'SELECT code, libelle, categorie, ordre FROM jalons';
+
 export function listJalons(): JalonCatalogue[] {
   const rows = getDb()
-    .prepare('SELECT code, libelle, ordre FROM jalons ORDER BY ordre ASC, code ASC')
-    .all() as { code: string; libelle: string; ordre: number }[];
-  return rows.map((r) => ({ code: r.code, libelle: r.libelle, ordre: r.ordre }));
+    .prepare(`${SELECT_JALON} ORDER BY ordre ASC, code ASC`)
+    .all() as unknown as JalonRow[];
+  return rows.map(versCatalogue);
 }
 
 /** Code normalisé : 3 caractères maximum, sans espace, pour rester lisible en pastille. */
@@ -181,48 +271,102 @@ export function normaliserCodeJalon(value: unknown): string {
     .slice(0, 3);
 }
 
-export function createJalon(code: string, libelle: string): JalonCatalogue {
+/**
+ * Grandeur demandée. Absente, elle est déduite du code ; fournie mais invalide,
+ * c'est une erreur de client : on la refuse plutôt que d'en deviner une autre,
+ * sinon l'utilisateur verrait une couleur qui n'est pas celle qu'il a choisie.
+ */
+function lireCategorieDemandee(categorie: unknown, code: string): JalonCategorie {
+  if (categorie === undefined || categorie === null || categorie === '') {
+    return categorieParCode(code);
+  }
+  if (categorie !== 'NOMENCLATURE' && categorie !== 'STATUT') {
+    throw new Error('Grandeur de jalon invalide : utilisez NOMENCLATURE ou STATUT');
+  }
+  return categorie;
+}
+
+/**
+ * Ajoute un jalon à UNE carte. Le code et son intitulé restent dans le catalogue
+ * partagé (une seule base pour tout le monde), mais l'état n'est créé que pour la
+ * carte visée : un jalon added sur un modèle ne touche pas les autres cartes.
+ * Renvoie le jalon du catalogue et l'état initial de la carte.
+ */
+export function createJalon(
+  code: string,
+  libelle: string,
+  categorie?: unknown,
+  cardId?: string
+): JalonCatalogue {
   const conn = getDb();
   const propre = normaliserCodeJalon(code);
   if (!propre) throw new Error('Le code du jalon est obligatoire');
 
-  const doublon = conn.prepare('SELECT code FROM jalons WHERE code = ?').get(propre);
-  if (doublon) throw new Error(`Le jalon ${propre} existe déjà`);
-
   const texte = String(libelle ?? '').trim() || propre;
-  const max = conn.prepare('SELECT MAX(ordre) AS m FROM jalons').get() as { m: number | null };
-  const ordre = (max.m ?? 0) + 10;
+  let jalon = conn.prepare(`${SELECT_JALON} WHERE code = ?`).get(propre) as
+    | JalonRow
+    | undefined;
 
-  conn.prepare('INSERT INTO jalons (code, libelle, ordre, cree_le) VALUES (?, ?, ?, ?)').run(
-    propre,
-    texte,
-    ordre,
-    now()
-  );
+  if (!jalon) {
+    const max = conn.prepare('SELECT MAX(ordre) AS m FROM jalons').get() as { m: number | null };
+    const ordre = (max.m ?? 0) + 10;
+    // La grandeur est figée à la création : elle décide de la couleur partout.
+    const cat = lireCategorieDemandee(categorie, propre);
+    conn
+      .prepare('INSERT INTO jalons (code, libelle, categorie, ordre, cree_le) VALUES (?, ?, ?, ?, ?)')
+      .run(propre, texte, cat, ordre, now());
+    jalon = { code: propre, libelle: texte, categorie: cat, ordre };
+  }
 
-  // Le catalogue est global : toutes les cartes existantes démarrent le jalon
-  // à « En attente », matérialisé tout de suite pour rester explicite en base.
-  const cartes = conn.prepare('SELECT id FROM cards').all() as { id: string }[];
-  const insert = conn.prepare(
-    'INSERT OR IGNORE INTO card_jalons (card_id, code, valide, semaine) VALUES (?, ?, 0, NULL)'
-  );
-  for (const c of cartes) insert.run(c.id, propre);
+  if (cardId) {
+    const carte = conn.prepare('SELECT id FROM cards WHERE id = ?').get(cardId);
+    if (!carte) throw new Error(`Carte inconnue : ${cardId}`);
+    // Une carte ne porte qu'une occurrence de chaque code : le jalon est unique par modèle.
+    conn
+      .prepare(
+        'INSERT OR IGNORE INTO card_jalons (card_id, code, valide, semaine) VALUES (?, ?, 0, NULL)'
+      )
+      .run(cardId, propre);
+  }
 
-  return { code: propre, libelle: texte, ordre };
+  return versCatalogue(jalon);
 }
 
+/** Retire un jalon d'UNE carte. Le catalogue partagé n'est pas touché :
+ *  les autres cartes qui portent ce code le conservent. */
+export function deleteJalonForCard(cardId: string, code: string): void {
+  const conn = getDb();
+  const carte = conn.prepare('SELECT id FROM cards WHERE id = ?').get(cardId);
+  if (!carte) throw new Error(`Carte inconnue : ${cardId}`);
+  conn.prepare('DELETE FROM card_jalons WHERE card_id = ? AND code = ?').run(cardId, code);
+}
+
+/** Renomme l'intitulé partagé d'un code, sans toucher aux cartes qui le portent. */
 export function renameJalon(code: string, libelle: string): JalonCatalogue {
   const conn = getDb();
-  const row = conn.prepare('SELECT code, libelle, ordre FROM jalons WHERE code = ?').get(code) as
-    | { code: string; libelle: string; ordre: number }
-    | undefined;
+  const row = conn.prepare(`${SELECT_JALON} WHERE code = ?`).get(code) as JalonRow | undefined;
   if (!row) throw new Error(`Jalon inconnu : ${code}`);
 
   const texte = String(libelle ?? '').trim() || row.libelle;
   conn.prepare('UPDATE jalons SET libelle = ? WHERE code = ?').run(texte, code);
-  return { code: row.code, libelle: texte, ordre: row.ordre };
+  return versCatalogue({ ...row, libelle: texte });
 }
 
+/** Change la grandeur d'un code : vert pour une nomenclature, bleu pour un statut.
+ *  Toute la base s'y recolore, la grandeur étant portée par le catalogue. */
+export function setJalonCategorie(code: string, categorie: unknown): JalonCatalogue {
+  const conn = getDb();
+  const row = conn.prepare(`${SELECT_JALON} WHERE code = ?`).get(code) as JalonRow | undefined;
+  if (!row) throw new Error(`Jalon inconnu : ${code}`);
+  if (categorie !== 'NOMENCLATURE' && categorie !== 'STATUT') {
+    throw new Error('Grandeur de jalon invalide : utilisez NOMENCLATURE ou STATUT');
+  }
+  conn.prepare('UPDATE jalons SET categorie = ? WHERE code = ?').run(categorie, code);
+  return versCatalogue({ ...row, categorie });
+}
+
+/** Supprime un code du catalogue partagé. Le `ON DELETE CASCADE` de `card_jalons`
+ *  retire le jalon de toutes les cartes qui le portaient. */
 export function deleteJalon(code: string): void {
   const conn = getDb();
   const row = conn.prepare('SELECT code FROM jalons WHERE code = ?').get(code);

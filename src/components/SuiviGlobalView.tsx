@@ -452,22 +452,9 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           }
         >
           <div className="flex items-center gap-1.5">
-            {linkedCard && !isMergedModele && (
-              <span
-                className={`w-2 h-2 rounded-full shrink-0 ${
-                  linkedCard.statut === 'TERMINE'
-                    ? 'bg-emerald-500'
-                    : linkedCard.statut === 'EN_COURS'
-                    ? 'bg-blue-500'
-                    : linkedCard.statut === 'BLOQUE'
-                    ? 'bg-rose-500'
-                    : 'bg-amber-500'
-                }`}
-              />
-            )}
             <span
               className={`font-bold text-[11px] sm:text-xs leading-snug line-clamp-1 ${
-                isMergedModele ? 'text-blue-700 pr-12' : 'text-slate-900'
+                isMergedModele ? 'text-slate-900 pr-12' : 'text-slate-900'
               }`}
             >
               {label}
@@ -475,17 +462,35 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           </div>
 
           {isMergedModele ? (
-            <div className="flex items-center justify-between gap-2 mt-1">
+            <div className="flex flex-col gap-1 mt-1">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
-                  Réf.
+                  Statut
                 </span>
-                <span className="text-[10px] font-mono font-semibold text-slate-600 truncate">
-                  {linkedCard?.reference || '—'}
+                <span
+                  className={`text-[9px] font-semibold uppercase tracking-wider truncate ${
+                    linkedCard?.statut === 'TERMINE'
+                      ? 'text-emerald-600'
+                      : linkedCard?.statut === 'EN_COURS'
+                      ? 'text-blue-600'
+                      : linkedCard?.statut === 'BLOQUE'
+                      ? 'text-rose-600'
+                      : 'text-amber-600'
+                  }`}
+                >
+                  {linkedCard?.statut === 'TERMINE' ? 'Terminé' : linkedCard?.statut === 'EN_COURS' ? 'En cours' : linkedCard?.statut === 'BLOQUE' ? 'Bloqué' : 'À démarrer'}
                 </span>
               </div>
-              {progress !== null ? (
-                <div className="flex items-center gap-1 shrink-0">
+              <div className="flex items-center gap-1.5 min-w-0">
+                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
+                  Nomenclature
+                </span>
+                <span className="text-[10px] font-mono font-semibold text-slate-600 truncate">
+                  {slotCard?.customLabel ?? '—'}
+                </span>
+              </div>
+              {progress !== null && (
+                <div className="flex items-center justify-end gap-1 mt-0.5">
                   <div className="w-14 h-1.5 bg-slate-200 rounded-full overflow-hidden">
                     <div
                       className={`h-full ${
@@ -498,19 +503,16 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                     {progress}%
                   </span>
                 </div>
-              ) : (
-                <span className="text-[10px] font-semibold text-slate-300 shrink-0">
-                  —%
-                </span>
               )}
             </div>
           ) : (
-            subLabel && (
+            subLabel ? (
               <div className="text-[10px] text-slate-500 font-mono truncate mt-0.5">
                 {subLabel}
               </div>
-            )
+            ) : null
           )}
+          <span />
 
           {/* Expedition Specific Tags */}
           {slotType === 'expedition' && slotCard?.dateExpedition && (
@@ -854,18 +856,18 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                               : 'border-slate-200/90'
                           }`}
                         >
-                          {isRowAlert && (
-                            <div
-                              className="flex items-center gap-1.5 px-2.5 py-1 mb-1.5 rounded-lg bg-rose-600 text-white shadow-2xs motion-safe:animate-pulse"
-                              title={`ALERTE : ${detailAlerte}`}
-                            >
-                              <AlertTriangle className="w-3 h-3 shrink-0" />
-                              <span className="text-[10px] font-extrabold uppercase tracking-wider truncate">
-                                ALERTE : {causesAlerte.join(', ')}
-                              </span>
-                              <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white shrink-0 motion-safe:animate-ping" />
-                            </div>
-                          )}
+{isRowAlert && (
+                              <div
+                                className="flex items-center gap-1.5 px-2.5 py-1 mb-1.5 rounded-lg bg-red-600 text-white shadow-2xs motion-safe:animate-pulse"
+                                title={`ALERTE : ${detailAlerte}`}
+                              >
+                                <AlertTriangle className="w-3 h-3 shrink-0" />
+                                <span className="text-[10px] font-extrabold uppercase tracking-wider truncate">
+                                  ALERTE : {causesAlerte.join(', ')}
+                                </span>
+                                <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white shrink-0 motion-safe:animate-ping" />
+                              </div>
+                            )}
 
                           {renderCardSlotContent(
                             row.modeleEnCoursCard,

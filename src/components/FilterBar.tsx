@@ -1,8 +1,7 @@
 import React from 'react';
 import { Search, Filter, ArrowUpDown } from 'lucide-react';
-import { CardStatus } from '../types/card.ts';
-import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
-import { filtreJalonManquant } from '../utils/jalons.ts';
+import { CardStatus, JalonCatalogue } from '../types/card.ts';
+import { filtreJalonManquant, groupesParCategorie, titreCategorie } from '../utils/jalons.ts';
 
 export type SortField = 'resteAProduire' | 'quantiteDemandee' | 'client' | 'statut' | 'dateCreation';
 export type SortOrder = 'asc' | 'desc';
@@ -13,7 +12,7 @@ interface FilterBarProps {
   statusFilter: string;
   onStatusFilterChange: (status: string) => void;
   /** 'ALL', 'OK_PROD', 'OK_PROD_PENDING', 'HAS_SOUS_TRAITANCE', 'ALL_VALIDATED'
-   *  ou `JALON_MISSING:<CODE>` pour un code du catalogue global. */
+   *  ou `JALON_MISSING:<CODE>` pour un code porté par au moins une carte. */
   flagFilter: string;
   onFlagFilterChange: (flag: string) => void;
   sortField: SortField;
@@ -22,6 +21,8 @@ interface FilterBarProps {
   uniqueClients: string[];
   selectedClient: string;
   onClientChange: (client: string) => void;
+  /** Codes réellement portés par au moins une carte, dans l'ordre du catalogue. */
+  jalonsUtilises: JalonCatalogue[];
 }
 
 export const FilterBar: React.FC<FilterBarProps> = ({
@@ -37,8 +38,11 @@ export const FilterBar: React.FC<FilterBarProps> = ({
   uniqueClients,
   selectedClient,
   onClientChange,
+  jalonsUtilises,
 }) => {
-  const catalogue = useJalonCatalogue();
+  // Les codes du filtre sont regroupés par catégorie, dans le même ordre que le
+  // reste de l'interface : nomenclatures d'abord, puis statuts.
+  const groupesFiltre = groupesParCategorie(jalonsUtilises);
 
   return (
     <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-xs mb-4">
@@ -89,22 +93,28 @@ export const FilterBar: React.FC<FilterBarProps> = ({
             </select>
           )}
 
-          {/* Filtres jalons : une entrée par code du catalogue global */}
+          {/* Filtre par grandeur : les codes sont groupés par catégorie, avec un intitulé
+              par groupe. Les options globales restent en tête et en fin de liste,
+              elles ne dépendent d'aucun code en particulier. */}
           <select
             value={flagFilter}
             onChange={(e) => onFlagFilterChange(e.target.value)}
             className="bg-slate-50 border border-slate-200 text-xs font-medium text-slate-700 rounded-lg px-2.5 py-2 focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 cursor-pointer"
           >
-            <option value="ALL">Tous les jalons & validations</option>
+            <option value="ALL">Toutes les catégories</option>
             <option value="OK_PROD">Accord OK Prod validé</option>
             <option value="OK_PROD_PENDING">En attente accord OK Prod</option>
             <option value="HAS_SOUS_TRAITANCE">Avec sous-traitance (OF externes)</option>
-            {catalogue.map((j) => (
-              <option key={j.code} value={filtreJalonManquant(j.code)}>
-                {j.code} non validé ({j.libelle})
-              </option>
+            {groupesFiltre.map((groupe) => (
+              <optgroup key={groupe.categorie} label={titreCategorie(groupe.categorie)}>
+                {groupe.jalons.map((j) => (
+                  <option key={j.code} value={filtreJalonManquant(j.code)}>
+                    {j.code} non validé ({j.libelle})
+                  </option>
+                ))}
+              </optgroup>
             ))}
-            <option value="ALL_VALIDATED">Tous les jalons validés</option>
+            <option value="ALL_VALIDATED">Tous validés</option>
           </select>
 
           {/* Sort */}

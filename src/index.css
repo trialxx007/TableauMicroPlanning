@@ -1,1 +1,42 @@
 @import "tailwindcss";
+
+/* Popover d'alerte : apparition en fondu + léger échelle, ancrée sur la bande
+   qui l'a déclenchée. Défini ici, Tailwind ne fournissant pas d'utilitaire. */
+@keyframes popover-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-popover-in {
+  animation: popover-in 0.15s ease-out;
+}
+
+/* Nouvelle carte de contrôle (colonne Inspection) : fondu + glissement vers
+   le haut, le temps que le focus atterrisse dans son champ de saisie. */
+@keyframes carte-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-carte-in {
+  animation: carte-in 0.2s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-popover-in,
+  .animate-carte-in {
+    animation: none;
+  }
+}

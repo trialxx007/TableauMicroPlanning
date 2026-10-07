@@ -30,12 +30,15 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({
   const bloqueesCount = cards.filter((c) => c.statut === 'BLOQUE').length;
   const enAttenteCount = cards.filter((c) => c.statut === 'EN_ATTENTE').length;
 
-  // RDL : Réunion De Lancement. La carte RDL disparaît du tableau des KPI si
-  // le jalon sort du catalogue global, sinon le décompte resterait figé à zéro.
+  // RDL : Réunion De Lancement. Le jalon est propre à chaque carte : seuls les
+  // modèles qui le portent comptent, et la carte RDL disparaît du bandeau si plus
+  // aucune carte ne le porte, sinon le décompte resterait figé à zéro.
+  const cartesAvecRDL = cards.filter((c) => (c.jalons ?? []).some((j) => j.code === 'RDL'));
   const jalonRDL = catalogue.find((j) => j.code === 'RDL');
-  const rdlProgrammes = jalonRDL ? cards.filter((c) => getEtatJalon(c, 'RDL').valide).length : 0;
-  const rdlAProgrammer = jalonRDL
-    ? cards.filter((c) => !getEtatJalon(c, 'RDL').valide && c.statut !== 'TERMINE').length
+  const rdlActif = Boolean(jalonRDL) && cartesAvecRDL.length > 0;
+  const rdlProgrammes = rdlActif ? cartesAvecRDL.filter((c) => getEtatJalon(c, 'RDL').valide).length : 0;
+  const rdlAProgrammer = rdlActif
+    ? cartesAvecRDL.filter((c) => !getEtatJalon(c, 'RDL').valide && c.statut !== 'TERMINE').length
     : 0;
 
   const handleCardClick = (filter: KpiFilterType) => {
@@ -107,8 +110,8 @@ export const StatsOverview: React.FC<StatsOverviewProps> = ({
         </div>
       </div>
 
-      {/* 2. RDL (Réunion De Lancement) — masqué si le jalon a quitté le catalogue */}
-      {jalonRDL && (
+      {/* 2. RDL (Réunion De Lancement) — masqué si aucune carte ne porte le jalon */}
+      {rdlActif && (
         <div
           onClick={() => handleCardClick('RDL')}
         role="button"

@@ -8,6 +8,7 @@ import {
   createJalon,
   deleteCard,
   deleteJalon,
+  deleteJalonForCard,
   getCard,
   insertCard,
   listCards,
@@ -15,6 +16,7 @@ import {
   prochainIdCarte,
   renameJalon,
   resetDatabase,
+  setJalonCategorie,
   updateCardData,
 } from './db.ts';
 
@@ -56,15 +58,21 @@ function calculateReste(demandee: number, finie: number): number {
   return Math.max(0, demandee - finie);
 }
 
+// Fuseau du site : GMT+3 (Etc/GMT-3), décalage fixe. Les horodatages des points
+// restent donc identiques quel que soit le poste qui écrit dans la base.
+const FUSEAU_HORAIRE = 'Etc/GMT-3';
+
 // Helper to format date and time
 function getCurrentDateTime() {
   const now = new Date();
   const dateStr = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: FUSEAU_HORAIRE,
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
   }).format(now);
   const timeStr = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: FUSEAU_HORAIRE,
     hour: '2-digit',
     minute: '2-digit',
   }).format(now);
@@ -76,15 +84,21 @@ const apiRouter = express.Router();
 
 /* ------------------------------------------------------------------ jalons */
 
-// Catalogue global des types de jalons, partagé par toutes les cartes.
+// Catalogue partagé des jalons : une seule base pour tout le monde. Il porte les
+// codes, leurs intitulés et leur grandeur (vert / bleu), pas les états : un jalon
+// ajouté sur une carte n'existe que sur cette carte (voir `card_jalons`).
 apiRouter.get('/jalons', (_req: Request, res: Response) => {
   res.json({ success: true, count: listJalons().length, data: listJalons() });
 });
 
-// Ajout d'un type de jalon au catalogue. Il devient disponible sur toutes les cartes.
+/**
+ * Ajout d'un jalon. `cardId` designates la carte qui le porte : sans lui, seul
+ * l'enregistrement au catalogue partagé est fait.
+ */
 apiRouter.post('/jalons', (req: Request, res: Response) => {
   try {
-    const created = createJalon(req.body?.code, req.body?.libelle);
+    const cardId = typeof req.body?.cardId === 'string' ? req.body.cardId : undefined;
+    const created = createJalon(req.body?.code, req.body?.libelle, req.body?.categorie, cardId);
     res.status(201).json({ success: true, data: created, message: `Jalon ${created.code} ajouté` });
   } catch (err) {
     res.status(400).json({ success: false, error: (err as Error).message });
@@ -93,12 +107,29 @@ apiRouter.post('/jalons', (req: Request, res: Response) => {
 
 apiRouter.patch('/jalons/:code', (req: Request, res: Response) => {
   try {
-    res.json({ success: true, data: renameJalon(req.params.code, req.body?.libelle) });
+    // La grandeur est indépendante de l'intitulé : seule celle qui est présente
+    // est écrite, l'autre garde sa valeur.
+    const data =
+      req.body?.categorie !== undefined
+        ? setJalonCategorie(req.params.code, req.body.categorie)
+        : renameJalon(req.params.code, req.body?.libelle);
+    res.json({ success: true, data });
   } catch (err) {
     res.status(400).json({ success: false, error: (err as Error).message });
   }
 });
 
+// Retrait du jalon sur une seule carte : le catalogue et les autres cartes restent intacts.
+apiRouter.delete('/cards/:cardId/jalons/:code', (req: Request, res: Response) => {
+  try {
+    deleteJalonForCard(req.params.cardId, req.params.code);
+    res.json({ success: true, message: `Jalon ${req.params.code} retiré de la carte` });
+  } catch (err) {
+    res.status(400).json({ success: false, error: (err as Error).message });
+  }
+});
+
+// Suppression d'un code du catalogue partagé : le jalon disparaît de toutes les cartes.
 apiRouter.delete('/jalons/:code', (req: Request, res: Response) => {
   try {
     deleteJalon(req.params.code);
@@ -150,21 +181,32 @@ apiRouter.get('/cards/:id', (req: Request, res: Response) => {
   res.json({ success: true, data: card });
 });
 
-/** Nettoie les états de jalons reçus : seuls les codes connus du catalogue sont gardés. */
+/**
+ * Nettoie les états de jalons reçus. Le catalogue partagé est la source des
+ * intitulés : un code inconnu y est enregistré (intitulé = code) plutôt que
+ * jeté, sinon le jalon ajouté sur une carte neuve disparaîtrait à l'enregistrement.
+ */
 function parseJalons(value: unknown): CardJalon[] | undefined {
   if (!Array.isArray(value)) return undefined;
   const connus = new Set(listJalons().map((j) => j.code));
-  return value
-    .filter((j): j is CardJalon => Boolean(j) && typeof (j as CardJalon).code === 'string')
-    .map((j) => {
-      const semaine = Number(j.semaine);
-      return {
-        code: (j as CardJalon).code,
-        valide: Boolean((j as CardJalon).valide),
-        ...(Number.isFinite(semaine) && semaine >= 1 && semaine <= 53 ? { semaine } : {}),
-      };
-    })
-    .filter((j) => connus.has(j.code));
+  const codes = new Set<string>();
+  const nettoyes: CardJalon[] = [];
+
+  for (const brut of value) {
+    if (!brut || typeof (brut as CardJalon).code !== 'string') continue;
+    const code = (brut as CardJalon).code;
+    // Un jalon est unique par carte : le premier état gagné est retenu.
+    if (codes.has(code)) continue;
+    codes.add(code);
+    if (!connus.has(code)) createJalon(code, code, (brut as CardJalon).categorie);
+    const semaine = Number((brut as CardJalon).semaine);
+    nettoyes.push({
+      code,
+      valide: Boolean((brut as CardJalon).valide),
+      ...(Number.isFinite(semaine) && semaine >= 1 && semaine <= 53 ? { semaine } : {}),
+    });
+  }
+  return nettoyes;
 }
 
 // POST new card
@@ -182,10 +224,11 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
   const quantiteFinie = Number(body.quantiteFinie) || 0;
 
   const { dateStr, timeStr } = getCurrentDateTime();
-  // Une nouvelle carte démarre avec tous les jalons du catalogue à « En attente ».
+  // Les jalons sont uniques par carte : une nouvelle carte ne démarre avec aucun
+  // jalon, uniquement ceux que l'utilisateur lui affecte.
   const jalons: CardJalon[] = Array.isArray(body.jalons)
     ? (parseJalons(body.jalons) as CardJalon[])
-    : listJalons().map((j) => ({ code: j.code, valide: false }));
+    : [];
 
   const newCard: CardItem = {
     id: prochainIdCarte(),
@@ -193,6 +236,9 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
     nom: String(body.nom).trim(),
     reference: String(body.reference).trim(),
     modele: String(body.modele).trim(),
+    ...(body.typeCarte === 'R' || body.typeCarte === 'T'
+      ? { typeCarte: body.typeCarte }
+      : {}),
     jalons,
     okProd: Boolean(body.okProd),
     ofs: Array.isArray(body.ofs) ? body.ofs : [],
@@ -234,6 +280,11 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
     nom: body.nom ?? existant.nom,
     reference: body.reference ?? existant.reference,
     modele: body.modele ?? existant.modele,
+    ...(body.typeCarte === 'R' || body.typeCarte === 'T'
+      ? { typeCarte: body.typeCarte }
+      : existant.typeCarte
+      ? { typeCarte: existant.typeCarte }
+      : {}),
     jalons: parseJalons(body.jalons) ?? existant.jalons,
     okProd: typeof body.okProd === 'boolean' ? body.okProd : existant.okProd,
     ofs: Array.isArray(body.ofs) ? body.ofs : existant.ofs,
@@ -265,6 +316,7 @@ const CHAMPS_MODIFIABLES = [
   'nom',
   'reference',
   'modele',
+  'typeCarte',
   'okProd',
   'dateOkProd',
   'dateRdl',
@@ -299,7 +351,7 @@ apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
   }
 
   // Liste blanche explicite : un PATCH ne doit pas pouvoir réécrire les champs
-  // qu'il ne connaît pas (dateCreation, id, champs dérivés…).
+  // qu'il ne connaît pas (dateCreation, id, champs dérivés⬦).
   const patch: Partial<CardItem> = {
     quantiteDemandee,
     quantiteFinie,

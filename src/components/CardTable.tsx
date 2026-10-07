@@ -1,6 +1,17 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { CardItem, CardStatus, JalonCode } from '../types/card.ts';
-import { getJalonsCard, getEtatJalon, type JalonEtat } from '../utils/jalons.ts';
+import {
+  getJalonsCard,
+  getEtatJalon,
+  marqueJalon,
+  detailJalon,
+  groupesParCategorie,
+  libelleCategorie,
+  themeJalon,
+  titreCategorie,
+  type JalonEtat,
+} from '../utils/jalons.ts';
+import { categorieParCode } from '../data/mockJalons.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
 import { getSemaineISO } from '../utils/dateFrance.ts';
 import {
@@ -65,12 +76,65 @@ export const CardTable: React.FC<CardTableProps> = ({
     setTimeout(() => setCopiedRef(null), 1800);
   };
 
-  // L'en-tête suit le catalogue : RDL garde sa colonne dédiée, les autres jalons
-  // partagent une colonne dont le libellé est reconstruite à chaque changement.
-  const enteteRDL = catalogue.find((j) => j.code === 'RDL');
+  // L'en-tête suit les codes réellement portés par au moins une carte : le
+  // catalogue n'est plus qu'un dictionnaire (code + intitulé), un code ajouté sur
+  // une seule carte n'ouvre donc pas une colonne pour tout le monde. RDL garde sa
+  // colonne dédiée, les autres jalons partagent une colonne dont le libellé est
+  // reconstruite à chaque changement.
+  const codesUtilises = useMemo(
+    () => new Set(cards.flatMap((c) => (c.jalons ?? []).map((j) => j.code))),
+    [cards]
+  );
+  const catalogueUtilise = catalogue.filter((j) => codesUtilises.has(j.code));
+  const enteteRDL = catalogueUtilise.find((j) => j.code === 'RDL');
   const jalonRDLPresent = Boolean(enteteRDL);
   const codeRDL = enteteRDL?.code ?? 'RDL';
-  const enteteJalons = catalogue.filter((j) => j.code !== 'RDL');
+  const enteteJalons = catalogueUtilise.filter((j) => j.code !== 'RDL');
+
+  // En-tête élargi aux codes portés par une carte mais absents du catalogue : leur
+  // grandeur est déduite du code, ils rejoignent donc le groupe correspondant plutôt
+  // que d'être laissés à part à droite, sans groupe ni intitulé.
+  const enteteComplet = useMemo(() => {
+    const vues = new Set(enteteJalons.map((j) => j.code));
+    const horsCatalogue = [...codesUtilises]
+      .filter((code) => code !== codeRDL && !vues.has(code))
+      .sort()
+      .map((code, index) => ({
+        code,
+        libelle: code,
+        categorie: categorieParCode(code),
+        ordre: 900 + index,
+      }));
+    return [...enteteJalons, ...horsCatalogue];
+  }, [enteteJalons, codesUtilises, codeRDL]);
+
+  // Colonnes de la pastille de jalons, regroupées par grandeur : les nomenclatures
+  // à la suite, puis les statuts. Chaque pastille occupe une colonne de largeur fixe :
+  // les lignes s'alignent même si une carte ne porte qu'un sous-ensemble de jalons.
+  const groupesEntete = useMemo(() => groupesParCategorie(enteteComplet), [enteteComplet]);
+  const colonnesJalons = useMemo(
+    () => groupesEntete.flatMap((groupe) => groupe.jalons.map((j) => j.code)),
+    [groupesEntete]
+  );
+
+  // Colonne d'ouverture de chaque groupe, pour les libellés et le filet qui les sépare.
+  // Les colonnes du catalogue viennent en tête et les hors catalogue à droite : leurs
+  // index dans `colonnesJalons` sont donc ceux calculés ici.
+  const debutGroupes = useMemo(() => {
+    let offset = 0;
+    return groupesEntete.map((groupe) => {
+      const debut = offset;
+      offset += groupe.jalons.length;
+      return debut;
+    });
+  }, [groupesEntete]);
+
+  // Position du filet entre deux groupes, -1 s'il n'y en a qu'un.
+  const frontiereCategories = debutGroupes[1] ?? -1;
+
+  // Légende de bas de tableau : mêmes groupes que les colonnes, pour que le code
+  // soit lu au même endroit que la pastille.
+  const groupesLegende = groupesEntete;
 
   const handleStartEditFinie = (card: CardItem) => {
     setEditingFinieId(card.id);
@@ -159,24 +223,80 @@ export const CardTable: React.FC<CardTableProps> = ({
               <th className="py-3.5 px-4">Modèle & Nom</th>
               <th className="py-3.5 px-4">
                 Référence
-                {jalonRDLPresent && <span className="ml-1 font-normal normal-case">& {codeRDL}</span>}
+                {/* Le RDL a une colonne à lui, hors du bloc des catégories : son
+                    intitulé de groupe est donc rappelé sur sa propre pastille. */}
+                {jalonRDLPresent && (
+                  <span className="ml-1 font-normal normal-case inline-flex items-center gap-1">
+                    & {codeRDL}
+                    <span
+                      className={`w-1.5 h-1.5 rounded-full inline-block ${
+                        enteteRDL?.categorie === 'NOMENCLATURE' ? 'bg-emerald-500' : 'bg-blue-500'
+                      }`}
+                    />
+                  </span>
+                )}
               </th>
-              <th className="py-3.5 px-4 text-center">
-                <span className="inline-flex items-center gap-1">
-                  {enteteJalons.length > 0
-                    ? enteteJalons.map((j) => j.code).join(' / ')
-                    : 'Jalons'}
+              <th className="py-3.5 px-4 align-top">
+                {/* Deux lignes d'en-tête : les catégories, puis les codes. Chaque
+                    intitulé couvre exactement les colonnes de son groupe, donc les
+                    pastilles des lignes restent en dessous du bon titre. */}
+                <div
+                  className="grid gap-1 justify-items-center w-fit"
+                  style={{
+                    gridTemplateColumns: `repeat(${Math.max(colonnesJalons.length, 1)}, 4.25rem)`,
+                  }}
+                >
+                  {groupesEntete.map((groupe, indexGroupe) => (
+                    <span
+                      key={groupe.categorie}
+                      style={{ gridColumn: `span ${Math.max(groupe.jalons.length, 1)}` }}
+                      className={`justify-self-stretch flex items-center justify-center gap-1 pb-0.5 text-[10px] font-bold tracking-wider whitespace-nowrap ${
+                        indexGroupe > 0 ? 'border-l border-slate-300' : ''
+                      } ${
+                        groupe.categorie === 'NOMENCLATURE' ? 'text-emerald-600' : 'text-blue-600'
+                      }`}
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+                          groupe.categorie === 'NOMENCLATURE' ? 'bg-emerald-500' : 'bg-blue-500'
+                        }`}
+                      />
+                      {titreCategorie(groupe.categorie)}
+                    </span>
+                  ))}
+
+                  {colonnesJalons.map((code, indexColonne) => {
+                    const j = enteteComplet.find((x) => x.code === code);
+                    return (
+                      <span
+                        key={code}
+                        title={j ? `${libelleCategorie(j.categorie)} — ${j.libelle}` : undefined}
+                        className={`text-center text-[11px] leading-tight ${
+                          indexColonne === frontiereCategories ? 'border-l border-slate-300' : ''
+                        }`}
+                      >
+                        {code}
+                      </span>
+                    );
+                  })}
                   <span
-                    className="cursor-help text-slate-400 hover:text-slate-600"
+                    className="col-span-full cursor-help text-slate-400 hover:text-slate-600 flex items-center justify-center gap-1 normal-case tracking-normal font-normal"
                     title={
-                      enteteJalons.length > 0
-                        ? enteteJalons.map((j) => `${j.code}: ${j.libelle}`).join('\n')
-                        : 'Aucun jalon de suivi dans le catalogue'
+                      colonnesJalons.length > 0
+                        ? colonnesJalons
+                            .map((code) => {
+                              const j = enteteComplet.find((x) => x.code === code);
+                              return `${code}: ${j ? j.libelle : 'sans intitulé'}`;
+                            })
+                            .join('\n')
+                        : 'Aucune nomenclature ni statut suivi dans le catalogue'
                     }
                   >
                     <HelpCircle className="w-3 h-3" />
+                    <span className="sr-only">Détail des nomenclatures et des statuts</span>
                   </span>
-                </span>
+                </div>
               </th>
               <th className="py-3.5 px-4 text-center">
                 <span className="inline-flex items-center gap-1">
@@ -205,15 +325,10 @@ export const CardTable: React.FC<CardTableProps> = ({
               // donc de la colonne Jalons pour ne pas la montrer deux fois.
               const jRDL = jalons.find((j) => j.code === 'RDL');
               const autresJalons = jalons.filter((j) => j.code !== 'RDL');
-              const detailRDL = jRDL
-                ? `${jRDL.code} : ${
-                    jRDL.etat === 'VALIDE'
-                      ? 'Validé'
-                      : jRDL.semaine != null
-                      ? `En attente, attendu S${jRDL.semaine}${jRDL.enRetard ? ' — en retard' : ''}`
-                      : 'En attente'
-                  }`
-                : '';
+              // Le RDL a sa propre pastille : mêmes couleurs que la colonne Jalons,
+              // donc même lecture.
+              const themeRDL = jRDL ? themeJalon(jRDL) : null;
+              const detailRDL = jRDL ? detailJalon(jRDL) : '';
               const progressPct =
                 card.quantiteDemandee > 0
                   ? Math.min(
@@ -298,20 +413,19 @@ export const CardTable: React.FC<CardTableProps> = ({
                     </div>
 
                     {/* Jalon de réunion (RDL) — compact au repos, liste box au survol.
-                        Le bloc disparaît si le catalogue ne contient plus de jalon RDL. */}
+                        Le bloc disparaît si le catalogue ne contient plus de jalon RDL.
+                        L'icône d'alerte est en absolu : le texte ne se décale pas. */}
                     {jRDL && (
-                      <div className="mt-1">
+                      <div className="mt-1 flex justify-center">
                         <span className="group/j relative inline-grid" title={detailRDL}>
                           <span
-                            className={`col-start-1 row-start-1 relative z-0 inline-flex items-center justify-center gap-1 min-w-[64px] px-1.5 py-0.5 rounded border text-[10px] font-semibold ${
-                              jRDL.enRetard
-                                ? 'bg-rose-600 text-white border-rose-700 motion-safe:animate-pulse'
-                                : jRDL.etat === 'VALIDE'
-                                ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                : 'bg-amber-50 text-amber-800 border-amber-300'
+                            className={`col-start-1 row-start-1 relative z-0 inline-flex items-center justify-center min-w-[64px] px-1.5 py-0.5 rounded border text-[10px] font-semibold ${themeRDL?.pastille ?? ''} ${
+                              jRDL.enRetard ? 'motion-safe:animate-pulse' : ''
                             }`}
                           >
-                            {jRDL.enRetard && <AlertTriangle className="w-3 h-3" />}
+                            {jRDL.enRetard && (
+                              <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" />
+                            )}
                             <span>
                               {jRDL.code}:{' '}
                               {jRDL.etat === 'VALIDE'
@@ -331,13 +445,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                             }
                             aria-label={`État du jalon ${jRDL.code}`}
                             title={detailRDL}
-                            className={`col-start-1 row-start-1 relative z-10 w-full cursor-pointer rounded border px-1 text-[10px] font-semibold opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto ${
-                              jRDL.enRetard
-                                ? 'bg-rose-600 text-white border-rose-700'
-                                : jRDL.etat === 'VALIDE'
-                                ? 'bg-purple-50 text-purple-700 border-purple-200'
-                                : 'bg-amber-50 text-amber-800 border-amber-300'
-                            }`}
+                            className={`col-start-1 row-start-1 relative z-10 w-full cursor-pointer rounded border px-1 text-[10px] font-semibold opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto ${themeRDL?.pastille ?? ''}`}
                           >
                             <option value="EN_ATTENTE">En attente</option>
                             <option value="SEMAINE">Semaine</option>
@@ -348,39 +456,57 @@ export const CardTable: React.FC<CardTableProps> = ({
                     )}
                   </td>
 
-                  {/* Jalons de suivi — chaque code du catalogue a sa pastille */}
-                  <td className="py-3.5 px-4 whitespace-nowrap text-center">
-                    <div className="inline-flex flex-wrap gap-1 bg-slate-50 p-1 rounded-lg border border-slate-200/60">
-                      {autresJalons.map((j) => {
-                        const colors = j.enRetard
-                          ? 'bg-rose-600 text-white border-rose-700'
-                          : j.etat === 'VALIDE'
-                          ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
-                          : 'bg-slate-200/60 text-slate-500 border border-transparent';
-                        const marque =
-                          j.etat === 'VALIDE' ? '✓' : j.etat === 'SEMAINE' ? `S${j.semaine}` : '—';
-                        const detail = `${j.code} : ${
-                          j.etat === 'VALIDE'
-                            ? 'Validé'
-                            : j.etat === 'SEMAINE'
-                            ? `Semaine S${j.semaine}${j.enRetard ? ' — en retard' : ''}`
-                            : 'En attente'
-                        }`;
+                  {/* Jalons de suivi — une colonne de largeur fixe par code, alignée sur l'en-tête.
+                      Une carte qui ne porte pas un code laisse la case vide : la
+                      pastille reste dans la même colonne d'une ligne à l'autre. */}
+                  <td className="py-3.5 px-4 align-top">
+                    <div
+                      className="grid gap-1 justify-items-center w-fit bg-slate-50 p-1 rounded-lg border border-slate-200/60"
+                      style={{
+                        gridTemplateColumns: `repeat(${Math.max(colonnesJalons.length, 1)}, 4.25rem)`,
+                      }}
+                    >
+                      {colonnesJalons.map((code, indexColonne) => {
+                        // Même filet que dans l'en-tête : la frontière entre les deux
+                        // grandeurs doit être visible sur chaque ligne.
+                        const bordure =
+                          indexColonne === frontiereCategories ? 'border-l border-slate-300' : '';
+                        const j = autresJalons.find((x) => x.code === code);
+                        if (!j) {
+                          return (
+                            <span
+                              key={code}
+                              className={`h-[19px] text-[11px] text-slate-200 text-center leading-[19px] ${bordure}`}
+                              title={`${code} : non porté par cette carte`}
+                            >
+                              –
+                            </span>
+                          );
+                        }
+                        // La couleur porte la grandeur du jalon (vert nomenclature,
+                        // bleu statut) ; seul le retard vire au rouge, pour sauter aux yeux.
+                        const colors = themeJalon(j).pastille;
+                        const detail = detailJalon(j);
 
                         return (
                           <span
                             key={j.code}
-                            className="group/j relative inline-grid shrink-0"
+                            className={`group/j relative inline-grid shrink-0 w-full justify-self-center ${bordure}`}
                             title={detail}
                           >
+                            {j.enRetard && (
+                              <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" />
+                            )}
                             <span
-                              className={`col-start-1 row-start-1 relative z-0 inline-flex items-center justify-center gap-0.5 min-w-[64px] px-1.5 py-0.5 rounded text-[11px] font-bold border ${colors} ${
+                              className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[1.9rem_2.1rem] items-stretch overflow-hidden rounded text-[11px] font-bold border ${colors} ${
                                 j.enRetard ? 'motion-safe:animate-pulse' : ''
                               }`}
                             >
-                              {j.enRetard && <AlertTriangle className="w-3 h-3" />}
-                              <span>
-                                {j.code}: {marque}
+                              <span className="flex items-center justify-center py-0.5 tracking-wide">
+                                {j.code}
+                              </span>
+                              <span className="flex items-center justify-center py-0.5 border-l border-black/10">
+                                {marqueJalon(j)}
                               </span>
                             </span>
                             <select
@@ -431,9 +557,10 @@ export const CardTable: React.FC<CardTableProps> = ({
                           onClick={() =>
                             onUpdateCard(
                               card.id,
-                              // RDL a pu quitter le catalogue : sans lui, seul l'OK Prod est posable.
-                              enteteRDL
-                                ? { okProd: true, ...patchJalonEtat(card, enteteRDL.code, 'VALIDE') }
+                              // Le jalon RDL est propre à la carte : on ne le valide que
+                              // si cette carte le porte, sinon seul l'OK Prod est posable.
+                              (card.jalons ?? []).some((j) => j.code === codeRDL)
+                                ? { okProd: true, ...patchJalonEtat(card, codeRDL, 'VALIDE') }
                                 : { okProd: true }
                             )
                           }
@@ -634,14 +761,24 @@ export const CardTable: React.FC<CardTableProps> = ({
             <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
             OK Prod: Accord préalable de lancement
           </span>
-          {catalogue.map((j) => (
-            <span key={j.code} className="flex items-center gap-1">
-              <span
-                className={`w-2 h-2 rounded-full inline-block ${
-                  j.code === codeRDL ? 'bg-purple-500' : 'bg-emerald-500'
-                }`}
-              ></span>
-              {j.code}: {j.libelle}
+          {/* Légende : les jalons sont listés dans le même ordre que les colonnes,
+              groupés par grandeur, avec l'intitulé de chaque groupe en tête. */}
+          {groupesLegende.map((groupe, indexGroupe) => (
+            <span key={groupe.categorie} className="flex items-center gap-3">
+              {indexGroupe > 0 && <span>•</span>}
+              <span className="font-semibold text-slate-600">
+                {libelleCategorie(groupe.categorie)}
+              </span>
+              {groupe.jalons.map((j) => (
+                <span key={j.code} className="flex items-center gap-1" title={j.libelle}>
+                  <span
+                    className={`w-2 h-2 rounded-full inline-block ${
+                      j.categorie === 'NOMENCLATURE' ? 'bg-emerald-500' : 'bg-blue-500'
+                    }`}
+                  ></span>
+                  {j.code}: {j.libelle}
+                </span>
+              ))}
             </span>
           ))}
         </div>

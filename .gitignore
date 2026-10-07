@@ -7,5 +7,6 @@ coverage/
 .env*
 !.env.example
 
-# Base SQLite locale (données de développement)
-data/
+# Base SQLite locale (données de développement). Ancré à la racine : sans le `/`,
+# le motif attrapait aussi le dossier de sources src/data/.
+/data/

@@ -6,14 +6,15 @@ import {
   Calendar,
   Clock,
   Users2,
-  TableProperties,
 } from 'lucide-react';
-import { getNowParis } from '../utils/dateFrance.ts';
+import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { ViewSwitcher, AppPage } from './ViewSwitcher.tsx';
 
 interface HeaderProps {
   onOpenCreateModal: () => void;
   onResetData: () => void;
-  onOpenSuiviGlobal: () => void;
+  currentPage: AppPage;
+  onChangePage: (page: AppPage) => void;
   cardsCount: number;
   isMeetingFilterActive: boolean;
   onToggleMeetingFilter: () => void;
@@ -23,7 +24,8 @@ interface HeaderProps {
 export const Header: React.FC<HeaderProps> = ({
   onOpenCreateModal,
   onResetData,
-  onOpenSuiviGlobal,
+  currentPage,
+  onChangePage,
   cardsCount,
   isMeetingFilterActive,
   onToggleMeetingFilter,
@@ -42,7 +44,7 @@ export const Header: React.FC<HeaderProps> = ({
   return (
     <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5">
-        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
           {/* Left Title & Status */}
           <div className="flex items-center gap-3">
             <div className="w-11 h-11 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
@@ -70,6 +72,7 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="flex items-center gap-1 font-semibold text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/60">
                   <Clock className="w-3.5 h-3.5 text-blue-600" />
                   {parisTime}
+                  <span className="text-[10px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
                 </span>
                 <span className="text-slate-300">•</span>
                 <span>
@@ -79,21 +82,13 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </div>
 
-          {/* Right Action Buttons */}
-          <div className="flex items-center flex-wrap gap-2.5">
-            {/* Bouton Suivi Global */}
-            <button
-              onClick={onOpenSuiviGlobal}
-              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-bold text-slate-800 hover:text-indigo-900 bg-gradient-to-r from-indigo-50 to-purple-50 hover:from-indigo-100 hover:to-purple-100 border border-indigo-200/90 rounded-lg shadow-2xs hover:shadow-xs transition-all cursor-pointer"
-              title="Accéder au tableau de Suivi Global des chaînes & prochains lancements"
-            >
-              <TableProperties className="w-4 h-4 text-indigo-600" />
-              <span>Suivi Global</span>
-              <span className="text-[10px] bg-indigo-200/70 text-indigo-900 font-semibold px-1.5 py-0.2 rounded-md">
-                Chaînes
-              </span>
-            </button>
+          {/* Center View Switcher */}
+          <div className="flex md:justify-center">
+            <ViewSwitcher currentPage={currentPage} onChangePage={onChangePage} />
+          </div>
 
+          {/* Right Action Buttons */}
+          <div className="flex items-center flex-wrap gap-2.5 md:justify-end">
             {/* Quick Toggle for Daily Standup Focus */}
             <button
               onClick={onToggleMeetingFilter}
