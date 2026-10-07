@@ -13,7 +13,7 @@ import { InspectionCell } from './InspectionCell.tsx';
 import { InspectionEtatMenu } from './InspectionEtatMenu.tsx';
 import { AlertePopover } from './AlertePopover.tsx';
 import { alertesCarte, useAlertesManuelles } from '../utils/alertesManuelles.ts';
-import { getJalonsEnRetard, getJalonsCard } from '../utils/jalons.ts';
+import { getJalonsEnRetard, getJalonsCard, detailJalon, type JalonInfo } from '../utils/jalons.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 import {
   blocEnTexte,
@@ -22,8 +22,8 @@ import {
   normaliserBloc,
 } from '../utils/inspections.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
+import { ViewSwitcher } from './ViewSwitcher.tsx';
 import {
-  ArrowLeft,
   Plus,
   RotateCcw,
   Download,
@@ -68,9 +68,39 @@ interface MenuEtatInspection {
 /** Une case du tableau : au plus 2 cartes empilées. */
 type PileDeCartes = [ChaineSlotCard | null, ChaineSlotCard | null];
 
-/** Ligne telle que vue ici : le modèle de base, plus la colonne Remarque qui
- *  n'existe que dans ce tableau (et dans le localStorage). */
-type SuiviRow = ChaineRow & { remarque?: string };
+/** Ligne telle que vue ici : le modèle de base, plus les deux colonnes Alerte
+ *  (un champ par carte de la pile) qui n'existent que dans ce tableau et dans
+ *  le localStorage. */
+type SuiviRow = ChaineRow & {
+  remarque?: string;
+  remarque2?: string;
+  /** Teinte du badge d'alerte 1 (rouge par défaut). */
+  remarqueTeinte?: TeinteAlerte;
+  remarque2Teinte?: TeinteAlerte;
+};
+
+/** Teintes disponibles pour une alerte saisie dans la colonne Alertes. */
+type TeinteAlerte = 'rouge' | 'orange' | 'ambre' | 'bleu' | 'violet' | 'vert';
+
+const TEINTES_ALERTE: Record<
+  TeinteAlerte,
+  { nom: string; fond: string; bordure: string; pastille: string }
+> = {
+  rouge: { nom: 'Rouge', fond: 'bg-rose-600', bordure: 'border-rose-700', pastille: 'bg-rose-600' },
+  orange: { nom: 'Orange', fond: 'bg-orange-500', bordure: 'border-orange-600', pastille: 'bg-orange-500' },
+  ambre: { nom: 'Ambre', fond: 'bg-amber-500', bordure: 'border-amber-600', pastille: 'bg-amber-500' },
+  bleu: { nom: 'Bleu', fond: 'bg-blue-600', bordure: 'border-blue-700', pastille: 'bg-blue-600' },
+  violet: { nom: 'Violet', fond: 'bg-violet-600', bordure: 'border-violet-700', pastille: 'bg-violet-600' },
+  vert: { nom: 'Vert', fond: 'bg-emerald-600', bordure: 'border-emerald-700', pastille: 'bg-emerald-600' },
+};
+
+const TEINTE_ALERTE_DEFAUT: TeinteAlerte = 'rouge';
+
+function normaliserTeinteAlerte(valeur: unknown): TeinteAlerte {
+  return typeof valeur === 'string' && valeur in TEINTES_ALERTE
+    ? (valeur as TeinteAlerte)
+    : TEINTE_ALERTE_DEFAUT;
+}
 
 /** Un ancien cache peut stocker une carte seule : on la remonte en pile. */
 function enPile(brut: unknown): PileDeCartes {
@@ -120,6 +150,9 @@ function normaliserLignes(brut: unknown): SuiviRow[] {
         ) as unknown as ChaineRow['prochainsLancementsCards'],
         expeditionCard: (reste.expeditionCard as ChaineSlotCard | null | undefined) ?? null,
         remarque: typeof r.remarque === 'string' ? r.remarque : '',
+        remarque2: typeof r.remarque2 === 'string' ? r.remarque2 : '',
+        remarqueTeinte: normaliserTeinteAlerte(r.remarqueTeinte),
+        remarque2Teinte: normaliserTeinteAlerte(r.remarque2Teinte),
       } satisfies SuiviRow;
     });
   return lignes.length > 0 ? lignes : INITIAL_CHAINE_ROWS;
@@ -139,6 +172,144 @@ function computeCardProgress(card?: CardItem): number | null {
   return card && card.quantiteDemandee > 0
     ? Math.min(100, Math.round((card.quantiteFinie / card.quantiteDemandee) * 100))
     : null;
+}
+
+/**
+ * Un champ d'alerte de la colonne Alertes. Saisie libre à l'état vide ; dès que
+ * le texte est là, il s'affiche en badge coloré en gras avec le triangle
+ * d'alerte. La teinte se choisit dans une petite palette (rouge par défaut).
+ */
+function ChampAlerte({
+  valeur,
+  teinte,
+  placeholder,
+  onChanger,
+  onTeinte,
+  libelle,
+}: {
+  valeur: string;
+  teinte: TeinteAlerte;
+  placeholder: string;
+  onChanger: (v: string) => void;
+  onTeinte: (t: TeinteAlerte) => void;
+  libelle: string;
+}) {
+  const [paletteOuverte, setPaletteOuverte] = useState(false);
+  const t = TEINTES_ALERTE[teinte] ?? TEINTES_ALERTE[TEINTE_ALERTE_DEFAUT];
+  const rempli = Boolean(valeur.trim());
+
+  return (
+    <div className="relative flex-1 min-w-0">
+      <div
+        className={`flex items-center gap-1 px-1.5 py-1.5 rounded-lg border transition-colors ${
+          rempli
+            ? `${t.fond} ${t.bordure} shadow-xs`
+            : 'bg-slate-50 border-slate-300 focus-within:border-blue-400 focus-within:bg-white'
+        }`}
+      >
+        <AlertTriangle
+          className={`w-3.5 h-3.5 shrink-0 ${rempli ? 'text-white' : 'text-slate-300'}`}
+          aria-hidden
+        />
+        <input
+          type="text"
+          value={valeur}
+          placeholder={placeholder}
+          onChange={(e) => onChanger(e.target.value)}
+          aria-label={libelle}
+          className={`w-full min-w-0 bg-transparent text-[11px] outline-hidden placeholder:text-slate-400 ${
+            rempli
+              ? 'text-white font-bold placeholder:text-white/70'
+              : 'text-slate-700 font-medium'
+          }`}
+        />
+        <button
+          type="button"
+          onClick={() => setPaletteOuverte((o) => !o)}
+          title="Changer la couleur de l'alerte"
+          aria-haspopup="menu"
+          aria-expanded={paletteOuverte}
+          className={`shrink-0 w-4 h-4 rounded-full border-2 transition-transform hover:scale-110 ${
+            rempli ? 'border-white/80' : 'border-slate-300'
+          } ${t.pastille}`}
+        />
+      </div>
+
+      {paletteOuverte && (
+        <>
+          <div
+            className="fixed inset-0 z-30"
+            onClick={() => setPaletteOuverte(false)}
+            aria-hidden
+          />
+          <div
+            role="menu"
+            className="absolute right-0 top-full mt-1 z-40 flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1.5 shadow-lg"
+          >
+            {(Object.keys(TEINTES_ALERTE) as TeinteAlerte[]).map((id) => {
+              const option = TEINTES_ALERTE[id];
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  role="menuitem"
+                  title={option.nom}
+                  onClick={() => {
+                    onTeinte(id);
+                    setPaletteOuverte(false);
+                  }}
+                  className={`w-5 h-5 rounded-full ${option.pastille} transition-transform hover:scale-110 ${
+                    teinte === id ? 'ring-2 ring-slate-400 ring-offset-1' : ''
+                  }`}
+                />
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Une pastille de jalon. Vert (nomenclature) ou bleu (statut) à l'état normal ;
+ * en cas de retard elle vire au rouge avec un triangle d'alerte, comme une
+ * petite punaise posée sur la carte — uniquement pour les retards, les autres
+ * états gardent leur couleur d'origine.
+ */
+function PastilleJalon({ jalon }: { jalon: JalonInfo }) {
+  const teinte =
+    jalon.categorie === 'NOMENCLATURE'
+      ? {
+          fond: 'bg-emerald-50',
+          bordure: 'border-emerald-200',
+          texte: 'text-emerald-800',
+          marque: 'text-emerald-600',
+        }
+      : {
+          fond: 'bg-blue-50',
+          bordure: 'border-blue-200',
+          texte: 'text-blue-800',
+          marque: 'text-blue-600',
+        };
+
+  const classes = jalon.enRetard
+    ? `inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600 border border-rose-700 text-white text-[10px] font-semibold shadow-xs w-fit motion-safe:animate-pulse`
+    : `inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${teinte.fond} ${teinte.bordure} ${teinte.texte} text-[10px] font-semibold shadow-xs w-fit`;
+
+  return (
+    <div className={classes} title={detailJalon(jalon)}>
+      {jalon.enRetard && <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden />}
+      <span className="font-bold">{jalon.code}</span>
+      {jalon.etat === 'SEMAINE' && jalon.semaine != null ? (
+        <span className="font-mono">S{jalon.semaine}</span>
+      ) : jalon.etat === 'VALIDE' ? (
+        <span className={jalon.enRetard ? 'text-white' : teinte.marque}>✓</span>
+      ) : (
+        <span className={jalon.enRetard ? 'text-white/80' : `${teinte.marque}/70`}>—</span>
+      )}
+    </div>
+  );
 }
 
 function buildBanner(
@@ -295,7 +466,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
   const handleCellChange = (
     rowId: string,
-    field: 'nom' | 'remarque',
+    field: 'nom' | 'remarque' | 'remarque2' | 'remarqueTeinte' | 'remarque2Teinte',
     value: string
   ) => {
     setRows((prev) =>
@@ -413,6 +584,9 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       prochainsLancementsCards: lancementsVides(),
       expeditionCard: null,
       remarque: '',
+      remarque2: '',
+      remarqueTeinte: TEINTE_ALERTE_DEFAUT,
+      remarque2Teinte: TEINTE_ALERTE_DEFAUT,
     };
 
     setRows((prev) => [...prev, newRow]);
@@ -443,11 +617,12 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
   const handleExportCSV = () => {
     const headers = [
-      'Divers',
+      'Type',
       'Chaîne',
       'Modèle en cours',
       'Inspection',
-      'Remarque',
+      'Alerte 1',
+      'Alerte 2',
       ...Array.from(
         { length: NOMBRE_LANCEMENTS },
         (_, i) => `Prochain Lancement ${i + 1}`
@@ -476,6 +651,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         modeleEnCoursText,
         inspectionText,
         r.remarque ?? '',
+        r.remarque2 ?? '',
         ...lancementsTexts,
         expeditionText,
       ].map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`);
@@ -507,6 +683,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       r.nom.toLowerCase().includes(q) ||
       libellesModeles.some((l) => l && l.toLowerCase().includes(q)) ||
       (r.remarque ?? '').toLowerCase().includes(q) ||
+      (r.remarque2 ?? '').toLowerCase().includes(q) ||
       r.inspections.some((b) => b.commentaire.toLowerCase().includes(q))
     );
   });
@@ -556,6 +733,17 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           const jalonsNomenclatures = jalonsCarte.filter((j) => j.categorie === 'NOMENCLATURE');
           const jalonsStatuts = jalonsCarte.filter((j) => j.categorie === 'STATUT');
 
+    // La case jauge deux cases empilées : si l'autre slot est déjà rempli, le
+    // slot vide reste compact (min-h) et la carte occupe tout le reste.
+    const pileCourante =
+      slotType === 'modeleEnCours'
+        ? row.modeleEnCoursCards
+        : slotType === 'lancement' && lancementIndex != null
+        ? (row.prochainsLancementsCards?.[lancementIndex] ?? [])
+        : [];
+    const autreSlotRempli =
+      slotIndex != null ? Boolean(pileCourante[1 - slotIndex]) : false;
+
     if (!label) {
       return (
         <button
@@ -568,24 +756,24 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               slotTitle: titreSlot,
             })
           }
-          className="w-full h-full min-h-[50px] flex items-center justify-center text-[11px] font-medium text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 rounded-xl transition-all border border-dashed border-slate-200 hover:border-blue-300 cursor-pointer p-1"
-          title="Cliquez pour assigner une carte du Point Commande Journalière"
-        >
-          <span className="flex items-center gap-1">
-            <Plus className="w-3 h-3" />
-            <span>
-              {slotType === 'expedition'
-                ? '+ Expédition'
-                : slotType === 'modeleEnCours'
-                ? slotIndex === 1
-                  ? '+ Carte 2'
-                  : '+ Carte'
-                : slotIndex === 1
-                ? '+'
-                : `#${(lancementIndex || 0) + 1}`}
-            </span>
-          </span>
-        </button>
+              className={`w-full min-h-[50px] flex items-center justify-center text-[11px] font-medium text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 rounded-xl transition-all border border-dashed border-slate-200 hover:border-blue-300 cursor-pointer p-1 ${
+                autreSlotRempli ? 'flex-none' : 'flex-1'
+              }`}
+              title="Cliquez pour assigner une carte du Point Commande Journalière"
+            >
+              <span className="flex items-center gap-1">
+                <Plus className="w-3 h-3" />
+                <span>
+                  {slotType === 'expedition'
+                    ? '+ Expédition'
+                    : slotIndex === 1
+                    ? '+ Carte 2'
+                    : slotType === 'lancement'
+                    ? `# ${(lancementIndex || 0) + 1}`
+                    : '+ Carte'}
+                </span>
+              </span>
+            </button>
       );
     }
 
@@ -603,15 +791,16 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       }
     };
 
-    const isMergedModele = slotType === 'modeleEnCours';
+    const isMergedModele =
+      slotType === 'modeleEnCours' || slotType === 'lancement';
     const progress = computeCardProgress(linkedCard);
     const enAlerte = linkedCard ? carteEnAlerte(linkedCard) : false;
 
     return (
-      <div className={`flex flex-col gap-1 ${isMergedModele ? 'flex-1' : 'h-full'}`}>
+      <div className="flex flex-col gap-1 flex-1 min-h-0 w-full">
         {/* Conteneur unifié : la ring relie la bande Alerte + la carte */}
         <div
-          className={`relative w-full flex flex-col ${
+          className={`relative w-full flex flex-col flex-1 min-h-0 ${
             enAlerte ? 'ring-2 ring-rose-300/60 shadow-[0_0_0_1px_rgba(251,113,133,0.5)] rounded-xl' : 'rounded-xl'
           }`}
         >
@@ -635,13 +824,13 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
             </button>
           )}
           <div
-            className={`group relative w-full min-h-[52px] flex flex-col justify-center px-2 py-1.5 bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left flex-1 ${
+            className={`group relative w-full min-h-[52px] flex flex-col justify-start px-2 py-1.5 bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left flex-1 ${
               enAlerte ? 'rounded-b-xl border-t-0' : 'rounded-b-xl'
             }`}
           >
         <div
           onClick={handleSlotClick}
-          className="cursor-pointer"
+          className="cursor-pointer flex-1 min-h-0 w-full flex flex-col justify-start items-start"
           title={
             linkedCard
               ? `Afficher la fiche identitaire : ${linkedCard.modele} (${linkedCard.reference})`
@@ -679,20 +868,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               {jalonsNomenclatures.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-1">
                   {jalonsNomenclatures.map((j, i) => (
-                    <div
-                      key={`${j.code}-${i}`}
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 text-[10px] font-semibold shadow-xs w-fit"
-                      title={j.titre}
-                    >
-                      <span className="font-bold">{j.code}</span>
-                      {j.etat === 'SEMAINE' && j.semaine != null ? (
-                        <span className="font-mono">S{j.semaine}</span>
-                      ) : j.etat === 'VALIDE' ? (
-                        <span className="text-emerald-600">✓</span>
-                      ) : (
-                        <span className="text-emerald-600/70">—</span>
-                      )}
-                    </div>
+                    <PastilleJalon key={`${j.code}-${i}`} jalon={j} />
                   ))}
                 </div>
               ) : null}
@@ -700,20 +876,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               {jalonsStatuts.length > 0 ? (
                 <div className="flex flex-wrap items-center gap-1">
                   {jalonsStatuts.map((j, i) => (
-                    <div
-                      key={`${j.code}-${i}`}
-                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-blue-800 text-[10px] font-semibold shadow-xs w-fit"
-                      title={j.titre}
-                    >
-                      <span className="font-bold">{j.code}</span>
-                      {j.etat === 'SEMAINE' && j.semaine != null ? (
-                        <span className="font-mono">S{j.semaine}</span>
-                      ) : j.etat === 'VALIDE' ? (
-                        <span className="text-blue-600">✓</span>
-                      ) : (
-                        <span className="text-blue-600/70">—</span>
-                      )}
-                    </div>
+                    <PastilleJalon key={`${j.code}-${i}`} jalon={j} />
                   ))}
                 </div>
               ) : (
@@ -796,21 +959,12 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
       {/* Top Banner / Actions Bar */}
-      <div className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-xs">
-        <div className="max-w-[1850px] mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3">
-          {/* Left: Back button & Page title */}
+      <div className="bg-white border-b border-slate-200 relative z-20 shadow-xs">
+        {/* Même grille que l'en-tête Point Commande : titre à gauche,
+            sélecteur de vue centré, actions à droite. */}
+        <div className="max-w-[1850px] mx-auto px-4 sm:px-6 lg:px-8 py-3.5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
+          {/* Left: Page title */}
           <div className="flex items-center gap-3">
-            <button
-              onClick={onBackToPointJournalier}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-              title="Retourner au Point Commande Journalière"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>Point Commande Journalière</span>
-            </button>
-
-            <div className="h-5 w-px bg-slate-200 hidden sm:block" />
-
             <div>
               <div className="flex items-center gap-2">
                 <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
@@ -826,8 +980,16 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
             </div>
           </div>
 
+          {/* Center: View switcher — même emplacement que dans l'en-tête Point Commande */}
+          <div className="flex md:justify-center">
+            <ViewSwitcher
+              currentPage="suivi-global"
+              onChangePage={(page) => page === 'point-journalier' && onBackToPointJournalier()}
+            />
+          </div>
+
           {/* Right: Controls & Quick Actions */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 md:justify-end">
             {/* Search */}
             <div className="relative">
               <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -840,7 +1002,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               />
             </div>
 
-            {/* Quick edit mode toggle for Chaîne / Remarque */}
+            {/* Quick edit mode toggle for Chaîne / Alertes */}
             <button
               onClick={() => {
                 setIsEditMode(!isEditMode);
@@ -854,7 +1016,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                   ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
                   : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-300'
               }`}
-              title="Modifier directement le nom de la chaîne et sa remarque"
+              title="Modifier directement le nom de la chaîne et sa colonne Alertes"
             >
               {isEditMode ? (
                 <>
@@ -864,7 +1026,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               ) : (
                 <>
                   <Edit3 className="w-3.5 h-3.5" />
-                  <span>Édition Chaîne & Remarque</span>
+                  <span>Édition Chaîne & Alertes</span>
                 </>
               )}
             </button>
@@ -905,7 +1067,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           <div className="flex items-center gap-2">
             <Info className="w-4 h-4 text-blue-600 shrink-0" />
             <span>
-              <strong>Attribution des cartes :</strong> Cliquez sur n'importe quelle case de <em>Modèle en cours</em>, <em>Prochains Lancements (1 à 5)</em> ou <em>Expédition</em> pour choisir la carte de commande correspondante. Chaque case accueille <strong>2 cartes empilées</strong>. La colonne <em>Inspection</em> suit les contrôles OF / I du jour et la colonne <em>Remarque</em> reste propre à chaque chaîne.
+              <strong>Attribution des cartes :</strong> Cliquez sur n'importe quelle case de <em>Modèle en cours</em>, <em>Prochains Lancements (1 à 5)</em> ou <em>Expédition</em> pour choisir la carte de commande correspondante. Chaque case accueille <strong>2 cartes empilées</strong>. La colonne <em>Inspection</em> suit les contrôles OF / I du jour et la colonne <em>Alertes</em> reste propre à chaque chaîne.
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -928,14 +1090,14 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
         {/* The Exact Table matching the PNG + Expedition column */}
         <div className="bg-[#eef2f6]/90 p-3 sm:p-4 rounded-2xl border border-slate-200/90 shadow-xs overflow-x-auto">
-          <table className="w-full border-separate border-spacing-x-2 border-spacing-y-2 min-w-[1580px]">
+          <table className="w-full border-separate border-spacing-x-2 border-spacing-y-2 min-w-[2900px]">
             {/* Header Row */}
             <thead>
               <tr>
-                {/* Divers */}
+                {/* Type */}
                 <th className="w-14 min-w-[56px] max-w-[56px]">
                   <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
-                    Divers
+                    Type
                   </div>
                 </th>
 
@@ -960,10 +1122,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                   </div>
                 </th>
 
-                {/* Remarque */}
+                {/* Alertes */}
                 <th className="w-60 min-w-[190px]">
                   <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 shadow-2xs">
-                    Remarque
+                    Alertes
                   </div>
                 </th>
 
@@ -1002,7 +1164,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
                   return (
                     <tr key={row.id}>
-                      {/* Column 1: Divers (Vertical category banner spanning all rows of this category) */}
+                      {/* Column 1: Type (Vertical category banner spanning all rows of this category) */}
                       {isFirstRowOfCategory && (
                         <td
                           ref={getBannerRef(catKey)}
@@ -1033,8 +1195,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                       )}
 
                       {/* Column 2: Chaîne (Name) */}
-                        <td className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs align-middle">
-                          <div className="min-h-[72px] flex items-center justify-center">
+                        <td className="h-[136px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs align-middle">
+                          <div className="h-full min-h-[72px] flex items-center justify-center">
                             {isEditMode ? (
                               <input
                                 type="text"
@@ -1052,7 +1214,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
                       {/* Column 3: Modèle en cours (Carte du Point Commande Journalière) */}
                         <td
-                          className="group bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle"
+                          className="h-[136px] group bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle"
                         >
                           <div className="h-full min-h-[84px] flex flex-col gap-1">
 
@@ -1072,8 +1234,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
 
                       {/* Column 4: Inspection (un bloc par modèle en cours) */}
-                        <td className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle">
-                          <div className="min-h-[84px] flex flex-col gap-1.5">
+                        <td className="h-[136px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle">
+                          <div className="h-full min-h-[84px] flex flex-col gap-1.5">
                             {blocsInspectionAffiches(row).map(
                               ({ blocIndex, bloc, libelle }) => (
                                 <div
@@ -1124,17 +1286,24 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                           </div>
                         </td>
 
-                      {/* Column 5: Remarque */}
-                        <td className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs align-middle">
-                          <div className="min-h-[80px] flex">
-                            <input
-                              type="text"
-                              value={row.remarque ?? ''}
-                              placeholder="Remarque, consigne..."
-                              onChange={(e) =>
-                                handleCellChange(row.id, 'remarque', e.target.value)
-                              }
-                              className="w-full text-xs text-slate-700 bg-slate-50 border border-slate-300 rounded-lg px-2 py-2 focus:bg-white focus:border-blue-400 focus:outline-hidden focus:ring-1 focus:ring-blue-400"
+                      {/* Column 5: Alertes (deux champs, un par carte de la pile) */}
+                        <td className="h-[136px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs align-middle">
+                          <div className="h-full flex flex-col justify-center gap-2">
+                            <ChampAlerte
+                              valeur={row.remarque ?? ''}
+                              teinte={row.remarqueTeinte ?? TEINTE_ALERTE_DEFAUT}
+                              placeholder="Alerte, consigne..."
+                              libelle={`Alerte 1 de la chaîne ${row.nom}`}
+                              onChanger={(v) => handleCellChange(row.id, 'remarque', v)}
+                              onTeinte={(t) => handleCellChange(row.id, 'remarqueTeinte', t)}
+                            />
+                            <ChampAlerte
+                              valeur={row.remarque2 ?? ''}
+                              teinte={row.remarque2Teinte ?? TEINTE_ALERTE_DEFAUT}
+                              placeholder="Alerte, consigne..."
+                              libelle={`Alerte 2 de la chaîne ${row.nom}`}
+                              onChanger={(v) => handleCellChange(row.id, 'remarque2', v)}
+                              onTeinte={(t) => handleCellChange(row.id, 'remarque2Teinte', t)}
                             />
                           </div>
                         </td>
@@ -1145,9 +1314,9 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                         return (
                           <td
                             key={slotIdx}
-                            className="min-w-[125px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle"
+                            className="h-[136px] w-[330px] min-w-[290px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle"
                           >
-                            <div className="h-full min-h-[88px] flex flex-col justify-center items-center">
+                            <div className="h-full min-h-[88px] flex flex-col justify-start items-stretch">
                               <div className="flex flex-col gap-1 w-full h-full">
                                 {pile.map((slotCard, pileIdx) => (
                                   <React.Fragment key={pileIdx}>
@@ -1167,7 +1336,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                       })}
 
                       {/* Column 12: EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
-                        <td className="min-w-[145px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle">
+                        <td className="h-[136px] min-w-[145px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle">
                         <div className="h-full min-h-[88px] flex flex-col justify-center items-center">
                           {renderCardSlotContent(
                             row.expeditionCard,

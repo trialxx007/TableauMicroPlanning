@@ -349,21 +349,24 @@ export default function App() {
         </div>
       )}
 
-      {/* Main Header with Paris time and meeting filter */}
-      <Header
-        onOpenCreateModal={handleOpenCreate}
-        onResetData={handleResetData}
-        currentPage={currentPage}
-        onChangePage={setCurrentPage}
-        cardsCount={cards.length}
-        isMeetingFilterActive={isMeetingFilterActive}
-        onToggleMeetingFilter={() => setIsMeetingFilterActive((prev) => !prev)}
-        pendingReviewCount={pendingReviewCount}
-      />
+      {/* En-tête « Point Commande Journalière » : réservé à la vue Point Commande.
+          La vue Suivi Global n'affiche que le sélecteur de vue, placé près du tableau. */}
+      {currentPage === 'point-journalier' && (
+        <Header
+          onOpenCreateModal={handleOpenCreate}
+          onResetData={handleResetData}
+          currentPage={currentPage}
+          onChangePage={setCurrentPage}
+          cardsCount={cards.length}
+          isMeetingFilterActive={isMeetingFilterActive}
+          onToggleMeetingFilter={() => setIsMeetingFilterActive((prev) => !prev)}
+          pendingReviewCount={pendingReviewCount}
+        />
+      )}
 
       {/* Main Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {currentPage === 'point-journalier' ? (
+      {currentPage === 'point-journalier' ? (
+        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <>
             {/* KPI Summary Cards (Surbrillance au survol & Filtrage au clic) */}
             <StatsOverview
@@ -458,7 +461,9 @@ export default function App() {
           onOpenCreate={handleOpenCreate}
         />
           </>
-        ) : (
+        </main>
+      ) : (
+        <main className="flex-1 w-full">
           <SuiviGlobalView
             onBackToPointJournalier={() => setCurrentPage('point-journalier')}
             cards={cards}
@@ -467,8 +472,8 @@ export default function App() {
               setIsModalOpen(true);
             }}
           />
-        )}
-      </main>
+        </main>
+      )}
 
       {/* Footer */}
       <footer className="mt-auto py-4 border-t border-slate-200 bg-white text-center text-xs text-slate-400">
@@ -496,3 +501,4 @@ export default function App() {
     </JalonCatalogueProvider>
   );
 }
+
