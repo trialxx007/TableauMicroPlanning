@@ -57,7 +57,7 @@ export const ViewSwitcher: React.FC<ViewSwitcherProps> = ({ currentPage, onChang
             }`}
           >
             {tab.icon}
-            <span>{tab.label}</span>
+        <span>{tab.label}</span>
           </button>
         );
       })}

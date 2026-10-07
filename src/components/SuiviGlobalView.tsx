@@ -11,7 +11,9 @@ import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS } from '../data/mockSuiviGlobal.
 import { CardPickerModal } from './CardPickerModal.tsx';
 import { InspectionCell } from './InspectionCell.tsx';
 import { InspectionEtatMenu } from './InspectionEtatMenu.tsx';
-import { getJalonsEnRetard } from '../utils/jalons.ts';
+import { AlertePopover } from './AlertePopover.tsx';
+import { alertesCarte, useAlertesManuelles } from '../utils/alertesManuelles.ts';
+import { getJalonsEnRetard, getJalonsCard } from '../utils/jalons.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 import {
   blocEnTexte,
@@ -33,9 +35,9 @@ import {
   Truck,
   ExternalLink,
   X,
-  ArrowLeftRight,
-  AlertTriangle,
 } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight } from 'lucide-react';
+
 
 interface SuiviGlobalViewProps {
   onBackToPointJournalier: () => void;
@@ -209,7 +211,17 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [savedFeedback, setSavedFeedback] = useState(false);
   const [activePicker, setActivePicker] = useState<ActiveSlotPicker | null>(null);
-  const [alertRowIds, setAlertRowIds] = useState<Set<string>>(() => new Set(['bm-petunia']));
+
+  // Alertes saisies à la main dans le popover : source partagée (localStorage),
+  // écrites par le popover, lues ici pour allumer la bande de la ligne.
+  const alertesManuelles = useAlertesManuelles();
+
+  // Popover d'alerte ouvert : la carte concernée, son titre de case, l'ancre DOM.
+  const [alerteOuverte, setAlerteOuverte] = useState<{
+    card: CardItem;
+    slotTitle?: string;
+    anchor: HTMLElement;
+  } | null>(null);
 
   // Taille réelle de chaque bandeau vertical, pour dimensionner le texte
   // proportionnellement à la hauteur cumulée des modèles en cours de la catégorie.
@@ -498,23 +510,28 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     );
   });
 
-  // Jalons en retard sur les cartes liées à une ligne. Le catalogue global fait foi :
-  // ajouter un jalon ajoute automatiquement une pastille d'alerte ici.
-  const getJalonsEnRetardLigne = (row: ChaineRow) => {
+  // Cartes liées à une ligne, dans l'ordre d'affichage, sans doublon : une même
+  // carte peut occuper plusieurs colonnes de la ligne.
+  const cartesLigne = (row: ChaineRow): CardItem[] => {
     const slots = [
       ...row.modeleEnCoursCards,
       ...row.prochainsLancementsCards.flat(),
       row.expeditionCard,
     ];
-    // Une même carte peut occuper plusieurs colonnes de la ligne : on la ne compte qu'une fois.
     const cartes = new Map<string, CardItem>();
     for (const slot of slots) {
       if (!slot?.cardId) continue;
       const card = getCardById(slot.cardId);
       if (card) cartes.set(card.id, card);
     }
-    return [...cartes.values()].flatMap((card) => getJalonsEnRetard(card, catalogue));
+    return [...cartes.values()];
   };
+
+  // Une carte mérite sa bande d'alerte si un jalon est en retard ou si une
+  // alerte y a été saisie à la main.
+  const carteEnAlerte = (card: CardItem): boolean =>
+    getJalonsEnRetard(card, catalogue).length > 0 ||
+    alertesCarte(alertesManuelles, card.id).length > 0;
 
   // Helper to render card chip inside table cell
   const renderCardSlotContent = (
@@ -532,8 +549,23 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         ? `Expédition (${row.nom})`
         : `Prochain Lancement #${(lancementIndex || 0) + 1}${rangSuffixe} (${row.nom})`;
     const linkedCard = slotCard?.cardId ? getCardById(slotCard.cardId) : undefined;
-    const label = linkedCard ? linkedCard.modele : slotCard?.customLabel;
-    const subLabel = linkedCard ? `${linkedCard.reference} • ${linkedCard.client}` : null;
+          const label = linkedCard ? linkedCard.modele : slotCard?.customLabel;
+          const subLabel = linkedCard ? `${linkedCard.reference} • ${linkedCard.client}` : null;
+          const jalonsCarte = linkedCard ? getJalonsCard(linkedCard, catalogue) : [];
+          const jalonsNomenclatures = jalonsCarte.filter((j) => j.categorie === 'NOMENCLATURE');
+          const jalonsStatuts = jalonsCarte.filter((j) => j.categorie === 'STATUT');
+          const afficheNomenclature =
+            jalonsNomenclatures.length > 0
+              ? jalonsNomenclatures
+                  .map((j) => (j.etat === 'SEMAINE' ? `${j.code} S${j.semaine}` : j.code))
+                  .join(' ')
+              : slotCard?.customLabel ?? null;
+          const afficheStatut =
+            jalonsStatuts.length > 0
+              ? jalonsStatuts
+                  .map((j) => (j.etat === 'SEMAINE' ? `${j.code} S${j.semaine}` : j.code))
+                  .join(' ')
+              : null;
 
     if (!label) {
       return (
@@ -584,13 +616,34 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
     const isMergedModele = slotType === 'modeleEnCours';
     const progress = computeCardProgress(linkedCard);
+    const enAlerte = linkedCard ? carteEnAlerte(linkedCard) : false;
 
     return (
-      <div
-        className={`group relative w-full min-h-[52px] flex flex-col justify-center px-2 py-1.5 rounded-xl bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left ${
-          isMergedModele ? 'flex-1' : 'h-full'
-        }`}
-      >
+      <div className={`flex flex-col gap-1 ${isMergedModele ? 'flex-1' : 'h-full'}`}>
+        {/* Bande d'alerte de la carte : rien que le mot, le détail est au clic. */}
+        {enAlerte && linkedCard && (
+          <button
+            type="button"
+            onClick={(event) =>
+              setAlerteOuverte({
+                card: linkedCard,
+                slotTitle: titreSlot,
+                anchor: event.currentTarget,
+              })
+            }
+            className="shrink-0 w-full flex items-center justify-center gap-1 px-2 py-1 rounded-lg bg-red-600 text-white shadow-2xs motion-safe:animate-pulse text-[10px] font-extrabold uppercase tracking-wider cursor-pointer hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-white/80 transition-colors relative z-20"
+            title="Voir le détail de l'alerte"
+            aria-haspopup="dialog"
+          >
+            <AlertTriangle className="w-3 h-3 shrink-0" />
+            Alerte
+          </button>
+        )}
+        <div
+          className={`group relative w-full min-h-[52px] flex flex-col justify-center px-2 py-1.5 rounded-xl bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left flex-1 ${
+            enAlerte ? 'border-rose-400 ring-1 ring-rose-200' : ''
+          }`}
+        >
         <div
           onClick={handleSlotClick}
           className="cursor-pointer"
@@ -611,31 +664,21 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           </div>
 
           {isMergedModele ? (
-            <div className="flex flex-col gap-1 mt-1">
+            <div className="relative z-10 flex flex-col gap-1 mt-1">
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
                   Statut
                 </span>
-                <span
-                  className={`text-[9px] font-semibold uppercase tracking-wider truncate ${
-                    linkedCard?.statut === 'TERMINE'
-                      ? 'text-emerald-600'
-                      : linkedCard?.statut === 'EN_COURS'
-                      ? 'text-blue-600'
-                      : linkedCard?.statut === 'BLOQUE'
-                      ? 'text-rose-600'
-                      : 'text-amber-600'
-                  }`}
-                >
-                  {linkedCard?.statut === 'TERMINE' ? 'Terminé' : linkedCard?.statut === 'EN_COURS' ? 'En cours' : linkedCard?.statut === 'BLOQUE' ? 'Bloqué' : 'À démarrer'}
+                <span className="text-[9px] font-semibold uppercase tracking-wider truncate text-blue-600">
+                  {afficheStatut ?? (linkedCard?.statut === 'TERMINE' ? 'Termin�' : linkedCard?.statut === 'EN_COURS' ? 'En cours' : linkedCard?.statut === 'BLOQUE' ? 'Bloqu�' : 'A d�marrer')}
                 </span>
               </div>
               <div className="flex items-center gap-1.5 min-w-0">
                 <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400 shrink-0">
                   Nomenclature
                 </span>
-                <span className="text-[10px] font-mono font-semibold text-slate-600 truncate">
-                  {slotCard?.customLabel ?? '—'}
+                <span className="text-[9px] font-semibold uppercase tracking-wider truncate text-emerald-700">
+                  {afficheNomenclature ?? '—'}
                 </span>
               </div>
               {progress !== null && (
@@ -656,11 +699,12 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
             </div>
           ) : (
             subLabel ? (
-              <div className="text-[10px] text-slate-500 font-mono truncate mt-0.5">
+              <div className="relative z-10 text-[10px] text-slate-500 font-mono truncate mt-0.5">
                 {subLabel}
               </div>
             ) : null
           )}
+
           <span />
 
           {/* Expedition Specific Tags */}
@@ -700,6 +744,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           >
             <X className="w-3 h-3" />
           </button>
+        </div>
         </div>
       </div>
     );
@@ -921,19 +966,9 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
                 return catRows.map((row, index) => {
                   const isFirstRowOfCategory = index === 0;
-                      const jalonsEnRetard = getJalonsEnRetardLigne(row);
-                      const isRowAlert = alertRowIds.has(row.id) || jalonsEnRetard.length > 0;
-                      // Bandeau volontairement minimal : « ALERTE : TC: S22, SMS: S31 ».
-                      // Pas de numérotation ni de phrase, la cause se lit d'un coup d'œil ;
-                      // le détail complet reste disponible au survol via le title.
-                      const causesAlerte = [
-                        ...jalonsEnRetard.map((j) => `${j.code}: S${j.semaine}`),
-                        ...(alertRowIds.has(row.id) ? ['ATELIER'] : []),
-                      ];
-                      const detailAlerte = [
-                        ...jalonsEnRetard.map((j) => `${j.code} : semaine S${j.semaine} dépassée`),
-                        ...(alertRowIds.has(row.id) ? ['Alerte atelier'] : []),
-                      ].join(', ');
+                  // La ligne est soulignée de rouge dès qu'une de ses cartes alerte ;
+                  // le détail, lui, vit sur la bande de chaque carte.
+                  const isRowAlert = cartesLigne(row).some((card) => carteEnAlerte(card));
                   const bannerSize = bannerSizes[catKey];
                   const catBanner = buildBanner(catConfig, bannerSize?.w ?? 0, bannerSize?.h ?? 0);
 
@@ -972,46 +1007,29 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                       {/* Column 2: Chaîne (Name) */}
                         <td className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs align-middle">
                           <div className="min-h-[72px] flex items-center justify-center">
-                          {isEditMode ? (
-                            <input
-                              type="text"
-                              value={row.nom}
-                              onChange={(e) =>
-                                handleCellChange(row.id, 'nom', e.target.value)
-                              }
-                              className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 bg-slate-50 border border-slate-300 rounded px-1.5 py-1 focus:bg-white focus:outline-hidden"
-                            />
-                          ) : (
-                            <span className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 truncate">
-                              {row.nom}
-                            </span>
-                          )}
-                        </div>
-                      </td>
+                            {isEditMode ? (
+                              <input
+                                type="text"
+                                value={row.nom}
+                                onChange={(e) => handleCellChange(row.id, 'nom', e.target.value)}
+                                className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 bg-slate-50 border border-slate-300 rounded px-1.5 py-1 focus:bg-white focus:outline-hidden"
+                              />
+                            ) : (
+                              <span className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 truncate">
+                                {row.nom}
+                              </span>
+                            )}
+                          </div>
+                        </td>
 
                       {/* Column 3: Modèle en cours (Carte du Point Commande Journalière) */}
-                      <td
-                        className={`group bg-white border rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle ${
-                          isRowAlert
-                            ? 'border-rose-400 ring-1 ring-rose-200'
-                            : 'border-slate-200/90'
-                        }`}
-                      >
-                        <div className="min-h-[84px] flex flex-col">
-{isRowAlert && (
-                              <div
-                                className="flex items-center gap-1.5 px-2.5 py-1 mb-1.5 rounded-lg bg-red-600 text-white shadow-2xs motion-safe:animate-pulse"
-                                title={`ALERTE : ${detailAlerte}`}
-                              >
-                                <AlertTriangle className="w-3 h-3 shrink-0" />
-                                <span className="text-[10px] font-extrabold uppercase tracking-wider truncate">
-                                  ALERTE : {causesAlerte.join(', ')}
-                                </span>
-                                <span className="ml-auto w-1.5 h-1.5 rounded-full bg-white shrink-0 motion-safe:animate-ping" />
-                              </div>
-                            )}
+                        <td
+                          className={`group bg-white border rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle ${
+                            isRowAlert ? 'border-rose-400 ring-1 ring-rose-200' : 'border-slate-200/90'
+                          }`}
+                        >
+                          <div className="min-h-[84px] flex flex-col gap-1">
 
-                          <div className="flex flex-col gap-1">
                             {row.modeleEnCoursCards.map((slot, pileIdx) => (
                               <React.Fragment key={pileIdx}>
                                 {renderCardSlotContent(
@@ -1024,8 +1042,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                               </React.Fragment>
                             ))}
                           </div>
-                        </div>
-                      </td>
+                        </td>
+
 
                       {/* Column 4: Inspection (un bloc par modèle en cours) */}
                         <td className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle">
@@ -1101,7 +1119,15 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                         return (
                           <td
                             key={slotIdx}
-                            className="min-w-[125px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle"
+                            className={`min-w-[125px] bg-white border rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle ${
+                              pile.some((s) => {
+                                if (!s?.cardId) return false;
+                                const c = getCardById(s.cardId);
+                                return c ? carteEnAlerte(c) : false;
+                              })
+                                ? 'border-rose-400 ring-1 ring-rose-200'
+                                : 'border-slate-200/90'
+                            }`}
                           >
                             <div className="min-h-[88px] flex flex-col justify-center items-center">
                               <div className="flex flex-col gap-1 w-full">
@@ -1123,7 +1149,11 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                       })}
 
                       {/* Column 12: EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
-                      <td className="min-w-[145px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle">
+                        <td className={`min-w-[145px] bg-white border rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle ${
+                          row.expeditionCard?.cardId && carteEnAlerte(getCardById(row.expeditionCard.cardId) as CardItem)
+                            ? 'border-rose-400 ring-1 ring-rose-200'
+                            : 'border-slate-200/90'
+                        }`}>
                         <div className="min-h-[88px] flex flex-col justify-center items-center">
                           {renderCardSlotContent(
                             row.expeditionCard,
@@ -1208,6 +1238,16 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
             setMenuEtat(null);
           }}
           onClose={() => setMenuEtat(null)}
+        />
+      )}
+
+      {/* Détail des alertes d'une ligne : jalons en retard + alertes saisies à la main */}
+      {alerteOuverte && (
+        <AlertePopover
+          card={alerteOuverte.card}
+          slotTitle={alerteOuverte.slotTitle}
+          anchor={alerteOuverte.anchor}
+          onClose={() => setAlerteOuverte(null)}
         />
       )}
     </div>

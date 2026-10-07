@@ -338,7 +338,7 @@ export default function App() {
     setCards(data);
   };
 
-  if (currentPage === 'suivi-global') {
+  if (currentPage === 'point-journalier') {
     return (
       <JalonCatalogueProvider catalogue={catalogue}>
         <SuiviGlobalView
