@@ -87,7 +87,7 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
               <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100">
                 Cases à afficher
               </div>
-              {[3, 4, 5].map((n) => (
+              {[3, 5].map((n) => (
                 <button
                   key={n}
                   type="button"
