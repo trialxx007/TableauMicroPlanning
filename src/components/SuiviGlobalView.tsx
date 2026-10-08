@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { CardItem } from '../types/card.ts';
+import { CardFormData, CardItem } from '../types/card.ts';
 import {
   ChaineRow,
   ChaineSlotCard,
@@ -9,6 +9,7 @@ import {
 } from '../types/suiviGlobal.ts';
 import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS } from '../data/mockSuiviGlobal.ts';
 import { CardPickerModal } from './CardPickerModal.tsx';
+import { SlotActionModal } from './SlotActionModal.tsx';
 import { InspectionCell } from './InspectionCell.tsx';
 import { InspectionEtatMenu } from './InspectionEtatMenu.tsx';
 import { AlertePopover } from './AlertePopover.tsx';
@@ -37,6 +38,7 @@ import {
   X,
   AlertTriangle,
   ArrowLeftRight,
+  Zap,
 } from 'lucide-react';
 
 
@@ -44,6 +46,10 @@ interface SuiviGlobalViewProps {
   onBackToPointJournalier: () => void;
   cards: CardItem[];
   onOpenCardModal?: (card: CardItem) => void;
+  onOpenCreateCard?: (
+    prefillData: Partial<CardFormData> | null,
+    onCreatedCallback: (createdCard: CardItem) => void
+  ) => void;
 }
 
 interface ActiveSlotPicker {
@@ -63,6 +69,15 @@ interface MenuEtatInspection {
   valeurId: string;
   anchor: HTMLElement;
   actuel: 'P' | 'F' | null;
+}
+
+/** Pour SlotActionModal : case en attente de choix (nouvelle carte ou existante). */
+interface ActiveSlotAction {
+  rowId: string;
+  slotType: 'modeleEnCours' | 'lancement' | 'expedition';
+  lancementIndex?: number;
+  slotIndex?: number;
+  slotTitle: string;
 }
 
 /** Une case du tableau : au plus 2 cartes empilées. */
@@ -458,6 +473,177 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     }
   }, [rows]);
 
+  // État pour SlotActionModal (choix nouvelle carte / carte existante)
+  const [selectedSlotAction, setSelectedSlotAction] = useState<ActiveSlotAction | null>(null);
+
+  // Synchronise automatiquement les cartes selon la règle stricte OK Prod :
+  // - Cartes "OK Prod validé" → strictement dans "Modèle en cours"
+  // - Cartes "En attente OK Prod" → strictement dans "Prochains Lancements"
+  const reconcileRowsWithOkProdRule = (
+    currentRows: SuiviRow[],
+    allCards: CardItem[]
+  ): { newRows: SuiviRow[]; changed: boolean } => {
+    let changed = false;
+    const newRows = currentRows.map((row) => {
+      let currentModelePile = [...row.modeleEnCoursCards] as [ChaineSlotCard | null, ChaineSlotCard | null];
+      let nextLancements = [...row.prochainsLancementsCards] as SuiviRow['prochainsLancementsCards'];
+
+      // A) Si une carte en "Modèle en cours" n'a PAS OK Prod -> la migrer vers Prochains Lancements
+      currentModelePile = currentModelePile.map((slot, pileIdx) => {
+        if (slot?.cardId) {
+          const card = allCards.find((c) => c.id === slot.cardId);
+          if (card && !card.okProd) {
+            // Trouver une place libre dans Prochains Lancements
+            for (let i = 0; i < NOMBRE_LANCEMENTS; i++) {
+              const pile = nextLancements[i] ?? [null, null];
+              for (let j = 0; j < 2; j++) {
+                if (!pile[j]) {
+                  pile[j] = slot;
+                  nextLancements[i] = pile as [ChaineSlotCard | null, ChaineSlotCard | null];
+                  changed = true;
+                  return null;
+                }
+              }
+            }
+          }
+        }
+        return slot;
+      }) as [ChaineSlotCard | null, ChaineSlotCard | null];
+
+      // B) Si une carte en "Prochains Lancements" a l'OK Prod validé -> la glisser vers Modèle en cours
+      nextLancements = nextLancements.map((pile, i) => {
+        if (!pile) return [null, null];
+        const newPile = [...pile] as [ChaineSlotCard | null, ChaineSlotCard | null];
+        newPile.forEach((slot, j) => {
+          if (slot?.cardId) {
+            const card = allCards.find((c) => c.id === slot.cardId);
+            if (card && card.okProd) {
+              // Trouver une place libre dans Modèle en cours
+              const emptyIdx = currentModelePile.findIndex((s) => !s);
+              if (emptyIdx !== -1) {
+                currentModelePile[emptyIdx] = slot;
+                newPile[j] = null;
+                changed = true;
+              }
+            }
+          }
+        });
+        return newPile;
+      }) as SuiviRow['prochainsLancementsCards'];
+
+      return {
+        ...row,
+        modeleEnCoursCards: currentModelePile,
+        prochainsLancementsCards: nextLancements,
+      };
+    });
+
+    // 2) Placer les cartes avec OK Prod validé non encore dans le tableau dans "Modèle en cours"
+    const validatedCards = allCards.filter((c) => c.okProd);
+    validatedCards.forEach((c) => {
+      const alreadyInModeleEnCours = newRows.some((r) =>
+        r.modeleEnCoursCards.some((s) => s?.cardId === c.id)
+      );
+
+      if (!alreadyInModeleEnCours) {
+        const targetRow = c.chaineId
+          ? newRows.find((r) => r.id === c.chaineId)
+          : c.chaineNom
+          ? newRows.find(
+              (r) => r.nom.toLowerCase().trim() === c.chaineNom!.toLowerCase().trim()
+            )
+          : undefined;
+
+        if (targetRow) {
+          const emptyIdx = targetRow.modeleEnCoursCards.findIndex((s) => !s);
+          if (emptyIdx !== -1) {
+            targetRow.modeleEnCoursCards[emptyIdx] = {
+              cardId: c.id,
+              customLabel: c.modele,
+            };
+            changed = true;
+            return;
+          }
+        }
+
+        // Sinon trouver la première chaîne qui a son Modèle en cours libre
+        for (const r of newRows) {
+          const emptyIdx = r.modeleEnCoursCards.findIndex((s) => !s);
+          if (emptyIdx !== -1) {
+            r.modeleEnCoursCards[emptyIdx] = {
+              cardId: c.id,
+              customLabel: c.modele,
+            };
+            changed = true;
+            break;
+          }
+        }
+      }
+    });
+
+    // 3) Placer les cartes en attente d'OK Prod non encore dans le tableau dans "PROCHAINS LANCEMENTS"
+    const nonValidatedCards = allCards.filter((c) => !c.okProd);
+    nonValidatedCards.forEach((c) => {
+      const alreadyInLancements = newRows.some((r) =>
+        r.prochainsLancementsCards.some((pile) => pile?.some((s) => s?.cardId === c.id))
+      );
+
+      if (!alreadyInLancements) {
+        const targetRow = c.chaineId
+          ? newRows.find((r) => r.id === c.chaineId)
+          : c.chaineNom
+          ? newRows.find(
+              (r) => r.nom.toLowerCase().trim() === c.chaineNom!.toLowerCase().trim()
+            )
+          : undefined;
+
+        if (targetRow) {
+          for (let i = 0; i < NOMBRE_LANCEMENTS; i++) {
+            const pile = targetRow.prochainsLancementsCards[i] ?? [null, null];
+            const emptyIdx = pile.findIndex((s) => !s);
+            if (emptyIdx !== -1) {
+              pile[emptyIdx] = {
+                cardId: c.id,
+                customLabel: c.modele,
+              };
+              targetRow.prochainsLancementsCards[i] = pile as [ChaineSlotCard | null, ChaineSlotCard | null];
+              changed = true;
+              return;
+            }
+          }
+        }
+
+        for (const r of newRows) {
+          for (let i = 0; i < NOMBRE_LANCEMENTS; i++) {
+            const pile = r.prochainsLancementsCards[i] ?? [null, null];
+            const emptyIdx = pile.findIndex((s) => !s);
+            if (emptyIdx !== -1) {
+              pile[emptyIdx] = {
+                cardId: c.id,
+                customLabel: c.modele,
+              };
+              r.prochainsLancementsCards[i] = pile as [ChaineSlotCard | null, ChaineSlotCard | null];
+              changed = true;
+              return;
+            }
+          }
+        }
+      }
+    });
+
+    return { newRows, changed };
+  };
+
+  // Re-synchronisation automatique lorsque les cartes du Point Commande Journalière changent
+  useEffect(() => {
+    if (cards && cards.length > 0) {
+      setRows((prev) => {
+        const { newRows, changed } = reconcileRowsWithOkProdRule(prev, cards);
+        return changed ? newRows : prev;
+      });
+    }
+  }, [cards]);
+
   // Find CardItem from Point Commande Journalière by cardId
   const getCardById = (cardId?: string): CardItem | undefined => {
     if (!cardId) return undefined;
@@ -481,6 +667,62 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     lancementIndex?: number,
     slotIndex = 0
   ) => {
+    // RÈGLE MÉTIER STRICTE :
+    // 1) Si affectation en "Modèle en cours" mais que la carte n'a pas OK Prod -> refusée & migrée en Prochains Lancements
+    if (slotType === 'modeleEnCours' && slotCard?.cardId) {
+      const card = getCardById(slotCard.cardId);
+      if (card && !card.okProd) {
+        alert(
+          `Action refusée : Seules les cartes avec accord "OK Prod validé" sont acceptées dans la colonne "Modèle en cours".\n\nLa carte "${card.modele}" (${card.reference}) est en attente d'OK Prod et a été automatiquement migrée dans "PROCHAINS LANCEMENTS".`
+        );
+        // Auto-migrer vers Prochains Lancements
+        setRows((prev) =>
+          prev.map((r) => {
+            if (r.id !== rowId) return r;
+            const nextLancements = [...r.prochainsLancementsCards] as SuiviRow['prochainsLancementsCards'];
+            for (let i = 0; i < NOMBRE_LANCEMENTS; i++) {
+              const pile = nextLancements[i] ?? [null, null];
+              const emptyIdx = pile.findIndex((s) => !s);
+              if (emptyIdx !== -1) {
+                pile[emptyIdx] = slotCard;
+                nextLancements[i] = pile as [ChaineSlotCard | null, ChaineSlotCard | null];
+                return { ...r, prochainsLancementsCards: nextLancements };
+              }
+            }
+            return r;
+          })
+        );
+        return;
+      }
+    }
+    // 2) Si affectation en "Prochains Lancements" mais que la carte a OK Prod -> la glisser vers Modèle en cours
+    if (slotType === 'lancement' && slotCard?.cardId) {
+      const card = getCardById(slotCard.cardId);
+      if (card && card.okProd) {
+        alert(
+          `Cette carte a l'OK Prod validé : elle a été automatiquement placée dans "Modèle en cours" (règle stricte).`
+        );
+        setRows((prev) =>
+          prev.map((r) => {
+            if (r.id !== rowId) return r;
+            const emptyIdx = r.modeleEnCoursCards.findIndex((s) => !s);
+            if (emptyIdx !== -1) {
+              const newModele = [...r.modeleEnCoursCards] as PileDeCartes;
+              newModele[emptyIdx] = slotCard;
+              // Retirer de Prochains Lancements
+              const nextLancements = [...r.prochainsLancementsCards] as SuiviRow['prochainsLancementsCards'];
+              const pile = nextLancements[lancementIndex ?? 0] ?? [null, null];
+              pile[slotIndex] = null;
+              nextLancements[lancementIndex ?? 0] = pile as [ChaineSlotCard | null, ChaineSlotCard | null];
+              return { ...r, modeleEnCoursCards: newModele, prochainsLancementsCards: nextLancements };
+            }
+            return r;
+          })
+        );
+        return;
+      }
+    }
+
     setRows((prev) =>
       prev.map((r) => {
         if (r.id !== rowId) return r;
@@ -502,6 +744,66 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         return r;
       })
     );
+  };
+
+  // Synchronisation manuelle OK Prod (bouton dans l'en-tête)
+  const handleSyncOkProd = () => {
+    const { newRows, changed } = reconcileRowsWithOkProdRule(rows, cards);
+    setRows(newRows);
+    setSavedFeedback(true);
+    setTimeout(() => setSavedFeedback(false), 2000);
+    alert(
+      changed
+        ? 'Migration stricte OK Prod effectuée :\n• Les cartes "OK Prod Validé" ont été migrées en colonne "Modèle en cours".\n• Les cartes "En attente OK Prod" ont été migrées en colonne "PROCHAINS LANCEMENTS".'
+        : 'Le tableau est déjà parfaitement aligné :\n• Toutes les cartes validées sont en "Modèle en cours".\n• Toutes les cartes en attente sont en "PROCHAINS LANCEMENTS".'
+    );
+  };
+
+  // Ouvre SlotActionModal au lieu de CardPickerModal direct
+  const handleOpenSlotAction = (
+    rowId: string,
+    slotType: 'modeleEnCours' | 'lancement' | 'expedition',
+    lancementIndex?: number,
+    slotIndex = 0
+  ) => {
+    const row = rows.find((r) => r.id === rowId);
+    if (!row) return;
+    let titreSlot = '';
+    if (slotType === 'modeleEnCours') {
+      titreSlot = `Modèle en cours${slotIndex === 1 ? ' — 2ᵉ carte' : ''} (${row.nom})`;
+    } else if (slotType === 'expedition') {
+      titreSlot = `Expédition (${row.nom})`;
+    } else {
+      titreSlot = `Prochain Lancement #${(lancementIndex || 0) + 1}${slotIndex === 1 ? ' — 2ᵉ carte' : ''} (${row.nom})`;
+    }
+    setSelectedSlotAction({ rowId, slotType, lancementIndex, slotIndex, slotTitle: titreSlot });
+  };
+
+  const handleSlotActionChooseNew = () => {
+    if (!selectedSlotAction || !onOpenCreateCard) return;
+    const { rowId, slotType, lancementIndex, slotIndex } = selectedSlotAction;
+    const isModeleEnCours = slotType === 'modeleEnCours';
+    const prefill: Partial<CardFormData> = {
+      ...(isModeleEnCours ? { okProd: true, statut: 'EN_COURS' } : { okProd: false, statut: 'A_DEMARRER' }),
+    };
+    onOpenCreateCard(prefill, (createdCard) => {
+      handleAssignSlotCard(rowId, slotType, { cardId: createdCard.id, customLabel: createdCard.modele }, lancementIndex, slotIndex);
+      setSelectedSlotAction(null);
+    });
+  };
+
+  const handleSlotActionChooseExisting = () => {
+    if (!selectedSlotAction) return;
+    // Ouvre CardPickerModal pour choisir une carte existante
+    const { rowId, slotType, lancementIndex, slotIndex } = selectedSlotAction;
+    setActivePicker({
+      rowId,
+      slotType,
+      lancementIndex,
+      slotIndex,
+      slotTitle: selectedSlotAction.slotTitle,
+    });
+    setSelectedSlotAction(null);
   };
 
   // --- Inspections (un bloc par modèle en cours) -------------------------
@@ -744,36 +1046,35 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     const autreSlotRempli =
       slotIndex != null ? Boolean(pileCourante[1 - slotIndex]) : false;
 
-    if (!label) {
+if (!label) {
       return (
         <button
           onClick={() =>
-            setActivePicker({
-              rowId: row.id,
+            handleOpenSlotAction(
+              row.id,
               slotType,
               lancementIndex,
-              slotIndex,
-              slotTitle: titreSlot,
-            })
+              slotIndex
+            )
           }
-              className={`w-full min-h-[50px] flex items-center justify-center text-[11px] font-medium text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 rounded-xl transition-all border border-dashed border-slate-200 hover:border-blue-300 cursor-pointer p-1 ${
-                autreSlotRempli ? 'flex-none' : 'flex-1'
-              }`}
-              title="Cliquez pour assigner une carte du Point Commande Journalière"
-            >
-              <span className="flex items-center gap-1">
-                <Plus className="w-3 h-3" />
-                <span>
-                  {slotType === 'expedition'
-                    ? '+ Expédition'
-                    : slotIndex === 1
-                    ? '+ Carte 2'
-                    : slotType === 'lancement'
-                    ? `# ${(lancementIndex || 0) + 1}`
-                    : '+ Carte'}
-                </span>
-              </span>
-            </button>
+          className={`w-full min-h-[50px] flex items-center justify-center text-[11px] font-medium text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 rounded-xl transition-all border border-dashed border-slate-200 hover:border-blue-300 cursor-pointer p-1 ${
+            autreSlotRempli ? 'flex-none' : 'flex-1'
+          }`}
+          title="Cliquez pour assigner une carte du Point Commande Journalière"
+        >
+          <span className="flex items-center gap-1">
+            <Plus className="w-3 h-3" />
+            <span>
+              {slotType === 'expedition'
+                ? '+ Expédition'
+                : slotIndex === 1
+                ? '+ Carte 2'
+                : slotType === 'lancement'
+                ? `# ${(lancementIndex || 0) + 1}`
+                : '+ Carte'}
+            </span>
+          </span>
+        </button>
       );
     }
 
@@ -781,13 +1082,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       if (linkedCard && onOpenCardModal) {
         onOpenCardModal(linkedCard);
       } else {
-        setActivePicker({
-          rowId: row.id,
-          slotType,
-          lancementIndex,
-          slotIndex,
-          slotTitle: titreSlot,
-        });
+        handleOpenSlotAction(row.id, slotType, lancementIndex, slotIndex);
       }
     };
 
@@ -1046,6 +1341,16 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
             >
               <Download className="w-3.5 h-3.5 text-slate-500" />
               <span className="hidden sm:inline">Exporter</span>
+            </button>
+
+            {/* Sync OK Prod */}
+            <button
+              onClick={handleSyncOkProd}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors cursor-pointer"
+              title="Synchroniser les cartes selon la règle OK Prod (validé → Modèle en cours, en attente → Prochains Lancements)"
+            >
+              <Zap className="w-3.5 h-3.5 text-emerald-600" />
+              <span className="hidden sm:inline">Sync OK Prod</span>
             </button>
 
             {/* Reset */}
@@ -1386,6 +1691,18 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           </div>
         </div>
       </div>
+
+      {/* SlotActionModal : choix Nouvelle Carte / Carte Existante */}
+      {selectedSlotAction && (
+        <SlotActionModal
+          isOpen={true}
+          onClose={() => setSelectedSlotAction(null)}
+          slotTitle={selectedSlotAction.slotTitle}
+          slotType={selectedSlotAction.slotType}
+          onChooseNewCard={handleSlotActionChooseNew}
+          onChooseExistingCard={handleSlotActionChooseExisting}
+        />
+      )}
 
       {/* Card Picker Modal */}
       {activePicker && (
