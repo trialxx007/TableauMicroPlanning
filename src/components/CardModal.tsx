@@ -14,7 +14,6 @@ import {
   normalizeOFType,
 } from '../types/card.ts';
 import { OFSubTable, computeOfQuantiteFinie } from './OFSubTable.tsx';
-import { PRODUCTION_CHAINS } from '../data/mockSuiviGlobal.ts';
 import {
   getJalonInfo,
   normaliserCodeJalon,
@@ -46,8 +45,6 @@ import {
   Building2,
   Handshake,
   Lock,
-  Layers,
-  ChevronDown,
 } from 'lucide-react';
 
 interface CardModalProps {
@@ -137,16 +134,11 @@ export const CardModal: React.FC<CardModalProps> = ({
   const [chaineId, setChaineId] = useState<string | undefined>(undefined);
   const [chaineNom, setChaineNom] = useState<string | undefined>(undefined);
   const [chaineCategorie, setChaineCategorie] = useState<string | undefined>(undefined);
-  const [isChaineSelectorOpen, setIsChaineSelectorOpen] = useState(false);
   const [isAddingOF, setIsAddingOF] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const [dt, setDt] = useState(false);
-  const [tc, setTc] = useState(false);
-  const [sms, setSms] = useState(false);
-  const [rdl, setRdl] = useState(false);
 
   const [nouveauCode, setNouveauCode] = useState('');
   const [nouveauLibelle, setNouveauLibelle] = useState('');
@@ -193,10 +185,6 @@ export const CardModal: React.FC<CardModalProps> = ({
       setChaineId(initialData.chaineId);
       setChaineNom(initialData.chaineNom);
       setChaineCategorie(initialData.chaineCategorie);
-      setDt(Boolean(initialData.jalons?.find((j) => j.code === 'DT')?.valide));
-      setTc(Boolean(initialData.jalons?.find((j) => j.code === 'TC')?.valide));
-      setSms(Boolean(initialData.jalons?.find((j) => j.code === 'SMS')?.valide));
-      setRdl(Boolean(initialData.jalons?.find((j) => j.code === 'RDL')?.valide));
     } else {
       setClient('');
       setNom('');
@@ -214,10 +202,6 @@ export const CardModal: React.FC<CardModalProps> = ({
       setChaineId(undefined);
       setChaineNom(undefined);
       setChaineCategorie(undefined);
-      setDt(false);
-      setTc(false);
-      setSms(false);
-      setRdl(false);
     }
     setError(null);
     setCopied(false);
@@ -225,17 +209,34 @@ export const CardModal: React.FC<CardModalProps> = ({
     setBrouillonSemaine({});
     setNouvelleCategorie('STATUT');
     setCategoriesEnAttente({});
-    setIsChaineSelectorOpen(false);
     setIsAddingOF(false);
   }, [initialData, isOpen]);
 
   // Codes portés par cette carte, regroupés par grandeur : les nomenclatures à la
   // suite, puis les statuts. Le hook est appelé avant le retour anticipé : tous les
   // hooks doivent tourner à chaque rendu.
+  // Nomenclatures disposées comme les pastilles R/T au-dessus : même ordre que
+  // NOMENCLATURES_PAR_TYPE pour le type courant, R éventuel toujours en tête,
+  // puis les statuts dans l'ordre du catalogue. Un code activé depuis les pastilles
+  // mais absent du catalogue partagé repartirait en 999 et ouvrirait une seconde
+  // section « Nomenclature » après les statuts.
   const codesCarteJalons = useMemo(() => {
     const rang = rangsParCategorie(catalogue);
-    return Object.keys(jalons).sort((a, b) => (rang.get(a) ?? 999) - (rang.get(b) ?? 999));
-  }, [jalons, catalogue]);
+    const ordreNomenclatures = new Map<string, number>();
+    NOMENCLATURES_PAR_TYPE[typeCarte].forEach((n, i) => ordreNomenclatures.set(n.code, i));
+    const rangCode = (code: JalonCode) => {
+      if (code === 'R') return -1;
+      const local = ordreNomenclatures.get(code);
+      if (local !== undefined) return local;
+      return 1000 + (rang.get(code) ?? 999);
+    };
+    const grandeur = (code: JalonCode) => (categorieParCode(code) === 'NOMENCLATURE' ? 0 : 1);
+    return Object.keys(jalons).sort((a, b) => {
+      const g = grandeur(a) - grandeur(b);
+      if (g !== 0) return g;
+      return rangCode(a) - rangCode(b);
+    });
+  }, [jalons, catalogue, typeCarte]);
 
   if (!isOpen) return null;
 
@@ -355,36 +356,26 @@ export const CardModal: React.FC<CardModalProps> = ({
     }
   };
 
-  // --- DT / TC / SMS / RDL handlers ---
-  const handleToggleDt = () => {
-    const next = !dt;
-    setDt(next);
-    setJalon('DT', { valide: next, semaine: next ? null : undefined });
-    if (!next && okProd) setOkProd(false);
+  /**
+   * Désactivation / activation d’une nomenclature depuis les pastilles R ou T.
+   * Une pastille allumée dit que la carte porte le code ; un clic l'en retire,
+   * un second clic le remet en attente. Cliquer un code d'un type inactif bascule
+   * d’abord la nature de matière, puis applique le même toggling.
+   */
+  const basculerNomenclature = (t: TypeCarte, code: JalonCode) => {
+    setJalons((prev) => {
+      const base = t === typeCarte ? prev : basculerType(typeCarte, t, prev);
+      if (!(code in base)) return { ...base, [code]: { valide: false, semaine: null } };
+      const suivant = { ...base };
+      delete suivant[code];
+      return suivant;
+    });
+    if (t !== typeCarte) setTypeCarte(t);
   };
 
-  const handleToggleTc = () => {
-    const next = !tc;
-    setTc(next);
-    setJalon('TC', { valide: next, semaine: next ? null : undefined });
-    if (!next && okProd) setOkProd(false);
-  };
-
-  const handleToggleSms = () => {
-    const next = !sms;
-    setSms(next);
-    setJalon('SMS', { valide: next, semaine: next ? null : undefined });
-    if (!next && okProd) setOkProd(false);
-  };
-
-  const handleToggleRdl = () => {
-    const next = !rdl;
-    setRdl(next);
-    setJalon('RDL', { valide: next, semaine: next ? null : undefined });
-    if (!next && okProd) setOkProd(false);
-  };
-
-  const allJalonsChecked = Boolean(dt && tc && sms && rdl);
+  /** Les 4 jalons techniques n'ont plus leur propre section : leur etat vit
+   *  dans la liste des jalons du haut (DT, TC, RDL). */
+  const allJalonsChecked = Boolean(jalons['DT']?.valide && jalons['TC']?.valide && jalons['RDL']?.valide);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -425,7 +416,7 @@ export const CardModal: React.FC<CardModalProps> = ({
             ...(categoriesEnAttente[code] ? { categorie: categoriesEnAttente[code] } : {}),
           };
         }),
-        dateRdl: rdl ? getSemaineISO() : undefined,
+        dateRdl: jalons['RDL']?.valide ? getSemaineISO() : undefined,
         okProd: Boolean(okProd),
         dateOkProd: okProd ? getSemaineISO() : undefined,
         ofs,
@@ -522,16 +513,90 @@ export const CardModal: React.FC<CardModalProps> = ({
                   </span>
                 )}
               </div>
+
+                {initialData && (
+                  <div className="mb-1.5 text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                    <span className="font-semibold text-slate-900">{client || 'Client'}</span>
+                    <span className="font-medium text-slate-700">{modele || 'Modèle'}</span>
+                  </div>
+                )}
+
+              <div className="max-w-[340px] min-w-[220px]">
+                {/* Progress bar */}
+                <div className="mb-2">
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="font-medium text-slate-600 flex items-center gap-1">
+                      <TrendingUp className="w-3.5 h-3.5 text-blue-600" />
+                      Avancement {progressPct}%
+                    </span>
+                    <span className="font-semibold text-slate-900">
+                      {quantiteFinie} / {quantiteDemandee}
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
+                    <div
+                      className={`h-2 rounded-full transition-all duration-300 ${
+                        reste === 0
+                          ? 'bg-emerald-500'
+                          : progressPct > 50
+                          ? 'bg-blue-600'
+                          : 'bg-amber-500'
+                      }`}
+                      style={{ width: `${progressPct}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="mt-1.5 text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-0.5">
+                      {initialData.dateCreation && (
+                        <span className="flex items-center gap-1">
+                          <Calendar className="w-3 h-3 text-slate-400" />
+                          Créé le {initialData.dateCreation}
+                        </span>
+                      )}
+                    {initialData.dateDernierPoint && (
+                      <span className="flex items-center gap-1">
+                        <Clock className="w-3 h-3 text-slate-400" />
+                        Point: {initialData.dateDernierPoint}
+                      </span>
+                    )}
+              </div>
+
             </div>
           </div>
 
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors cursor-pointer"
-            title="Fermer"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => allJalonsChecked && setOkProd(!okProd)}
+              disabled={!allJalonsChecked}
+              title={
+                allJalonsChecked
+                  ? okProd
+                    ? 'Cliquer pour révoquer l’OK Prod'
+                    : 'Valider l’OK Prod'
+                  : 'Attente DT, TC & RDL'
+              }
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold whitespace-nowrap transition-colors ${
+                okProd
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 cursor-pointer hover:bg-emerald-100'
+                  : allJalonsChecked
+                  ? 'bg-emerald-600 text-white border-emerald-700 cursor-pointer hover:bg-emerald-700 animate-pulse'
+                  : 'bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed'
+              }`}
+            >
+              <CheckCheck className="w-3.5 h-3.5" />
+              <span>{okProd ? 'OK Prod validé' : allJalonsChecked ? 'Valider OK Prod' : 'OK Prod'}</span>
+            </button>
+
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-200/60 transition-colors cursor-pointer"
+              title="Fermer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Form Body */}
@@ -539,58 +604,6 @@ export const CardModal: React.FC<CardModalProps> = ({
           {error && (
             <div className="p-3 bg-rose-50 border border-rose-200 rounded-lg text-xs font-semibold text-rose-700">
               {error}
-            </div>
-          )}
-
-          {/* If existing card: Quick Overview Banner */}
-          {initialData && (
-            <div className="bg-slate-50 rounded-xl p-3.5 border border-slate-200">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-2">
-                <div className="text-xs text-slate-600">
-                  <span className="font-semibold text-slate-900">{client || 'Client'}</span>
-                  <span className="text-slate-300 mx-2">⬢</span>
-                  <span className="font-medium text-slate-700">{modele || 'Modèle'}</span>
-                </div>
-                <div className="flex items-center gap-3 text-xs text-slate-500">
-                  {initialData.dateCreation && (
-                    <span className="flex items-center gap-1">
-                      <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                      Créée le {initialData.dateCreation}
-                    </span>
-                  )}
-                  {initialData.dateDernierPoint && (
-                    <span className="flex items-center gap-1">
-                      <Clock className="w-3.5 h-3.5 text-slate-400" />
-                      Point: {initialData.dateDernierPoint}
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Progress bar */}
-              <div>
-                <div className="flex items-center justify-between text-xs mb-1">
-                  <span className="font-medium text-slate-600 flex items-center gap-1">
-                    <TrendingUp className="w-3.5 h-3.5 text-blue-600" />
-                    Avancement {progressPct}%
-                  </span>
-                  <span className="font-semibold text-slate-900">
-                    {quantiteFinie} / {quantiteDemandee}
-                  </span>
-                </div>
-                <div className="w-full bg-slate-200 rounded-full h-2 overflow-hidden">
-                  <div
-                    className={`h-2 rounded-full transition-all duration-300 ${
-                      reste === 0
-                        ? 'bg-emerald-500'
-                        : progressPct > 50
-                        ? 'bg-blue-600'
-                        : 'bg-amber-500'
-                    }`}
-                    style={{ width: `${progressPct}%` }}
-                  />
-                </div>
-              </div>
             </div>
           )}
 
@@ -652,7 +665,9 @@ export const CardModal: React.FC<CardModalProps> = ({
                 />
               </div>
 
-              {/* Nature de matière : commande le jeu de nomenclatures de la carte */}
+              {/* Nature de matière : commande le jeu de nomenclatures de la carte.
+                  Chaque code se désactive séparément : la pastille état dit si la
+                  carte porte réellement ce jalon. */}
               <div className="sm:col-span-2">
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   Nature de matière
@@ -661,34 +676,58 @@ export const CardModal: React.FC<CardModalProps> = ({
                   {(['R', 'T'] as TypeCarte[]).map((t) => {
                     const actif = typeCarte === t;
                     return (
-                      <button
+                      <div
                         key={t}
-                        type="button"
-                        onClick={() => {
-                          setTypeCarte(t);
-                          setJalons((prev) => basculerType(typeCarte, t, prev));
-                        }}
-                        aria-pressed={actif}
-                        className={`text-left px-3 py-2 rounded-lg border transition-all cursor-pointer ${
+                        className={`rounded-lg border transition-all ${
                           actif
                             ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500/30'
                             : 'bg-slate-50 border-slate-200 hover:border-blue-300 hover:bg-blue-50/40'
                         }`}
                       >
-                        <span className="flex items-center gap-1.5">
-                          <span
-                            className={`w-2 h-2 rounded-full shrink-0 ${
-                              actif ? 'bg-blue-600' : 'bg-slate-300'
-                            }`}
-                          />
-                          <span className="text-sm font-semibold text-slate-900">
-                            {t} — {LIBELLE_TYPE_CARTE[t]}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setTypeCarte(t);
+                            setJalons((prev) => basculerType(typeCarte, t, prev));
+                          }}
+                          aria-pressed={actif}
+                          className="w-full text-left px-3 pt-2 cursor-pointer"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <span
+                              className={`w-2 h-2 rounded-full shrink-0 ${
+                                actif ? 'bg-blue-600' : 'bg-slate-300'
+                              }`}
+                            />
+                            <span className="text-sm font-semibold text-slate-900">
+                              {t} — {LIBELLE_TYPE_CARTE[t]}
+                            </span>
                           </span>
-                        </span>
-                        <span className="block mt-0.5 text-[11px] text-slate-500 font-mono">
-                          {NOMENCLATURES_PAR_TYPE[t].map((n) => n.code).join(' · ')}
-                        </span>
-                      </button>
+                        </button>
+
+                        <div className="flex flex-wrap gap-1 px-3 pt-1.5 pb-2">
+                          {NOMENCLATURES_PAR_TYPE[t].map((n) => {
+                            const present = n.code in jalons;
+                            return (
+                              <button
+                                key={n.code}
+                                type="button"
+                                onClick={() => basculerNomenclature(t, n.code)}
+                                title={`${n.libelle} — ${present ? 'sélectionné' : 'désactivé'}`}
+                                aria-pressed={present}
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] font-mono font-semibold transition-colors cursor-pointer ${
+                                  present
+                                    ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
+                                    : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-500'
+                                }`}
+                              >
+                                <span className={`w-1.5 h-1.5 rounded-full ${present ? 'bg-emerald-500' : 'bg-slate-300'}`} />
+                                {n.code}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     );
                   })}
                 </div>
@@ -978,308 +1017,30 @@ export const CardModal: React.FC<CardModalProps> = ({
             )}
           </div>
 
-          {/* Section: Validations & Jalons Techniques (DT • TC • SMS • RDL) */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
-              <span>Validations & Jalons Techniques (DT • TC • SMS • RDL)</span>
-              <span className="text-[11px] font-normal text-slate-400 lowercase">(cliquez pour basculer l'état)</span>
-            </h3>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
-              <div
-                onClick={handleToggleDt}
-                className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
-                  dt
-                    ? 'bg-emerald-50/70 border-emerald-300 text-emerald-900 ring-2 ring-emerald-500/20'
-                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-bold text-sm">DT</span>
-                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${dt ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
-                    {dt ? <Check className="w-3 h-3 stroke-[3]" /> : '✕'}
-                  </div>
-                </div>
-                <div className="text-xs font-semibold">Dossier Technique</div>
-                <div className="text-[10px] text-slate-500 mt-0.5">{dt ? 'Dossier validé' : 'En attente validation'}</div>
-              </div>
-
-              <div
-                onClick={handleToggleTc}
-                className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
-                  tc
-                    ? 'bg-emerald-50/70 border-emerald-300 text-emerald-900 ring-2 ring-emerald-500/20'
-                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-bold text-sm">TC</span>
-                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${tc ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
-                    {tc ? <Check className="w-3 h-3 stroke-[3]" /> : '✕'}
-                  </div>
-                </div>
-                <div className="text-xs font-semibold">Type Conforme</div>
-                <div className="text-[10px] text-slate-500 mt-0.5">{tc ? 'Type conforme validé' : 'En attente conformité'}</div>
-              </div>
-
-              <div
-                onClick={handleToggleSms}
-                className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
-                  sms
-                    ? 'bg-indigo-50/70 border-indigo-300 text-indigo-900 ring-2 ring-indigo-500/20'
-                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-bold text-sm">SMS</span>
-                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${sms ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
-                    {sms ? <Check className="w-3 h-3 stroke-[3]" /> : '✕'}
-                  </div>
-                </div>
-                <div className="text-xs font-semibold truncate">Sales Man's Sample</div>
-                <div className="text-[10px] text-slate-500 mt-0.5">{sms ? 'Échantillon validé' : 'Échantillon non prêt'}</div>
-              </div>
-
-              <div
-                onClick={handleToggleRdl}
-                className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
-                  rdl
-                    ? 'bg-purple-50/70 border-purple-300 text-purple-900 ring-2 ring-purple-500/20'
-                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
-                }`}
-              >
-                <div className="flex items-center justify-between mb-1">
-                  <span className="font-bold text-sm">RDL</span>
-                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${rdl ? 'bg-purple-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
-                    {rdl ? <Check className="w-3 h-3 stroke-[3]" /> : '✕'}
-                  </div>
-                </div>
-                <div className="text-xs font-semibold truncate">Réunion De Lancement</div>
-                <div className="text-[10px] text-slate-500 mt-0.5">{rdl ? 'OF programmé en RDL' : 'OF à programmer en RDL'}</div>
-              </div>
-            </div>
-          </div>
-
-          {!allJalonsChecked && (
-            <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-lg text-xs text-amber-800 flex items-start gap-2">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
-              <div>
-                <strong>Jalons obligatoires :</strong> Tant que <strong>DT</strong>, <strong>TC</strong>, <strong>SMS</strong> et <strong>RDL</strong> ne sont pas tous les 4 cochés, le bouton <em>« Valider OK Prod »</em> reste masqué. Cochez-les ci-dessus pour faire apparaître le bouton et lancer la production.
-              </div>
-            </div>
-          )}
-
-          {/* Section: Accord OK Prod & Répartition des OFs (Initiatives / ONY / LOI) */}
+          {/* Section: OFs (Initiatives / ONY / LOI) */}
           <div className="space-y-3 p-4 rounded-xl border border-slate-200 bg-slate-50/60">
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-              <div>
-                <div className="flex items-center gap-2">
-                  <CheckCheck className={`w-5 h-5 ${okProd ? 'text-emerald-600' : 'text-slate-400'}`} />
-                  <span className="text-sm font-bold text-slate-800">Accord OK Production ("OK Prod")</span>
-                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${okProd ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>
-                    {okProd ? 'OK Prod Validé en RDL ✓' : 'En attente OK Prod (RDL)'}
-                  </span>
-                </div>
-                <p className="text-xs text-slate-500 mt-1">Une fois l'accord "OK Prod" validé durant la RDL pour cette carte, la répartition des OFs (ex: OF1 chez Initiatives, OF2 chez ONY, OF3 chez LOI) s'affiche pour ventiler proprement la production.</p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2.5">
-                {okProd && (
-                  <div className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setIsChaineSelectorOpen(!isChaineSelectorOpen)}
-                      className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer shadow-2xs whitespace-nowrap ${
-                        chaineNom
-                          ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-300 ring-2 ring-indigo-500/20'
-                          : 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700 animate-pulse'
-                      }`}
-                      title="Sélectionner la chaîne de production pour cette carte"
-                    >
-                      <Layers className="w-3.5 h-3.5" />
-                      <span>{chaineNom ? `Chaîne : ${chaineNom}` : 'Chaîne (Sélectionner)'}</span>
-                      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isChaineSelectorOpen ? 'rotate-180' : ''}`} />
-                    </button>
-
-                    {isChaineSelectorOpen && (
-                      <div className="absolute right-0 mt-1.5 w-72 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
-                        <div className="px-2 py-1 text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
-                          <span>Sélectionner la chaîne</span>
-                          <span className="text-[10px] font-normal text-slate-400">Atelier</span>
-                        </div>
-
-                        <div className="mt-1.5">
-                          <div className="px-2 py-0.5 text-[10px] font-bold text-[#881337] bg-[#fbe7e2]/70 rounded mb-1">Broderie Main</div>
-                          <div className="grid grid-cols-2 gap-1">
-                            {PRODUCTION_CHAINS.filter((c) => c.categorieId === 'BRODERIE_MAIN').map((chain) => {
-                              const isSelected = chaineNom === chain.nom || chaineId === chain.id;
-                              return (
-                                <button key={chain.id} type="button" onClick={() => { setChaineId(chain.id); setChaineNom(chain.nom); setChaineCategorie(chain.categorieId); setIsChaineSelectorOpen(false); }} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all text-left cursor-pointer ${isSelected ? 'bg-indigo-600 text-white shadow-2xs font-bold' : 'text-slate-700 hover:bg-slate-100'}`}>
-                                  <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: chain.dotColor }} />
-                                  <span className="truncate">{chain.nom}</span>
-                                  {isSelected && <Check className="w-3 h-3 ml-auto shrink-0" />}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        <div className="mt-2 pt-1.5 border-t border-slate-100">
-                          <div className="px-2 py-0.5 text-[10px] font-bold text-[#0369a1] bg-[#e0f2fe]/70 rounded mb-1">Confection</div>
-                          <div className="grid grid-cols-2 gap-1">
-                            {PRODUCTION_CHAINS.filter((c) => c.categorieId === 'CONFECTION').map((chain) => {
-                              const isSelected = chaineNom === chain.nom || chaineId === chain.id;
-                              return (
-                                <button key={chain.id} type="button" onClick={() => { setChaineId(chain.id); setChaineNom(chain.nom); setChaineCategorie(chain.categorieId); setIsChaineSelectorOpen(false); }} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all text-left cursor-pointer ${isSelected ? 'bg-indigo-600 text-white shadow-2xs font-bold' : 'text-slate-700 hover:bg-slate-100'}`}>
-                                  <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: chain.dotColor }} />
-                                  <span className="truncate">{chain.nom}</span>
-                                  {isSelected && <Check className="w-3 h-3 ml-auto shrink-0" />}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        </div>
-
-                        {chaineNom && (
-                          <div className="mt-2 pt-1.5 border-t border-slate-100 text-center">
-                            <button type="button" onClick={() => { setChaineId(undefined); setChaineNom(undefined); setChaineCategorie(undefined); setIsChaineSelectorOpen(false); }} className="text-[11px] text-rose-600 hover:text-rose-800 hover:underline cursor-pointer">✕ Retirer l'affectation de chaîne</button>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                )}
-
-                {allJalonsChecked ? (
-                  <button type="button" onClick={() => { const nextOk = !okProd; setOkProd(nextOk); }} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap shadow-2xs ${okProd ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700' : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 animate-pulse'}`}><CheckCheck className="w-3.5 h-3.5" /><span>{okProd ? 'OK Prod Validé ✓ (Cliquer pour révoquer)' : 'Valider OK Prod'}</span></button>
-                ) : (
-                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 border border-slate-200 text-slate-500 whitespace-nowrap"><Lock className="w-3.5 h-3.5 text-slate-400" /><span>Bouton OK Prod masqué (Attente DT, TC, SMS & RDL)</span></div>
-                )}
-              </div>
+            <div className="text-xs font-bold text-slate-800 flex items-center justify-between gap-2">
+              <span className="flex items-center gap-2">
+                <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-purple-600"></span><span>OF</span></span>
+              </span>
+              {!isAddingOF && <button type="button" onClick={() => setIsAddingOF(true)} className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold text-slate-900 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg shadow-2xs transition-colors cursor-pointer"><Plus className="w-3 h-3" /><span>Ajouter un OF</span></button>}
             </div>
-
-            {okProd || rdl || (ofs && ofs.length > 0) ? (
-              <div className="pt-2 border-t border-slate-200/80">
-                <div className="text-xs font-bold text-slate-800 mb-2 flex items-center gap-2">
-                  <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-purple-600"></span><span>OF</span></span>
-                  {!isAddingOF && <button type="button" onClick={() => setIsAddingOF(true)} className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold text-slate-900 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg shadow-2xs transition-colors cursor-pointer"><Plus className="w-3 h-3" /><span>Ajouter un OF</span></button>}
-                </div>
-                <OFSubTable cardId={initialData?.id || 'NOUVELLE-CARTE'} totalDemandee={quantiteDemandee} ofs={ofs} isAddingOF={isAddingOF} onCloseAddOF={() => setIsAddingOF(false)} onUpdateOFs={(newOfs) => { setOfs(newOfs); const totalFinie = newOfs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0); if (newOfs.length > 0) { setQuantiteFinie(totalFinie); } }} />
-              </div>
-            ) : (
-              allJalonsChecked && <div className="p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-lg text-xs text-emerald-800 flex items-center gap-2"><span>✓ <strong>Les 4 jalons sont validés !</strong> Vous pouvez maintenant cliquer sur le bouton <strong>« Valider OK Prod »</strong> ci-dessus pour faire glisser automatiquement cette carte en « Modèle en cours ».</span></div>
-            )}
+            <OFSubTable cardId={initialData?.id || 'NOUVELLE-CARTE'} totalDemandee={quantiteDemandee} ofs={ofs} isAddingOF={isAddingOF} onCloseAddOF={() => setIsAddingOF(false)} onUpdateOFs={(newOfs) => { setOfs(newOfs); const totalFinie = newOfs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0); if (newOfs.length > 0) { setQuantiteFinie(totalFinie); } }} />
           </div>
 
-          {/* Section 3: Quantités & Reste à produire */}
-          <div className="space-y-2">
-            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Quantités
-            </h3>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              {/* Demandée */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Demandée
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  required
-                  value={quantiteDemandee}
-                  onChange={(e) =>
-                    setQuantiteDemandee(Math.max(1, parseInt(e.target.value, 10) || 0))
-                  }
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 font-semibold focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                />
-              </div>
-
-              {/* Finie */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Finie
-                </label>
-                <input
-                  type="number"
-                  min="0"
-                  max={quantiteDemandee}
-                  value={quantiteFinie}
-                  onChange={(e) =>
-                    setQuantiteFinie(Math.max(0, parseInt(e.target.value, 10) || 0))
-                  }
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 font-semibold focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                />
-              </div>
-
-              {/* Reste à produire */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Reste
-                </label>
-                <div
-                  className={`px-3 py-2 border rounded-lg text-sm font-bold flex items-center justify-between ${
-                    reste === 0
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                      : 'bg-amber-50 border-amber-200 text-amber-800'
-                  }`}
-                >
-                  <span>                    {reste.toLocaleString('fr-FR')} u.</span>
-                  {reste === 0 && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Section 4: Statut & Décision de Réunion */}
+          {/* Section 3: Remarques */}
           <div className="space-y-3">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
-              Statut & Décision
+              Remarques
             </h3>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Statut
-                </label>
-                <select
-                  value={statut}
-                  onChange={(e) => setStatut(e.target.value as CardStatus)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm font-semibold text-slate-800 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 cursor-pointer"
-                >
-                  <option value="EN_ATTENTE">En attente</option>
-                  <option value="EN_COURS">En cours</option>
-                  <option value="TERMINE">Terminé</option>
-                  <option value="BLOQUE">Bloqué</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Décision
-                </label>
-                <input
-                  type="text"
-                  placeholder="ex: Relance DT à 11h"
-                  value={decisionReunion}
-                  onChange={(e) => setDecisionReunion(e.target.value)}
-                  className="w-full px-3 py-2 bg-blue-50/50 border border-blue-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 font-medium"
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Remarques
-              </label>
-              <input
-                type="text"
-                placeholder="ex: Priorité ligne 2"
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-              />
-            </div>
+            <textarea
+              rows={7}
+              placeholder="ex: Priorité ligne 2"
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 leading-relaxed focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-y"
+            />
           </div>
 
           {/* Footer buttons */}

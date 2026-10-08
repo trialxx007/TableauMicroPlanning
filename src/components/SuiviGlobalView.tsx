@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { CardFormData, CardItem } from '../types/card.ts';
 import {
   ChaineRow,
@@ -17,8 +17,17 @@ import { CardPickerModal } from './CardPickerModal.tsx';
 import { SlotActionModal } from './SlotActionModal.tsx';
 import { InspectionCell } from './InspectionCell.tsx';
 import { InspectionEtatMenu } from './InspectionEtatMenu.tsx';
+import { OfPopover } from './OfPopover.tsx';
 import { AlertePopover } from './AlertePopover.tsx';
-import { alertesCarte, useAlertesManuelles } from '../utils/alertesManuelles.ts';
+import {
+  alertesCarte,
+  useAlertesManuelles,
+  ecrireAlertesManuelles,
+  ALERTES_COULEUR_DEFAUT,
+  ALERTES_COULEURS,
+  type AlerteCouleur,
+  type AlerteManuelle,
+} from '../utils/alertesManuelles.ts';
 import { getJalonsEnRetard, getJalonsCard, detailJalon, type JalonInfo } from '../utils/jalons.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 import {
@@ -877,6 +886,12 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     }));
 
   const [menuEtat, setMenuEtat] = useState<MenuEtatInspection | null>(null);
+  const [ofOuvert, setOfOuvert] = useState<{
+    card: CardItem;
+    numero: number;
+    slotTitle: string;
+    anchor: HTMLElement;
+  } | null>(null);
 
   const handleResetToDefault = () => {
     if (
@@ -1559,12 +1574,12 @@ if (!label) {
 
                       {/* Column 4: Inspection (un bloc par modèle en cours) */}
                         <td className="h-[136px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle">
-                          <div className="h-full min-h-[84px] flex flex-col gap-1.5">
+                          <div className="h-full min-h-[84px] flex flex-col gap-1">
                             {blocsInspectionAffiches(row).map(
                               ({ blocIndex, bloc, libelle }) => (
                                 <div
                                   key={blocIndex}
-                                  className="flex-1 min-w-0 flex flex-col border border-slate-200/80 bg-slate-50/40 rounded-lg px-1.5 py-1.5"
+                                  className="flex-1 min-w-0 flex flex-col border border-slate-200/70 bg-slate-50/30 rounded-lg px-1 py-1"
                                 >
                                   <span className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400 truncate">
                                     {libelle}
@@ -1586,6 +1601,18 @@ if (!label) {
                                         date,
                                       }))
                                     }
+                                    onOfClick={(numero, anchor) => {
+                                      const slot = row.modeleEnCoursCards[blocIndex];
+                                      const card = slot?.cardId ? getCardById(slot.cardId) : undefined;
+                                      if (card) {
+                                        setOfOuvert({
+                                          card,
+                                          numero,
+                                          slotTitle: libelleModele(row, blocIndex),
+                                          anchor,
+                                        });
+                                      }
+                                    }}
                                     onBadgeClick={(valeurId, anchor) =>
                                       setMenuEtat({
                                         rowId: row.id,
@@ -1612,64 +1639,27 @@ if (!label) {
 
                       {/* Column 5: Alertes par carte */}
                         <td className="h-[136px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs align-middle">
-                          <div className="h-full flex flex-col justify-center gap-1.5 overflow-y-auto">
-                            {/* Modèle en cours - 2 cartes */}
-                            {row.modeleEnCoursCards.map((slotCard, pileIdx) => (
-                              slotCard && (
-                                <div key={`mec-${pileIdx}`} className="space-y-1">
-                                  <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                                    Modèle en cours {pileIdx === 0 ? '1' : '2'} : {texteSlot(slotCard) || '—'}
-                                  </div>
-                                  <AlertesCarte
-                                    slotCard={slotCard}
-                                    rowId={row.id}
-                                    slotType="modeleEnCours"
-                                    slotIndex={pileIdx}
-                                  />
-                                </div>
-                              )
-                            ))}
-                            {/* Prochains Lancements - 5 slots x 2 cartes */}
-                            {Array.from({ length: NOMBRE_LANCEMENTS }, (_, slotIdx) => {
-                              const pile = row.prochainsLancementsCards[slotIdx] ?? [null, null];
-                              return pile.map((slotCard, pileIdx) =>
+                          <div className="h-full flex flex-col justify-start gap-1.5 overflow-y-auto">
+                            {/* Alertes : blocs separees comme la colonne Inspection */}
+                            <div className="h-full min-h-[84px] flex flex-col gap-1">
+                              {row.modeleEnCoursCards.map((slotCard, pileIdx) =>
                                 slotCard ? (
-                                  <div key={`pl-${slotIdx}-${pileIdx}`} className="space-y-1 mt-1.5">
-                                    <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                                      Lancement #{slotIdx + 1} - Carte {pileIdx + 1} : {texteSlot(slotCard) || '—'}
-                                    </div>
+                                  <div
+                                    key={`mec-${pileIdx}`}
+                                    className="min-w-0 flex-1 flex flex-col"
+                                  >
                                     <AlertesCarte
                                       slotCard={slotCard}
                                       rowId={row.id}
-                                      slotType="lancement"
-                                      lancementIndex={slotIdx}
+                                      slotType="modeleEnCours"
                                       slotIndex={pileIdx}
+                                      titre={`Carte ${pileIdx + 1}`}
+                                      label={texteSlot(slotCard)}
                                     />
                                   </div>
                                 ) : null
-                              );
-                            })}
-                            {/* Expédition - 1 carte */}
-                            {row.expeditionCard && (
-                              <div key="exp" className="space-y-1 mt-1.5">
-                                <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
-                                  Expédition : {texteSlot(row.expeditionCard) || '—'}
-                                </div>
-                                <AlertesCarte
-                                  slotCard={row.expeditionCard}
-                                  rowId={row.id}
-                                  slotType="expedition"
-                                />
-                              </div>
-                            )}
-                            {/* Message si aucune carte n'a d'alertes */}
-                            {(!row.modeleEnCoursCards.some(c => c?.alertes?.length) &&
-                              !row.prochainsLancementsCards.some(pile => pile?.some(c => c?.alertes?.length)) &&
-                              !row.expeditionCard?.alertes?.length) && (
-                              <div className="text-center text-slate-400 text-xs py-2">
-                                Aucune alerte sur les cartes. Cliquez sur une carte pour en ajouter.
-                              </div>
-                            )}
+                              )}
+                            </div>
                           </div>
                         </td>
 
@@ -1802,6 +1792,17 @@ if (!label) {
       )}
 
       {/* Détail des alertes d'une ligne : jalons en retard + alertes saisies à la main */}
+      {/* Detail dun OF clique depuis la colonne Inspection */}
+      {ofOuvert && (
+        <OfPopover
+          card={ofOuvert.card}
+          numero={ofOuvert.numero}
+          slotTitle={ofOuvert.slotTitle}
+          anchor={ofOuvert.anchor}
+          onClose={() => setOfOuvert(null)}
+        />
+      )}
+
       {alerteOuverte && (
         <AlertePopover
           card={alerteOuverte.card}
@@ -1813,3 +1814,147 @@ if (!label) {
     </div>
   );
 };
+
+export default SuiviGlobalView;
+
+function AlertesCarte({
+  slotCard,
+  rowId,
+  slotType,
+  lancementIndex,
+  slotIndex,
+  titre,
+  label,
+}: {
+  slotCard: ChaineSlotCard;
+  rowId: string;
+  slotType: 'modeleEnCours' | 'lancement' | 'expedition';
+  lancementIndex?: number;
+  slotIndex?: number;
+  titre: string;
+  label?: string;
+}) {
+  const alertesManuelles = useAlertesManuelles();
+  const alertes = alertesCarte(alertesManuelles, slotCard?.cardId);
+
+  const [ouvert, setOuvert] = useState(false);
+  const [texte, setTexte] = useState('');
+  const [couleur, setCouleur] = useState<AlerteCouleur>(ALERTES_COULEUR_DEFAUT);
+
+  const ajouter = () => {
+    const t = texte.trim();
+    if (!t || !slotCard?.cardId) return;
+    const now = getNowParis();
+    const entree: AlerteManuelle = {
+      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      texte: t,
+      couleur,
+      creeLe: `${now.dateStr} à ${now.timeStr}`,
+    };
+    ecrireAlertesManuelles({
+      ...alertesManuelles,
+      [slotCard.cardId]: [...alertes, entree],
+    });
+    setTexte('');
+    setOuvert(false);
+  };
+
+  const supprimer = (id: string) => {
+    if (!slotCard?.cardId) return;
+    ecrireAlertesManuelles({
+      ...alertesManuelles,
+      [slotCard.cardId]: alertes.filter((a) => a.id !== id),
+    });
+  };
+
+  return (
+    <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex justify-end mb-1">
+        <button
+          type="button"
+          onClick={() => setOuvert((v) => !v)}
+          title="Ajouter une alerte"
+          className="shrink-0 w-4 h-4 rounded-full border border-slate-300 bg-white text-slate-500 hover:text-rose-600 hover:border-rose-300 text-[11px] leading-none cursor-pointer flex items-center justify-center"
+        >
+          +
+        </button>
+      </div>
+
+      <div className="flex flex-col gap-1 flex-1">
+        {alertes.map((a) => {
+          const c = a.couleur || ALERTES_COULEUR_DEFAUT;
+          const cls =
+            c === 'orange' ? 'text-orange-600 bg-orange-50 border-orange-200'
+            : c === 'jaune' ? 'text-yellow-600 bg-yellow-50 border-yellow-300'
+            : c === 'vert' ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
+            : 'text-rose-600 bg-rose-50 border-rose-200';
+          return (
+            <div
+              key={a.id}
+              className={'group/a flex items-start gap-1.5 text-[12px] font-bold leading-tight rounded-md border px-1.5 py-1 ' + cls}
+            >
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+              <span className="break-words flex-1">{a.texte}</span>
+              <button
+                type="button"
+                onClick={() => supprimer(a.id)}
+                title="Supprimer"
+                className="shrink-0 opacity-0 group-hover/a:opacity-100 cursor-pointer text-current/60 hover:text-current"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          );
+        })}
+        {alertes.length === 0 && !ouvert && (
+          <div className="text-[10px] text-slate-400 italic">Aucune alerte</div>
+        )}
+      </div>
+
+      {ouvert && (
+        <div className="mt-1 border-t border-slate-200 pt-1.5">
+          <textarea
+            value={texte}
+            onChange={(e) => setTexte(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                ajouter();
+              }
+            }}
+            rows={2}
+            placeholder="Nouvelle alerte..."
+            autoFocus
+            className="w-full resize-none text-[10px] leading-snug text-slate-700 bg-white border border-slate-300 rounded px-1.5 py-1 focus:border-rose-300 focus:outline-hidden"
+          />
+          <div className="flex items-center justify-between gap-1 mt-1">
+            <div className="flex items-center gap-1">
+              {ALERTES_COULEURS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCouleur(c)}
+                  title={c}
+                  className={
+                    'w-3.5 h-3.5 rounded-full border cursor-pointer ' +
+                    (c === 'rouge' ? 'bg-rose-500 ' : c === 'orange' ? 'bg-orange-500 ' : c === 'jaune' ? 'bg-yellow-400 ' : 'bg-emerald-500 ') +
+                    (couleur === c ? 'border-slate-700' : 'border-white')
+                  }
+                />
+              ))}
+            </div>
+            <button
+              type="button"
+              onClick={ajouter}
+              disabled={!texte.trim()}
+              className="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-40 cursor-pointer"
+            >
+              Ajouter
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
+}

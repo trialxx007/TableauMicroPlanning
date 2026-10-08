@@ -15,8 +15,19 @@ import {
   ecrireAlertesManuelles,
   alertesCarte,
   type AlerteManuelle,
+  type AlerteCouleur,
+  ALERTES_COULEURS,
+  ALERTES_COULEUR_DEFAUT,
 } from '../utils/alertesManuelles.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
+
+
+const COULEUR_ALERTE_CLS: Record<AlerteCouleur, { icone: string; fond: string; bordure: string; texte: string }> = {
+  rouge: { icone: 'text-rose-600', fond: 'bg-rose-50', bordure: 'border-rose-200', texte: 'text-rose-700' },
+  orange: { icone: 'text-orange-600', fond: 'bg-orange-50', bordure: 'border-orange-200', texte: 'text-orange-700' },
+  jaune: { icone: 'text-yellow-600', fond: 'bg-yellow-50', bordure: 'border-yellow-300', texte: 'text-yellow-700' },
+  vert: { icone: 'text-emerald-600', fond: 'bg-emerald-50', bordure: 'border-emerald-200', texte: 'text-emerald-700' },
+};
 
 interface AlertePopoverProps {
   card: CardItem;
@@ -54,6 +65,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
   // Source partagée avec la table : une alerte écrite ici allume la bande de la case.
   const manuelles = useAlertesManuelles();
   const [saisie, setSaisie] = useState('');
+  const [couleur, setCouleur] = useState<AlerteCouleur>(ALERTES_COULEUR_DEFAUT);
 
   // Position : à droite de la bande, aligné sur son sommet — le panneau se
   // superpose temporairement aux colonnes voisines (Inspection) plutôt que de
@@ -151,6 +163,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
     const entree: AlerteManuelle = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       texte,
+      couleur,
       creeLe: `${now.dateStr} à ${now.timeStr}`,
     };
     ecrireAlertesManuelles({
@@ -275,12 +288,14 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
             </p>
           ) : (
             <ul className="space-y-2">
-              {alertesManuelles.map((a) => (
+              {alertesManuelles.map((a) => {
+                const cls = COULEUR_ALERTE_CLS[(a.couleur || ALERTES_COULEUR_DEFAUT)] ?? COULEUR_ALERTE_CLS.rouge;
+                return (
                 <li
                   key={a.id}
-                  className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 flex items-start gap-2.5"
+                  className={cls.fond + ' border ' + cls.bordure + ' rounded-xl p-2.5 flex items-start gap-2.5'}
                 >
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-rose-600" />
+                  <AlertTriangle className={'w-3.5 h-3.5 shrink-0 mt-0.5 ' + cls.icone} />
                   <div className="min-w-0 flex-1">
                     <div className="text-xs font-semibold text-slate-800 whitespace-pre-wrap break-words">
                       {a.texte}
@@ -297,7 +312,8 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
                 </li>
-              ))}
+                );
+              })}
             </ul>
           )}
         </section>
@@ -306,6 +322,27 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
       {/* Saisie : ancrée en bas du popover, toujours visible quelle que soit
           la longueur de la liste défilante. */}
       <div className="shrink-0 border-t border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
+
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Couleur</span>
+          {ALERTES_COULEURS.map((c) => {
+            const cls = COULEUR_ALERTE_CLS[c];
+            const actif = couleur === c;
+            return (
+              <button
+                key={c}
+                type="button"
+                onClick={() => setCouleur(c)}
+                title={c}
+                className={
+                  'w-5 h-5 rounded-full border-2 cursor-pointer transition-transform ' +
+                  (c === 'rouge' ? 'bg-rose-500 ' : c === 'orange' ? 'bg-orange-500 ' : c === 'jaune' ? 'bg-yellow-400 ' : 'bg-emerald-500 ') +
+                  (actif ? 'border-slate-700 scale-110' : 'border-white shadow-sm')
+                }
+              />
+            );
+          })}
+        </div>
         <textarea
           value={saisie}
           onChange={(e) => setSaisie(e.target.value)}

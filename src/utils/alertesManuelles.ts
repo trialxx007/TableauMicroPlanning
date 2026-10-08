@@ -1,10 +1,19 @@
 import { useEffect, useState } from 'react';
 
+export type AlerteCouleur = 'rouge' | 'orange' | 'jaune' | 'vert';
+
+export const ALERTES_COULEURS: AlerteCouleur[] = ['rouge', 'orange', 'jaune', 'vert'];
+
+export const ALERTES_COULEUR_DEFAUT: AlerteCouleur = 'rouge';
+
+
 /** Alerte saisie à la main dans le popover, rattachée à une carte. */
 export interface AlerteManuelle {
   id: string;
   texte: string;
-  /** Date et heure de saisie, fuseau du site : « 06/10/2026 à 14:32 ». */
+  /** Couleur d'affichage de l'alerte (defaut rouge). */
+  couleur?: AlerteCouleur;
+  /** Date et heure de saisie, fuseau du site : +06/10/2026+ 14:32+. */
   creeLe: string;
 }
 

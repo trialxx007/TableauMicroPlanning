@@ -12,6 +12,8 @@ interface InspectionCellProps {
   onMajDate: (valeurId: string, date: string) => void;
   /** Clic sur le badge Pass/Fail : ouvre le menu d'état ancré dessous. */
   onBadgeClick: (valeurId: string, anchor: HTMLElement) => void;
+  /** Clic sur un libelle OF (OF1, OF2...) : ouvre le popover de detail. */
+  onOfClick?: (indice: number, anchor: HTMLElement) => void;
   onCommentaire: (texte: string) => void;
 }
 
@@ -27,6 +29,7 @@ export const InspectionCell: React.FC<InspectionCellProps> = ({
   onMajDate,
   onBadgeClick,
   onCommentaire,
+  onOfClick,
   bloc,
 }) => {
   const [dateEnEdition, setDateEnEdition] = useState<string | null>(null);
@@ -39,14 +42,22 @@ export const InspectionCell: React.FC<InspectionCellProps> = ({
 
     return (
       <div key={valeur.id} className="group/val flex items-center gap-1">
-        <span className="shrink-0 text-[11px] font-bold leading-none text-slate-700">
-          {prefixe}
-          {isIType ? (
+        {isIType ? (
+          <span className="shrink-0 text-[11px] font-bold leading-none text-slate-700">
+            {prefixe}
             <sub className="text-[8px] font-semibold text-slate-500">{indice}</sub>
-          ) : (
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={(e) => onOfClick?.(Number(indice), e.currentTarget)}
+            title="Voir le detail de l'OF dans la carte"
+            className="shrink-0 text-[11px] font-bold leading-none text-slate-700 hover:text-blue-600 hover:underline underline-offset-2 transition-colors cursor-pointer"
+          >
+            {prefixe}
             <span className="text-[11px] font-bold text-slate-500">{indice}</span>
-          )}
-        </span>
+          </button>
+        )}
         <span className="text-[10px] leading-none text-slate-400">:</span>
 
         {enEdition ? (
