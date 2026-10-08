@@ -7,9 +7,14 @@ import {
   JalonCode,
   LIBELLE_TYPE_CARTE,
   OrdreFabrication,
+  SousOrdreFabrication,
   TypeCarte,
+  OFType,
+  OF_TYPES,
+  normalizeOFType,
 } from '../types/card.ts';
-import { OFSubTable } from './OFSubTable.tsx';
+import { OFSubTable, computeOfQuantiteFinie } from './OFSubTable.tsx';
+import { PRODUCTION_CHAINS } from '../data/mockSuiviGlobal.ts';
 import {
   getJalonInfo,
   normaliserCodeJalon,
@@ -36,7 +41,13 @@ import {
   Copy,
   CheckCheck,
   AlertTriangle,
+  AlertCircle,
   Plus,
+  Building2,
+  Handshake,
+  Lock,
+  Layers,
+  ChevronDown,
 } from 'lucide-react';
 
 interface CardModalProps {
@@ -123,9 +134,20 @@ export const CardModal: React.FC<CardModalProps> = ({
   const [statut, setStatut] = useState<CardStatus>('EN_ATTENTE');
   const [decisionReunion, setDecisionReunion] = useState('');
   const [notes, setNotes] = useState('');
+  const [chaineId, setChaineId] = useState<string | undefined>(undefined);
+  const [chaineNom, setChaineNom] = useState<string | undefined>(undefined);
+  const [chaineCategorie, setChaineCategorie] = useState<string | undefined>(undefined);
+  const [isChaineSelectorOpen, setIsChaineSelectorOpen] = useState(false);
+  const [isAddingOF, setIsAddingOF] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+
+  const [dt, setDt] = useState(false);
+  const [tc, setTc] = useState(false);
+  const [sms, setSms] = useState(false);
+  const [rdl, setRdl] = useState(false);
+
   const [nouveauCode, setNouveauCode] = useState('');
   const [nouveauLibelle, setNouveauLibelle] = useState('');
   // Grandeur du jalon en cours de saisie : vert pour une nomenclature, bleu pour
@@ -155,20 +177,32 @@ export const CardModal: React.FC<CardModalProps> = ({
       setTypeCarte((initialData.typeCarte as TypeCarte) ?? 'R');
       setJalons(jalonsInitiaux(initialData));
       setOkProd(Boolean(initialData.okProd));
-      setOfs(initialData.ofs || []);
+      const normalizedOfs = (initialData.ofs || []).map((o) => ({
+        ...o,
+        quantiteFinie: computeOfQuantiteFinie(o),
+      }));
+      setOfs(normalizedOfs);
       setQuantiteDemandee(initialData.quantiteDemandee);
       setQuantiteFinie(initialData.quantiteFinie);
+      if (normalizedOfs.length > 0) {
+        setQuantiteFinie(normalizedOfs.reduce((sum, o) => sum + o.quantiteFinie, 0));
+      }
       setStatut(initialData.statut);
       setDecisionReunion(initialData.decisionReunion || '');
       setNotes(initialData.notes || '');
+      setChaineId(initialData.chaineId);
+      setChaineNom(initialData.chaineNom);
+      setChaineCategorie(initialData.chaineCategorie);
+      setDt(Boolean(initialData.jalons?.find((j) => j.code === 'DT')?.valide));
+      setTc(Boolean(initialData.jalons?.find((j) => j.code === 'TC')?.valide));
+      setSms(Boolean(initialData.jalons?.find((j) => j.code === 'SMS')?.valide));
+      setRdl(Boolean(initialData.jalons?.find((j) => j.code === 'RDL')?.valide));
     } else {
       setClient('');
       setNom('');
       setReference(`OF-2026-${Math.floor(1000 + Math.random() * 9000)}`);
       setModele('');
       setTypeCarte('R');
-      // Une carte neuve part avec les nomenclatures de son type déjà en attente :
-      // elles restent modifiables ensuite, mais l'utilisateur n'a rien à saisir.
       setJalons(preremplirJalons(cataloguePourType('R')));
       setOkProd(false);
       setOfs([]);
@@ -177,6 +211,13 @@ export const CardModal: React.FC<CardModalProps> = ({
       setStatut('EN_ATTENTE');
       setDecisionReunion('');
       setNotes('');
+      setChaineId(undefined);
+      setChaineNom(undefined);
+      setChaineCategorie(undefined);
+      setDt(false);
+      setTc(false);
+      setSms(false);
+      setRdl(false);
     }
     setError(null);
     setCopied(false);
@@ -184,6 +225,8 @@ export const CardModal: React.FC<CardModalProps> = ({
     setBrouillonSemaine({});
     setNouvelleCategorie('STATUT');
     setCategoriesEnAttente({});
+    setIsChaineSelectorOpen(false);
+    setIsAddingOF(false);
   }, [initialData, isOpen]);
 
   // Codes portés par cette carte, regroupés par grandeur : les nomenclatures à la
@@ -312,6 +355,37 @@ export const CardModal: React.FC<CardModalProps> = ({
     }
   };
 
+  // --- DT / TC / SMS / RDL handlers ---
+  const handleToggleDt = () => {
+    const next = !dt;
+    setDt(next);
+    setJalon('DT', { valide: next, semaine: next ? null : undefined });
+    if (!next && okProd) setOkProd(false);
+  };
+
+  const handleToggleTc = () => {
+    const next = !tc;
+    setTc(next);
+    setJalon('TC', { valide: next, semaine: next ? null : undefined });
+    if (!next && okProd) setOkProd(false);
+  };
+
+  const handleToggleSms = () => {
+    const next = !sms;
+    setSms(next);
+    setJalon('SMS', { valide: next, semaine: next ? null : undefined });
+    if (!next && okProd) setOkProd(false);
+  };
+
+  const handleToggleRdl = () => {
+    const next = !rdl;
+    setRdl(next);
+    setJalon('RDL', { valide: next, semaine: next ? null : undefined });
+    if (!next && okProd) setOkProd(false);
+  };
+
+  const allJalonsChecked = Boolean(dt && tc && sms && rdl);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!client.trim() || !nom.trim() || !reference.trim() || !modele.trim()) {
@@ -337,8 +411,6 @@ export const CardModal: React.FC<CardModalProps> = ({
         // Seuls les jalons portés par la carte sont envoyés : rien d'autre n'est créé pour elle.
         jalons: codesCarteJalons.map((code) => {
           const etat = jalons[code];
-          // Une semaine encore en cours de saisie est engagée ici : sans cela, un
-          // champ laissé vide au moment de l'enregistrement garderait l'ancienne semaine.
           const brouillon = brouillonSemaine[code];
           const semaine =
             brouillon === undefined
@@ -350,17 +422,21 @@ export const CardModal: React.FC<CardModalProps> = ({
             code,
             valide: Boolean(etat?.valide),
             ...(semaine != null ? { semaine } : {}),
-            // Envoyée au catalogue à la création de la carte, puis plus jamais relue.
             ...(categoriesEnAttente[code] ? { categorie: categoriesEnAttente[code] } : {}),
           };
         }),
+        dateRdl: rdl ? getSemaineISO() : undefined,
         okProd: Boolean(okProd),
+        dateOkProd: okProd ? getSemaineISO() : undefined,
         ofs,
         quantiteDemandee: Number(quantiteDemandee),
         quantiteFinie: Number(quantiteFinie),
         statut,
         decisionReunion: decisionReunion.trim() || undefined,
         notes: notes.trim() || undefined,
+        chaineId,
+        chaineNom,
+        chaineCategorie,
       });
       onClose();
     } catch (err: unknown) {
@@ -902,67 +978,196 @@ export const CardModal: React.FC<CardModalProps> = ({
             )}
           </div>
 
-          {/* Section: Accord OK Prod & Répartition des OFs (Interne / Sous-traitance) */}
-          <div className="space-y-3 p-3.5 rounded-xl border border-slate-200 bg-slate-50/60">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2">
-                <CheckCheck className={`w-4 h-4 ${okProd ? 'text-emerald-600' : 'text-slate-400'}`} />
-                <span className="text-sm font-bold text-slate-800">OK Prod</span>
-                <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
-                    okProd
-                      ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
-                      : 'bg-amber-50 text-amber-800 border-amber-300'
-                  }`}
-                >
-                  {okProd ? 'Validé' : 'En attente'}
-                </span>
-              </div>
+          {/* Section: Validations & Jalons Techniques (DT • TC • SMS • RDL) */}
+          <div className="space-y-2">
+            <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center justify-between">
+              <span>Validations & Jalons Techniques (DT • TC • SMS • RDL)</span>
+              <span className="text-[11px] font-normal text-slate-400 lowercase">(cliquez pour basculer l'état)</span>
+            </h3>
 
-              <button
-                type="button"
-                onClick={() => {
-                  const nextOk = !okProd;
-                  setOkProd(nextOk);
-                  // L'OK Prod entraîne la RDL, mais seulement si cette carte porte
-                  // le jalon : sinon on créerait un jalon qui n'a pas été demandé.
-                  if (nextOk && jalons['RDL']) {
-                    setJalon('RDL', { valide: true, semaine: null });
-                  }
-                }}
-                title={okProd ? 'Révoquer la validation' : 'Valider'}
-                className={`px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap ${
-                  okProd
-                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 shadow-2xs'
-                    : 'bg-white hover:bg-slate-100 text-slate-700 border-slate-300'
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div
+                onClick={handleToggleDt}
+                className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
+                  dt
+                    ? 'bg-emerald-50/70 border-emerald-300 text-emerald-900 ring-2 ring-emerald-500/20'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
                 }`}
               >
-                {okProd ? '✓ Validé' : 'Valider'}
-              </button>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-sm">DT</span>
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${dt ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
+                    {dt ? <Check className="w-3 h-3 stroke-[3]" /> : '✕'}
+                  </div>
+                </div>
+                <div className="text-xs font-semibold">Dossier Technique</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">{dt ? 'Dossier validé' : 'En attente validation'}</div>
+              </div>
+
+              <div
+                onClick={handleToggleTc}
+                className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
+                  tc
+                    ? 'bg-emerald-50/70 border-emerald-300 text-emerald-900 ring-2 ring-emerald-500/20'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-sm">TC</span>
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${tc ? 'bg-emerald-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
+                    {tc ? <Check className="w-3 h-3 stroke-[3]" /> : '✕'}
+                  </div>
+                </div>
+                <div className="text-xs font-semibold">Type Conforme</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">{tc ? 'Type conforme validé' : 'En attente conformité'}</div>
+              </div>
+
+              <div
+                onClick={handleToggleSms}
+                className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
+                  sms
+                    ? 'bg-indigo-50/70 border-indigo-300 text-indigo-900 ring-2 ring-indigo-500/20'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-sm">SMS</span>
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${sms ? 'bg-indigo-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
+                    {sms ? <Check className="w-3 h-3 stroke-[3]" /> : '✕'}
+                  </div>
+                </div>
+                <div className="text-xs font-semibold truncate">Sales Man's Sample</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">{sms ? 'Échantillon validé' : 'Échantillon non prêt'}</div>
+              </div>
+
+              <div
+                onClick={handleToggleRdl}
+                className={`p-3 rounded-xl border cursor-pointer select-none transition-all ${
+                  rdl
+                    ? 'bg-purple-50/70 border-purple-300 text-purple-900 ring-2 ring-purple-500/20'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <div className="flex items-center justify-between mb-1">
+                  <span className="font-bold text-sm">RDL</span>
+                  <div className={`w-5 h-5 rounded-full flex items-center justify-center text-xs ${rdl ? 'bg-purple-600 text-white' : 'bg-slate-200 text-slate-400'}`}>
+                    {rdl ? <Check className="w-3 h-3 stroke-[3]" /> : '✕'}
+                  </div>
+                </div>
+                <div className="text-xs font-semibold truncate">Réunion De Lancement</div>
+                <div className="text-[10px] text-slate-500 mt-0.5">{rdl ? 'OF programmé en RDL' : 'OF à programmer en RDL'}</div>
+              </div>
+            </div>
+          </div>
+
+          {!allJalonsChecked && (
+            <div className="p-3 bg-amber-50/70 border border-amber-200/80 rounded-lg text-xs text-amber-800 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <strong>Jalons obligatoires :</strong> Tant que <strong>DT</strong>, <strong>TC</strong>, <strong>SMS</strong> et <strong>RDL</strong> ne sont pas tous les 4 cochés, le bouton <em>« Valider OK Prod »</em> reste masqué. Cochez-les ci-dessus pour faire apparaître le bouton et lancer la production.
+              </div>
+            </div>
+          )}
+
+          {/* Section: Accord OK Prod & Répartition des OFs (Initiatives / ONY / LOI) */}
+          <div className="space-y-3 p-4 rounded-xl border border-slate-200 bg-slate-50/60">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <CheckCheck className={`w-5 h-5 ${okProd ? 'text-emerald-600' : 'text-slate-400'}`} />
+                  <span className="text-sm font-bold text-slate-800">Accord OK Production ("OK Prod")</span>
+                  <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${okProd ? 'bg-emerald-50 text-emerald-800 border-emerald-300' : 'bg-amber-50 text-amber-800 border-amber-300'}`}>
+                    {okProd ? 'OK Prod Validé en RDL ✓' : 'En attente OK Prod (RDL)'}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">Une fois l'accord "OK Prod" validé durant la RDL pour cette carte, la répartition des OFs (ex: OF1 chez Initiatives, OF2 chez ONY, OF3 chez LOI) s'affiche pour ventiler proprement la production.</p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2.5">
+                {okProd && (
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsChaineSelectorOpen(!isChaineSelectorOpen)}
+                      className={`inline-flex items-center gap-2 px-3.5 py-1.5 rounded-lg text-xs font-bold border transition-all cursor-pointer shadow-2xs whitespace-nowrap ${
+                        chaineNom
+                          ? 'bg-indigo-50 hover:bg-indigo-100 text-indigo-800 border-indigo-300 ring-2 ring-indigo-500/20'
+                          : 'bg-indigo-600 hover:bg-indigo-700 text-white border-indigo-700 animate-pulse'
+                      }`}
+                      title="Sélectionner la chaîne de production pour cette carte"
+                    >
+                      <Layers className="w-3.5 h-3.5" />
+                      <span>{chaineNom ? `Chaîne : ${chaineNom}` : 'Chaîne (Sélectionner)'}</span>
+                      <ChevronDown className={`w-3.5 h-3.5 transition-transform ${isChaineSelectorOpen ? 'rotate-180' : ''}`} />
+                    </button>
+
+                    {isChaineSelectorOpen && (
+                      <div className="absolute right-0 mt-1.5 w-72 bg-white rounded-xl shadow-xl border border-slate-200 p-2 z-50 animate-in fade-in zoom-in-95 duration-100">
+                        <div className="px-2 py-1 text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center justify-between">
+                          <span>Sélectionner la chaîne</span>
+                          <span className="text-[10px] font-normal text-slate-400">Atelier</span>
+                        </div>
+
+                        <div className="mt-1.5">
+                          <div className="px-2 py-0.5 text-[10px] font-bold text-[#881337] bg-[#fbe7e2]/70 rounded mb-1">Broderie Main</div>
+                          <div className="grid grid-cols-2 gap-1">
+                            {PRODUCTION_CHAINS.filter((c) => c.categorieId === 'BRODERIE_MAIN').map((chain) => {
+                              const isSelected = chaineNom === chain.nom || chaineId === chain.id;
+                              return (
+                                <button key={chain.id} type="button" onClick={() => { setChaineId(chain.id); setChaineNom(chain.nom); setChaineCategorie(chain.categorieId); setIsChaineSelectorOpen(false); }} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all text-left cursor-pointer ${isSelected ? 'bg-indigo-600 text-white shadow-2xs font-bold' : 'text-slate-700 hover:bg-slate-100'}`}>
+                                  <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: chain.dotColor }} />
+                                  <span className="truncate">{chain.nom}</span>
+                                  {isSelected && <Check className="w-3 h-3 ml-auto shrink-0" />}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        <div className="mt-2 pt-1.5 border-t border-slate-100">
+                          <div className="px-2 py-0.5 text-[10px] font-bold text-[#0369a1] bg-[#e0f2fe]/70 rounded mb-1">Confection</div>
+                          <div className="grid grid-cols-2 gap-1">
+                            {PRODUCTION_CHAINS.filter((c) => c.categorieId === 'CONFECTION').map((chain) => {
+                              const isSelected = chaineNom === chain.nom || chaineId === chain.id;
+                              return (
+                                <button key={chain.id} type="button" onClick={() => { setChaineId(chain.id); setChaineNom(chain.nom); setChaineCategorie(chain.categorieId); setIsChaineSelectorOpen(false); }} className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-semibold transition-all text-left cursor-pointer ${isSelected ? 'bg-indigo-600 text-white shadow-2xs font-bold' : 'text-slate-700 hover:bg-slate-100'}`}>
+                                  <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: chain.dotColor }} />
+                                  <span className="truncate">{chain.nom}</span>
+                                  {isSelected && <Check className="w-3 h-3 ml-auto shrink-0" />}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+
+                        {chaineNom && (
+                          <div className="mt-2 pt-1.5 border-t border-slate-100 text-center">
+                            <button type="button" onClick={() => { setChaineId(undefined); setChaineNom(undefined); setChaineCategorie(undefined); setIsChaineSelectorOpen(false); }} className="text-[11px] text-rose-600 hover:text-rose-800 hover:underline cursor-pointer">✕ Retirer l'affectation de chaîne</button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {allJalonsChecked ? (
+                  <button type="button" onClick={() => { const nextOk = !okProd; setOkProd(nextOk); }} className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-colors cursor-pointer whitespace-nowrap shadow-2xs ${okProd ? 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700' : 'bg-emerald-600 hover:bg-emerald-700 text-white border-emerald-700 animate-pulse'}`}><CheckCheck className="w-3.5 h-3.5" /><span>{okProd ? 'OK Prod Validé ✓ (Cliquer pour révoquer)' : 'Valider OK Prod'}</span></button>
+                ) : (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-100 border border-slate-200 text-slate-500 whitespace-nowrap"><Lock className="w-3.5 h-3.5 text-slate-400" /><span>Bouton OK Prod masqué (Attente DT, TC, SMS & RDL)</span></div>
+                )}
+              </div>
             </div>
 
-            {/* Cette répartition apparaît uniquement dans la carte, une fois l'OK Prod validé durant la RDL */}
-            {okProd ? (
-              <div className="pt-3 border-t border-slate-200/80">
-                <div className="text-xs font-bold text-slate-800 mb-2">
-                  Répartition des OF
+            {okProd || rdl || (ofs && ofs.length > 0) ? (
+              <div className="pt-2 border-t border-slate-200/80">
+                <div className="text-xs font-bold text-slate-800 mb-2 flex items-center gap-2">
+                  <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-purple-600"></span><span>OF</span></span>
+                  {!isAddingOF && <button type="button" onClick={() => setIsAddingOF(true)} className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold text-slate-900 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg shadow-2xs transition-colors cursor-pointer"><Plus className="w-3 h-3" /><span>Ajouter un OF</span></button>}
                 </div>
-                <OFSubTable
-                  totalDemandee={quantiteDemandee}
-                  ofs={ofs}
-                  onUpdateOFs={(newOfs) => {
-                    setOfs(newOfs);
-                    const totalFinie = newOfs.reduce((sum, o) => sum + o.quantiteFinie, 0);
-                    if (newOfs.length > 0) {
-                      setQuantiteFinie(totalFinie);
-                    }
-                  }}
-                />
+                <OFSubTable cardId={initialData?.id || 'NOUVELLE-CARTE'} totalDemandee={quantiteDemandee} ofs={ofs} isAddingOF={isAddingOF} onCloseAddOF={() => setIsAddingOF(false)} onUpdateOFs={(newOfs) => { setOfs(newOfs); const totalFinie = newOfs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0); if (newOfs.length > 0) { setQuantiteFinie(totalFinie); } }} />
               </div>
             ) : (
-              <div className="pt-3 border-t border-slate-200/80 text-xs text-slate-400">
-                Ex. Répartition des OF verrouillée
-              </div>
+              allJalonsChecked && <div className="p-3 bg-emerald-50/70 border border-emerald-200/80 rounded-lg text-xs text-emerald-800 flex items-center gap-2"><span>✓ <strong>Les 4 jalons sont validés !</strong> Vous pouvez maintenant cliquer sur le bouton <strong>« Valider OK Prod »</strong> ci-dessus pour faire glisser automatiquement cette carte en « Modèle en cours ».</span></div>
             )}
           </div>
 

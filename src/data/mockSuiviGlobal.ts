@@ -29,6 +29,29 @@ export const CATEGORIES_CONFIG: Record<string, CategorieConfig> = {
   },
 };
 
+export interface ChaineOption {
+  id: string;
+  nom: string;
+  categorieId: 'BRODERIE_MAIN' | 'CONFECTION';
+  categorieTitre: string;
+  dotColor: string;
+}
+
+export const PRODUCTION_CHAINS: ChaineOption[] = [
+  { id: 'bm-glaieul', nom: 'Glaïeul', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-petunia', nom: 'Pétunia', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-dhalia', nom: 'Dhalia', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-rose', nom: 'Rose', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-orchidee', nom: 'Orchidée', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-mimosa', nom: 'Mimosa', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'conf-tan', nom: 'Tan', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-mar', nom: 'Mar', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-bleu', nom: 'Bleu', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-fen', nom: 'Fen', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-lotus', nom: 'Lotus', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-orchidee', nom: 'Orchidée', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+];
+
 export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
   // --- BRODERIE MAIN ---
   {

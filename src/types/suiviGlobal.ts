@@ -3,6 +3,35 @@ export interface ChaineSlotCard {
   customLabel?: string; // Si saisie manuelle libre
   dateExpedition?: string; // Utile pour la colonne Expédition
   statutExpedition?: 'A_EXPEDIER' | 'EN_TRANSIT' | 'LIVRE';
+  /** Alertes spécifiques à cette carte dans ce slot. */
+  alertes?: AlerteChamp[];
+}
+
+export interface AlerteChamp {
+  texte: string;
+  teinte: TeinteAlerte;
+}
+
+export type TeinteAlerte = 'rouge' | 'orange' | 'ambre' | 'bleu' | 'violet' | 'vert';
+
+export const TEINTES_ALERTE: Record<
+  TeinteAlerte,
+  { nom: string; fond: string; bordure: string; pastille: string }
+> = {
+  rouge: { nom: 'Rouge', fond: 'bg-rose-600', bordure: 'border-rose-700', pastille: 'bg-rose-600' },
+  orange: { nom: 'Orange', fond: 'bg-orange-500', bordure: 'border-orange-600', pastille: 'bg-orange-500' },
+  ambre: { nom: 'Ambre', fond: 'bg-amber-500', bordure: 'border-amber-600', pastille: 'bg-amber-500' },
+  bleu: { nom: 'Bleu', fond: 'bg-blue-600', bordure: 'border-blue-700', pastille: 'bg-blue-600' },
+  violet: { nom: 'Violet', fond: 'bg-violet-600', bordure: 'border-violet-700', pastille: 'bg-violet-600' },
+  vert: { nom: 'Vert', fond: 'bg-emerald-600', bordure: 'border-emerald-700', pastille: 'bg-emerald-600' },
+};
+
+export const TEINTE_ALERTE_DEFAUT: TeinteAlerte = 'rouge';
+
+export function normaliserTeinteAlerte(valeur: unknown): TeinteAlerte {
+  return typeof valeur === 'string' && valeur in TEINTES_ALERTE
+    ? (valeur as TeinteAlerte)
+    : TEINTE_ALERTE_DEFAUT;
 }
 
 /** Une valeur ajoutée dans la colonne Inspection : `I 50% : 06/10 Pass` ou `OF1 : 06/10 Fail`. */

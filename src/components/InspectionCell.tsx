@@ -35,12 +35,17 @@ export const InspectionCell: React.FC<InspectionCellProps> = ({
   const ligne = (valeur: InspectionValeur, index: number) => {
     const { prefixe, indice } = libelleValeur(bloc.valeurs, index);
     const enEdition = dateEnEdition === valeur.id;
+    const isIType = prefixe === 'I';
 
     return (
       <div key={valeur.id} className="group/val flex items-center gap-1">
         <span className="shrink-0 text-[11px] font-bold leading-none text-slate-700">
           {prefixe}
-          <sub className="text-[8px] font-semibold text-slate-500">{indice}</sub>
+          {isIType ? (
+            <sub className="text-[8px] font-semibold text-slate-500">{indice}</sub>
+          ) : (
+            <span className="text-[11px] font-bold text-slate-500">{indice}</span>
+          )}
         </span>
         <span className="text-[10px] leading-none text-slate-400">:</span>
 
