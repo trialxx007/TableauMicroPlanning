@@ -1,7 +1,7 @@
 import { CardFormData, CardItem, JalonCategorie, JalonCatalogue } from '../types/card.ts';
 import { CATALOGUE_INITIAL, cataloguePourType, categorieParCode } from '../data/mockJalons.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
-import { normaliserSemaine } from '../utils/jalons.ts';
+import { normaliserDateJalon, normaliserSemaine } from '../utils/jalons.ts';
 
 /**
  * Cache hors ligne. La v6 correspond au passage aux jalons dynamiques : un cache
@@ -99,6 +99,8 @@ export const cardApi = {
             ...(normaliserSemaine(j.semaine) != null
               ? { semaine: normaliserSemaine(j.semaine) as number }
               : {}),
+            ...(normaliserDateJalon(j.date) != null ? { date: normaliserDateJalon(j.date) as string } : {}),
+            ...(j.tbc ? { tbc: true } : {}),
           }))
         : cataloguePourType(data.typeCarte ?? 'R').map((j) => ({
             code: j.code,

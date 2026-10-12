@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { CardItem, CardJalon } from './src/types/card.ts';
+import { normaliserDateJalon, okProdAuto } from './src/utils/jalons.ts';
 import {
   createJalon,
   deleteCard,
@@ -200,10 +201,13 @@ function parseJalons(value: unknown): CardJalon[] | undefined {
     codes.add(code);
     if (!connus.has(code)) createJalon(code, code, (brut as CardJalon).categorie);
     const semaine = Number((brut as CardJalon).semaine);
+    const date = normaliserDateJalon((brut as CardJalon).date);
     nettoyes.push({
       code,
       valide: Boolean((brut as CardJalon).valide),
       ...(Number.isFinite(semaine) && semaine >= 1 && semaine <= 53 ? { semaine } : {}),
+      ...(date != null ? { date } : {}),
+      ...((brut as CardJalon).tbc ? { tbc: true } : {}),
     });
   }
   return nettoyes;
@@ -229,6 +233,8 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
   const jalons: CardJalon[] = Array.isArray(body.jalons)
     ? (parseJalons(body.jalons) as CardJalon[])
     : [];
+  // Règle d'accord automatique : DT, TC, FT et RDL validés => OK Prod accordé.
+  const okProdFinal = Boolean(body.okProd) || okProdAuto(jalons);
 
   const newCard: CardItem = {
     id: prochainIdCarte(),
@@ -240,7 +246,8 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
       ? { typeCarte: body.typeCarte }
       : {}),
     jalons,
-    okProd: Boolean(body.okProd),
+    okProd: okProdFinal,
+    ...(okProdFinal ? { dateOkProd: String(body.dateOkProd || dateStr) } : {}),
     ofs: Array.isArray(body.ofs) ? body.ofs : [],
     quantiteDemandee,
     quantiteFinie,
@@ -275,6 +282,11 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
   const quantiteFinie = Number(body.quantiteFinie) || 0;
   const { dateStr, timeStr } = getCurrentDateTime();
 
+  // Règle d'accord automatique : elle s'impose aux jalons portés par la carte.
+  const jalonsPut = parseJalons(body.jalons) ?? existant.jalons;
+  const okProdPut =
+    (typeof body.okProd === 'boolean' ? body.okProd : existant.okProd) || okProdAuto(jalonsPut);
+
   const updated = updateCardData(req.params.id, {
     client: body.client ?? existant.client,
     nom: body.nom ?? existant.nom,
@@ -285,8 +297,11 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
       : existant.typeCarte
       ? { typeCarte: existant.typeCarte }
       : {}),
-    jalons: parseJalons(body.jalons) ?? existant.jalons,
-    okProd: typeof body.okProd === 'boolean' ? body.okProd : existant.okProd,
+    jalons: jalonsPut,
+    okProd: okProdPut,
+    dateOkProd: okProdPut
+      ? existant.dateOkProd ?? body.dateOkProd ?? dateStr
+      : existant.dateOkProd,
     ofs: Array.isArray(body.ofs) ? body.ofs : existant.ofs,
     quantiteDemandee,
     quantiteFinie,
@@ -366,6 +381,13 @@ apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
   }
   if (body.jalons !== undefined) {
     patch.jalons = parseJalons(body.jalons) ?? existing.jalons;
+  }
+
+  // Règle d'accord automatique : DT, TC, FT et RDL validés => OK Prod accordé,
+  // y compris si le client tente de le révoquer tant que la condition tient.
+  if (okProdAuto(patch.jalons ?? existing.jalons)) {
+    patch.okProd = true;
+    if (!existing.dateOkProd && patch.dateOkProd === undefined) patch.dateOkProd = dateStr;
   }
 
   const updated = updateCardData(req.params.id, patch);

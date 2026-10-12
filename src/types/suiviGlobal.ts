@@ -60,6 +60,8 @@ export interface ChaineRow {
   inspections: [InspectionBloc, InspectionBloc];
   // Alerte
   alerte?: string;
+  // Alertes saisies par chaîne (nouveau format multi-champs)
+  alertes?: AlerteChamp[];
   // 5 Prochains Lancements (chacun peut contenir 2 cartes empilées)
   prochainsLancementsCards: [
     [ChaineSlotCard | null, ChaineSlotCard | null],

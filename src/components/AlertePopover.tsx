@@ -5,6 +5,7 @@ import {
   getJalonsCard,
   themeJalon,
   marqueJalon,
+  dateCourteJalon,
   titreCategorie,
   ORDRE_CATEGORIES,
   type JalonInfo,
@@ -238,6 +239,14 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
                   <ul className="space-y-2">
                     {groupe.jalons.map((j) => {
                       const retard = semaineCourante - (j.semaine ?? semaineCourante);
+                      const echeance =
+                        j.etat === 'DATE' && j.date
+                          ? `Attendu le ${dateCourteJalon(j.date)} • échéance dépassée`
+                          : `Attendu S${j.semaine} • ${
+                              retard > 0
+                                ? `${retard} semaine${retard > 1 ? 's' : ''} de retard`
+                                : 'semaine dépassée'
+                            }`;
                       return (
                         <li
                           key={j.code}
@@ -260,10 +269,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
                               {j.titre}
                             </div>
                             <div className="text-[11px] text-rose-700 font-medium">
-                              Attendu S{j.semaine} •{' '}
-                              {retard > 0
-                                ? `${retard} semaine${retard > 1 ? 's' : ''} de retard`
-                                : 'semaine dépassée'}
+                              {echeance}
                             </div>
                           </div>
                         </li>

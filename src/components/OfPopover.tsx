@@ -1,10 +1,9 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { X, Factory, User, Package } from 'lucide-react';
+﻿import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { X, Factory, User } from 'lucide-react';
 import { CardItem, OF_TYPES, normalizeOFType } from '../types/card.ts';
 
 interface OfPopoverProps {
   card: CardItem;
-  /** Numero de l'OF affiche (1, 2, 3...). */
   numero: number;
   slotTitle?: string;
   anchor: HTMLElement;
@@ -14,8 +13,6 @@ interface OfPopoverProps {
 const GAP = 8;
 const MARGE = 8;
 
-/** Popover ancre sur le libelle OFx de la colonne Inspection : detalle de
- *  l'OF pris dans la carte du modele en cours (quantites, sous-OFs, type). */
 export const OfPopover: React.FC<OfPopoverProps> = ({
   card,
   numero,
@@ -27,6 +24,7 @@ export const OfPopover: React.FC<OfPopoverProps> = ({
   const [pos, setPos] = useState<{ top: number; left: number; origin: string } | null>(null);
 
   const of = card.ofs?.[numero - 1];
+  const ofs = card.ofs || [];
 
   const placer = useCallback(() => {
     const r = anchor.getBoundingClientRect();
@@ -89,103 +87,84 @@ export const OfPopover: React.FC<OfPopoverProps> = ({
     };
   }, [anchor, onClose]);
 
-  const typeKey = of ? normalizeOFType(of.type) : 'I';
-  const typeInfo = OF_TYPES[typeKey];
-
   return (
     <div
       ref={panelRef}
-      role="dialog"
-      aria-modal="false"
-      aria-label={`Detail OF${numero}`}
+      role='dialog'
+      aria-modal='false'
+      aria-label={'Detail OF' + numero}
       style={pos ? { top: pos.top, left: pos.left, transformOrigin: pos.origin } : undefined}
-      className={`fixed left-0 top-0 z-50 w-[min(340px,calc(100vw-16px))] max-h-[75vh] bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col ${
-        pos ? 'animate-popover-in' : 'invisible'
-      }`}
-    >
-      <div className="shrink-0 px-3.5 py-3 bg-slate-800 text-white flex items-start justify-between gap-3">
-        <div className="flex items-start gap-2 min-w-0">
-          <span className="mt-0.5 w-6 h-6 shrink-0 rounded-lg bg-white/15 border border-white/25 flex items-center justify-center">
-            <Factory className="w-3.5 h-3.5" />
+      className={`fixed left-0 top-0 z-50 w-[min(340px,calc(100vw-16px))] max-h-[75vh] bg-white rounded-2xl border border-slate-200 shadow-2xl overflow-hidden flex flex-col ${pos ? '' : 'invisible'}`}
+>
+      <div className='shrink-0 px-3.5 py-3 bg-slate-800 text-white flex items-center justify-between gap-3'>
+        <div className='flex items-center gap-2 min-w-0'>
+          <span className='w-6 h-6 shrink-0 rounded-lg bg-white/15 border border-white/25 flex items-center justify-center'>
+            <Factory className='w-3.5 h-3.5' />
           </span>
-          <div className="min-w-0">
-            <div className="text-xs font-extrabold uppercase tracking-wider">OF {numero}</div>
-            <div className="text-[11px] text-slate-300 truncate">
-              {slotTitle ? `${slotTitle} - ` : ''}
-              {card.modele}
+          <div className='min-w-0'>
+            <div className='text-xs font-extrabold tracking-wider'>
+              <span className='uppercase'>CLIENT :</span>{' '}
+              <span className='normal-case text-slate-100'>{card.client}</span>
             </div>
           </div>
         </div>
         <button
-          type="button"
+          type='button'
           onClick={onClose}
-          title="Fermer"
-          className="shrink-0 w-6 h-6 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer"
+          title='Fermer'
+          className='shrink-0 w-6 h-6 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center transition-colors cursor-pointer'
         >
-          <X className="w-3.5 h-3.5" />
+          <X className='w-3.5 h-3.5' />
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-3.5 py-3 space-y-3">
-        {!of ? (
-          <p className="text-xs text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg p-3">
-            Cet OF n'existe pas encore dans la carte du modele en cours.
+      <div className='flex-1 overflow-y-auto px-3.5 py-3 space-y-3'>
+        {ofs.length === 0 ? (
+          <p className='text-xs text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg p-3'>
+            Aucun OF pour cette carte.
           </p>
         ) : (
           <>
-            <div className="flex items-center gap-2">
-              <span className={`px-2 py-0.5 text-[10px] font-bold uppercase rounded border ${typeInfo.classe}`}>
-                {typeInfo.label}
-              </span>
-              <span className="text-xs font-bold text-slate-700 truncate">
-                {of.codeOF}
-                {of.titre ? ` - ${of.titre}` : ''}
-              </span>
-            </div>
+            <div className='space-y-1.5'>
+              <div className='text-sm font-bold text-slate-700'>{card.modele}</div>
+              <div className='bg-slate-50 border border-slate-200 rounded-lg overflow-hidden'>
+                {ofs.map((ofItem, idx) => {
+                  const ofType = normalizeOFType(ofItem.type);
+                  const typeLetter = ofType === 'L' ? 'L' : ofType === 'O' ? 'O' : 'I';
+                  const typeInfo = OF_TYPES[ofType];
+                  const source = Array.isArray(ofItem.casesEnCours) ? ofItem.casesEnCours : [];
+                  const nbCases = Math.min(5, Math.max(3, ofItem.nbCases || source.length || 5));
+                  const casesValues = Array.from({ length: nbCases }, (_, i) => source[i] ?? 0);
 
-            <div className="grid grid-cols-2 gap-2">
-              <Info icon={<User className="w-3.5 h-3.5" />} label="Executant" value={of.nomExecutant || '-'} />
-              <Info icon={<Package className="w-3.5 h-3.5" />} label="Quantite demandee" value={String(of.quantiteDemandee ?? 0)} />
-              <Info icon={<Package className="w-3.5 h-3.5" />} label="Quantite finie" value={String(of.quantiteFinie ?? 0)} />
-              <Info icon={<Package className="w-3.5 h-3.5" />} label="Reste a produire" value={String(of.resteAProduire ?? 0)} />
-            </div>
-
-            <div>
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">
-                Sous-OFs ({of.sousOfs?.length ?? 0})
-              </div>
-              {!of.sousOfs?.length ? (
-                <p className="text-[11px] text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg p-2">
-                  Aucun sous-OF.
-                </p>
-              ) : (
-                <ul className="space-y-1">
-                  {of.sousOfs.map((so) => (
-                    <li
-                      key={so.id}
-                      className="flex items-center justify-between gap-2 text-[11px] bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5"
+                  return (
+                    <div
+                      key={ofItem.id || idx}
+                      className='text-[11px] px-2.5 py-1.5 leading-relaxed flex items-center gap-1 flex-wrap'
                     >
-                      <span className="min-w-0 truncate font-semibold text-slate-700">
-                        {so.codeSousOF}
-                        {so.titre ? ` - ${so.titre}` : ''}
+                      <span className='font-semibold text-slate-800'>{idx + 1}</span>
+                      <span className='text-slate-600'>:</span>
+                      {casesValues.map((v, c) => {
+                        const dernier = c === casesValues.length - 1;
+                        return (
+                          <React.Fragment key={c}>
+                            <span className={dernier ? 'font-bold text-slate-900' : 'text-slate-700'}>
+                              {dernier ? ofItem.quantiteDemandee : v}
+                            </span>
+                            {!dernier && <span className='text-slate-300'>/</span>}
+                          </React.Fragment>
+                        );
+                      })}
+                      <span
+                        title={typeInfo.label}
+                        className={`font-bold px-1.5 py-0.5 rounded-md border ${typeInfo.classe}`}
+                      >
+                        {typeLetter}
                       </span>
-                      <span className="shrink-0 text-slate-500">
-                        {so.quantiteFinie}/{so.quantiteDemandee}
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-
-            {of.notes && (
-              <div>
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400 mb-1">Notes</div>
-                <p className="text-[11px] text-slate-600 whitespace-pre-wrap bg-slate-50 border border-slate-200 rounded-lg p-2">
-                  {of.notes}
-                </p>
+                    </div>
+                  );
+                })}
               </div>
-            )}
+            </div>
           </>
         )}
       </div>
@@ -194,11 +173,11 @@ export const OfPopover: React.FC<OfPopoverProps> = ({
 };
 
 const Info = ({ icon, label, value }: { icon: React.ReactNode; label: string; value: string }) => (
-  <div className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 min-w-0">
-    <div className="flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider text-slate-400">
+  <div className='bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 min-w-0'>
+    <div className='flex items-center gap-1 text-[9px] font-bold uppercase tracking-wider text-slate-400'>
       {icon}
-      <span className="truncate">{label}</span>
+      <span className='truncate'>{label}</span>
     </div>
-    <div className="text-xs font-bold text-slate-700 truncate mt-0.5">{value}</div>
+    <div className='text-xs font-bold text-slate-700 truncate mt-0.5'>{value}</div>
   </div>
 );

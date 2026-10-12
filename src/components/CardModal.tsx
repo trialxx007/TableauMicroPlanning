@@ -16,19 +16,26 @@ import {
 import { OFSubTable, computeOfQuantiteFinie } from './OFSubTable.tsx';
 import {
   getJalonInfo,
+  appliquerReglePpsRdl,
   normaliserCodeJalon,
+  normaliserDateJalon,
   normaliserSemaine,
   rangsParCategorie,
   SEMAINE_MAX,
   SEMAINE_MIN,
+  dateCourteJalon,
+  dateDuJourJalon,
   themeJalon,
+  marqueJalon,
   titreCategorie,
+  okProdAuto,
+  CODES_OK_PROD,
   type JalonEtat,
 } from '../utils/jalons.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
 import { jalonApi } from '../services/api.ts';
-import { categorieParCode, cataloguePourType, NOMENCLATURES_PAR_TYPE } from '../data/mockJalons.ts';
-import { getSemaineISO } from '../utils/dateFrance.ts';
+import { categorieParCode, CATEGORIES_PAR_CODE, cataloguePourType, NOMENCLATURES_PAR_TYPE } from '../data/mockJalons.ts';
+import { getNowParis, getSemaineISO } from '../utils/dateFrance.ts';
 import {
   X,
   Check,
@@ -53,6 +60,11 @@ interface CardModalProps {
   onSubmit: (data: CardFormData) => Promise<void>;
   initialData?: CardItem | null;
   /**
+   * Pré-remplissage appliqué uniquement en mode création (initialData null) :
+   * par exemple okProd/statut préréservés pour une case du Suivi Global.
+   */
+  createPrefill?: Partial<CardFormData> | null;
+  /**
    * Appelé après l'ajout ou le retrait d'un jalon sur cette carte, pour recharger
    * le catalogue partagé et les cartes. Le jalon reste propre à la carte : les
    * autres ne sont pas modifiées.
@@ -60,13 +72,18 @@ interface CardModalProps {
   onJalonAjoute?: () => void | Promise<void>;
 }
 
-type JalonState = { valide: boolean; semaine: number | null };
+type JalonState = { valide: boolean; semaine: number | null; date: string | null; tbc: boolean };
 
 /** Une carte porte ses propres jalons : seuls ceux qu'elle a lui sont affichables. */
 function jalonsInitiaux(card: CardItem | null | undefined): Record<JalonCode, JalonState> {
   const base: Record<JalonCode, JalonState> = {};
   for (const j of card?.jalons ?? []) {
-    base[j.code] = { valide: Boolean(j.valide), semaine: j.semaine ?? null };
+    base[j.code] = {
+      valide: Boolean(j.valide),
+      semaine: j.semaine ?? null,
+      date: j.date ?? null,
+      tbc: Boolean(j.tbc),
+    };
   }
   return base;
 }
@@ -75,7 +92,7 @@ function jalonsInitiaux(card: CardItem | null | undefined): Record<JalonCode, Ja
  *  pré-remplissage d'une carte neuve avec les nomenclatures de son type. */
 function preremplirJalons(entrees: { code: string }[]): Record<JalonCode, JalonState> {
   const base: Record<JalonCode, JalonState> = {};
-  for (const j of entrees) base[j.code] = { valide: false, semaine: null };
+  for (const j of entrees) base[j.code] = { valide: false, semaine: null, date: null, tbc: false };
   return base;
 }
 
@@ -100,7 +117,8 @@ function basculerType(
   }
   // Les nomenclatures propres au nouveau type, elles, arrivent en attente.
   for (const j of attendues) {
-    if (!(j.code in suivant)) suivant[j.code] = { valide: false, semaine: null };
+    if (!(j.code in suivant))
+      suivant[j.code] = { valide: false, semaine: null, date: null, tbc: false };
   }
   return suivant;
 }
@@ -110,6 +128,7 @@ export const CardModal: React.FC<CardModalProps> = ({
   onClose,
   onSubmit,
   initialData,
+  createPrefill,
   onJalonAjoute,
 }) => {
   const catalogue = useJalonCatalogue();
@@ -141,9 +160,8 @@ export const CardModal: React.FC<CardModalProps> = ({
 
 
   const [nouveauCode, setNouveauCode] = useState('');
-  const [nouveauLibelle, setNouveauLibelle] = useState('');
   // Grandeur du jalon en cours de saisie : vert pour une nomenclature, bleu pour
-  // un statut. Le code saisi la devine, l'utilisateur peut corriger.
+  // un statut. Le code saisi la devine (ou le bloc d'où vient le « + »).
   const [nouvelleCategorie, setNouvelleCategorie] = useState<JalonCategorie>('STATUT');
   // Grandeur choisie pour les jalons ajoutés à une carte qui n'est pas encore
   // enregistrée : le catalogue ne les connaît pas encore, elle ne peut venir que
@@ -159,6 +177,10 @@ export const CardModal: React.FC<CardModalProps> = ({
   // pourrait plus retaper une semaine. Le brouillon vit le temps de la saisie, la
   // semaine enregistrée ne change qu'à la validation du champ (blur) ou à l'enregistrement.
   const [brouillonSemaine, setBrouillonSemaine] = useState<Record<string, string | undefined>>({});
+  // Sens d'élargissement des pastilles en bord de rangée : près du bord droit,
+  // le panneau s'ouvre vers la gauche pour ne pas sortir de la carte ni faire
+  // rabattre la pastille sur la ligne suivante (elle « retractait » au survol).
+  const [expansionGauche, setExpansionGauche] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (initialData) {
@@ -202,6 +224,18 @@ export const CardModal: React.FC<CardModalProps> = ({
       setChaineId(undefined);
       setChaineNom(undefined);
       setChaineCategorie(undefined);
+      // Pré-remplissage venu du Suivi Global (création dans une case vide).
+      if (createPrefill) {
+        if (createPrefill.okProd !== undefined) setOkProd(Boolean(createPrefill.okProd));
+        if (createPrefill.statut) setStatut(createPrefill.statut);
+        if (createPrefill.quantiteDemandee) setQuantiteDemandee(createPrefill.quantiteDemandee);
+        if (createPrefill.modele) setModele(createPrefill.modele);
+        if (createPrefill.client) setClient(createPrefill.client);
+        if (createPrefill.nom) setNom(createPrefill.nom);
+        if (createPrefill.reference) setReference(createPrefill.reference);
+        if (createPrefill.typeCarte) setTypeCarte(createPrefill.typeCarte as TypeCarte);
+        if (createPrefill.ofs && createPrefill.ofs.length > 0) setOfs(createPrefill.ofs);
+      }
     }
     setError(null);
     setCopied(false);
@@ -210,7 +244,7 @@ export const CardModal: React.FC<CardModalProps> = ({
     setNouvelleCategorie('STATUT');
     setCategoriesEnAttente({});
     setIsAddingOF(false);
-  }, [initialData, isOpen]);
+  }, [initialData, isOpen, createPrefill]);
 
   // Codes portés par cette carte, regroupés par grandeur : les nomenclatures à la
   // suite, puis les statuts. Le hook est appelé avant le retour anticipé : tous les
@@ -252,19 +286,41 @@ export const CardModal: React.FC<CardModalProps> = ({
   const setJalon = (code: JalonCode, patch: Partial<JalonState>) => {
     setJalons((prev) => ({
       ...prev,
-      [code]: { valide: prev[code]?.valide ?? false, semaine: prev[code]?.semaine ?? null, ...patch },
+      [code]: {
+        valide: prev[code]?.valide ?? false,
+        semaine: prev[code]?.semaine ?? null,
+        date: prev[code]?.date ?? null,
+        tbc: prev[code]?.tbc ?? false,
+        ...patch,
+      },
     }));
   };
 
   /**
-   * Listbox : trois choix distincts. « En attente » efface la semaine, « Validé » aussi.
-   * « Semaine » exige une semaine cible : on la pré-remplit avec la semaine courante
-   * si le jalon n'en a pas encore, pour ne pas retomber immédiatement sur « En attente ».
+   * Listbox des états. « En attente », « TBC » et « Validé » effacent l'échéance.
+   * « Semaine » et « Date » exigent une échéance : on la pré-remplit (semaine ou
+   * jour courants) si le jalon n'en a pas encore, pour ne pas retomber en attente.
    */
   const setJalonEtat = (code: JalonCode, etat: JalonEtat) => {
-    if (etat === 'VALIDE') setJalon(code, { valide: true, semaine: null });
-    else if (etat === 'EN_ATTENTE') setJalon(code, { valide: false, semaine: null });
-    else setJalon(code, { valide: false, semaine: jalons[code]?.semaine ?? getSemaineISO() });
+    if (etat === 'VALIDE') setJalon(code, { valide: true, semaine: null, date: null, tbc: false });
+    else if (etat === 'EN_ATTENTE')
+      setJalon(code, { valide: false, semaine: null, date: null, tbc: false });
+    else if (etat === 'TBC')
+      setJalon(code, { valide: false, semaine: null, date: null, tbc: true });
+    else if (etat === 'DATE')
+      setJalon(code, {
+        valide: false,
+        tbc: false,
+        semaine: null,
+        date: jalons[code]?.date ?? dateDuJourJalon(),
+      });
+    else
+      setJalon(code, {
+        valide: false,
+        tbc: false,
+        date: null,
+        semaine: jalons[code]?.semaine ?? getSemaineISO(),
+      });
     setBrouillonSemaine((prev) => ({ ...prev, [code]: undefined }));
   };
 
@@ -284,6 +340,20 @@ export const CardModal: React.FC<CardModalProps> = ({
     setBrouillonSemaine((prev) => ({ ...prev, [code]: undefined }));
     if (brut.trim() === '') setJalon(code, { semaine: null });
     else setJalon(code, { semaine: normaliserSemaine(brut) });
+  };
+
+  /** Au survol d'une pastille, mesure si son panneau étendu (7rem → 15.5rem)
+   *  sortirait de la rangée : si oui, il s'ouvre vers la gauche pour rester
+   *  dans la carte, sans faire bouger la pastille ni rabattre la ligne. */
+  const adapterExpansion = (code: JalonCode, element: HTMLElement) => {
+    const rangee = element.parentElement;
+    if (!rangee) return;
+    const pastille = element.getBoundingClientRect();
+    const bord = rangee.getBoundingClientRect();
+    const gauche = pastille.right + 136 > bord.right - 8;
+    setExpansionGauche((prev) =>
+      prev[code] === gauche ? prev : { ...prev, [code]: gauche }
+    );
   };
 
   /**
@@ -309,9 +379,11 @@ export const CardModal: React.FC<CardModalProps> = ({
     try {
       // Carte neuve : pas encore d'id en base, le jalon part avec la sauvegarde.
       if (initialData?.id) {
+        // Le libellé par défaut est le code lui-même : l'utilisateur ne saisit
+        // que le code, l'intitulé affiché reste le code (modifiable plus tard).
         await jalonApi.create(
           code,
-          nouveauLibelle.trim() || code,
+          code,
           nouvelleCategorie,
           initialData.id
         );
@@ -322,7 +394,6 @@ export const CardModal: React.FC<CardModalProps> = ({
         setCategoriesEnAttente((prev) => ({ ...prev, [code]: nouvelleCategorie }));
       }
       setNouveauCode('');
-      setNouveauLibelle('');
       setNouvelleCategorie('STATUT');
       setJalon(code, { valide: false, semaine: null });
     } catch (err) {
@@ -365,7 +436,8 @@ export const CardModal: React.FC<CardModalProps> = ({
   const basculerNomenclature = (t: TypeCarte, code: JalonCode) => {
     setJalons((prev) => {
       const base = t === typeCarte ? prev : basculerType(typeCarte, t, prev);
-      if (!(code in base)) return { ...base, [code]: { valide: false, semaine: null } };
+      if (!(code in base))
+        return { ...base, [code]: { valide: false, semaine: null, date: null, tbc: false } };
       const suivant = { ...base };
       delete suivant[code];
       return suivant;
@@ -375,7 +447,11 @@ export const CardModal: React.FC<CardModalProps> = ({
 
   /** Les 4 jalons techniques n'ont plus leur propre section : leur etat vit
    *  dans la liste des jalons du haut (DT, TC, RDL). */
-  const allJalonsChecked = Boolean(jalons['DT']?.valide && jalons['TC']?.valide && jalons['RDL']?.valide);
+  // Règle d'accord : dès que DT, TC, FT et RDL sont validés, l'OK Prod est accordé
+  // automatiquement (validé à l'enregistrement côté serveur aussi). Avant ce stade,
+  // la validation manuelle du bouton reste possible.
+  const autoOkProd = CODES_OK_PROD.every((code) => jalons[code]?.valide === true);
+  const okProdEffectif = okProd || autoOkProd;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -413,12 +489,16 @@ export const CardModal: React.FC<CardModalProps> = ({
             code,
             valide: Boolean(etat?.valide),
             ...(semaine != null ? { semaine } : {}),
+            ...(etat?.date != null && normaliserDateJalon(etat.date) != null
+              ? { date: normaliserDateJalon(etat.date) as string }
+              : {}),
+            ...(etat?.tbc ? { tbc: true } : {}),
             ...(categoriesEnAttente[code] ? { categorie: categoriesEnAttente[code] } : {}),
           };
         }),
-        dateRdl: jalons['RDL']?.valide ? getSemaineISO() : undefined,
+        dateRdl: jalons['RDL']?.valide ? getNowParis().dateStr : undefined,
         okProd: Boolean(okProd),
-        dateOkProd: okProd ? getSemaineISO() : undefined,
+        dateOkProd: okProd ? getNowParis().dateStr : undefined,
         ofs,
         quantiteDemandee: Number(quantiteDemandee),
         quantiteFinie: Number(quantiteFinie),
@@ -450,9 +530,22 @@ export const CardModal: React.FC<CardModalProps> = ({
       ordre: 0,
     };
     const etat = jalons[code];
-    return getJalonInfo(
-      entree,
-      { valide: Boolean(etat?.valide), semaine: etat?.semaine ?? null },
+    return appliquerReglePpsRdl(
+      getJalonInfo(
+        entree,
+        {
+          valide: Boolean(etat?.valide),
+          semaine: etat?.semaine ?? null,
+          date: etat?.date ?? null,
+          tbc: etat?.tbc,
+        },
+        semaineCourante
+      ),
+      Object.entries(jalons).map(([c, e]) => ({
+        code: c,
+        semaine: e.semaine,
+        date: e.date,
+      })),
       semaineCourante
     );
   });
@@ -547,6 +640,7 @@ export const CardModal: React.FC<CardModalProps> = ({
                   </div>
                 </div>
               </div>
+              {initialData && (
               <div className="mt-1.5 text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-0.5">
                       {initialData.dateCreation && (
                         <span className="flex items-center gap-1">
@@ -561,6 +655,7 @@ export const CardModal: React.FC<CardModalProps> = ({
                       </span>
                     )}
               </div>
+              )}
 
             </div>
           </div>
@@ -568,25 +663,25 @@ export const CardModal: React.FC<CardModalProps> = ({
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => allJalonsChecked && setOkProd(!okProd)}
-              disabled={!allJalonsChecked}
+              onClick={() => setOkProd(!okProdEffectif)}
+              disabled={autoOkProd}
               title={
-                allJalonsChecked
-                  ? okProd
-                    ? 'Cliquer pour révoquer l’OK Prod'
-                    : 'Valider l’OK Prod'
-                  : 'Attente DT, TC & RDL'
+                autoOkProd
+                  ? 'OK Prod auto validé : DT, TC, FT et RDL sont validés'
+                  : okProd
+                  ? 'Cliquer pour révoquer l’OK Prod'
+                  : 'Valider l’OK Prod'
               }
               className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold whitespace-nowrap transition-colors ${
-                okProd
-                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 cursor-pointer hover:bg-emerald-100'
-                  : allJalonsChecked
-                  ? 'bg-emerald-600 text-white border-emerald-700 cursor-pointer hover:bg-emerald-700 animate-pulse'
-                  : 'bg-slate-100 text-slate-500 border-slate-200 cursor-not-allowed'
-              }`}
+                okProdEffectif
+                  ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
+                  : 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700 animate-pulse'
+              } ${autoOkProd ? 'cursor-default' : 'cursor-pointer'}`}
             >
               <CheckCheck className="w-3.5 h-3.5" />
-              <span>{okProd ? 'OK Prod validé' : allJalonsChecked ? 'Valider OK Prod' : 'OK Prod'}</span>
+              <span>
+                {okProdEffectif ? (autoOkProd ? 'OK Prod auto' : 'OK Prod validé') : 'Valider OK Prod'}
+              </span>
             </button>
 
             <button
@@ -815,45 +910,58 @@ export const CardModal: React.FC<CardModalProps> = ({
                     <div className="flex flex-wrap items-stretch gap-1.5">
                       {groupe.jalons.map((jalon) => {
                 const planifie = jalon.etat === 'SEMAINE';
+                const datePrevue = jalon.etat === 'DATE';
                 // La teinte vient de la grandeur du jalon (vert nomenclature,
                 // bleu statut) ; seule la nuance change avec l'avancement, et le
                 // rouge reste réservé au retard. Couleurs partagées avec le tableau.
                 const theme = themeJalon(jalon);
 
                 return (
-                  // grid + col-start/row-start identiques : affichage et contrôles
-                  // partagent la même cellule, donc aucune largeur ne bouge au survol.
+                  // La pastille s'élargit au survol/focus pour révéler les contrôles
+                  // (état + semaine/date). La largeur compacte (7rem) reste figée dans
+                  // le flux : seuls les contrôles, en surimpression, s'étirent — aucun
+                  // rabattement de ligne, même en bord de rangée.
                   <div
                     key={jalon.code}
-                    className={`group/j relative grid shrink-0 min-w-[4.75rem] rounded-md border px-1 py-0.5 ${theme.fond}`}
+                    onPointerEnter={(e) => adapterExpansion(jalon.code, e.currentTarget)}
+                    onFocus={(e) => adapterExpansion(jalon.code, e.currentTarget)}
+                    className="group/j relative shrink-0 w-[7rem]"
                   >
-                    {/* Couche 1 : code, statut et date cible. */}
-                    <span
-                      className={`col-start-1 row-start-1 relative z-0 flex items-center justify-center gap-1 whitespace-nowrap text-[11px] leading-4 ${theme.texte} group-hover/j:opacity-0 group-focus-within/j:opacity-0`}
+                    <div
+                      className={`relative overflow-hidden rounded-md border px-1 py-0.5 w-[7rem] ${theme.fond}`}
                     >
-                      {jalon.enRetard ? (
-                        <AlertTriangle className="w-3 h-3 shrink-0" />
-                      ) : jalon.etat === 'VALIDE' ? (
-                        <Check className="w-3 h-3 shrink-0" />
-                      ) : planifie ? (
-                        <Calendar className="w-3 h-3 shrink-0" />
-                      ) : (
-                        <Clock className="w-3 h-3 shrink-0" />
-                      )}
-                      <span className="font-bold">{jalon.code}:</span>
-                      {/* « Semaine » se lit juste S40, sans répéter le mot : le
-                          préfixe du code suffit et la place reste disponible. */}
-                      {planifie && jalon.semaine != null ? (
-                        <span className="font-bold">S{jalon.semaine}</span>
-                      ) : (
-                        <span>{jalon.etatLibelle}</span>
-                      )}
-                    </span>
+                      {/* Couche 1 : code et marque courte (✓, S40, 12/06, TBC, —).
+                          Elle fixe la hauteur et s'efface pendant l'édition. */}
+                      <span
+                        className={`flex items-center justify-center gap-1 whitespace-nowrap text-[11px] leading-4 transition-opacity duration-150 group-hover/j:opacity-0 group-focus-within/j:opacity-0 ${theme.texte}`}
+                      >
+                        {jalon.enRetard ? (
+                          <AlertTriangle className="w-3 h-3 shrink-0" />
+                        ) : jalon.etat === 'VALIDE' ? (
+                          <Check className="w-3 h-3 shrink-0" />
+                        ) : planifie || datePrevue ? (
+                          <Calendar className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <Clock className="w-3 h-3 shrink-0" />
+                        )}
+                        <span className="font-bold">{jalon.code}:</span>
+                        {/* Marque courte, identique au tableau et au suivi : sa largeur
+                            ne dépend plus du libellé complet. */}
+                        <span className="inline-block min-w-[2rem] text-center font-bold">
+                          {marqueJalon(jalon)}
+                        </span>
+                      </span>
+                    </div>
 
-                    {/* Couche 2 : les vrais contrôles, au survol ou au focus.
-                        z-10 est indispensable : sans lui, le passage de opacité 1 -> 0
-                        ferait passer l'affichage au-dessus des contrôles et lui volerait les clics. */}
-                    <div className="col-start-1 row-start-1 relative z-10 flex items-center justify-center gap-1 opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto group-focus-within/j:opacity-100 group-focus-within/j:pointer-events-auto">
+                    {/* Couche 2 : les vrais contrôles, révélés par l'élargissement. En
+                        surimpression (absolute), leur largeur ne déplace plus la pastille
+                        ni les voisines : au survol, la piste s'étire vers la droite, ou
+                        vers la gauche en fin de rangée quand la place manque. */}
+                    <div
+                      className={`absolute top-0 z-10 flex h-full items-center justify-center gap-1 whitespace-nowrap overflow-hidden rounded-md border px-1 py-0.5 transition-[width] duration-200 ease-out w-[7rem] group-hover/j:w-[15.5rem] group-focus-within/j:w-[15.5rem] opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto group-focus-within/j:opacity-100 group-focus-within/j:pointer-events-auto ${
+                        expansionGauche[jalon.code] ? 'right-0' : 'left-0'
+                      } ${theme.fond}`}
+                    >
                       <span className={`text-[11px] font-bold leading-4 ${theme.texte}`}>
                         {jalon.code}:
                       </span>
@@ -866,6 +974,8 @@ export const CardModal: React.FC<CardModalProps> = ({
                       >
                         <option value="EN_ATTENTE">En attente</option>
                         <option value="SEMAINE">Semaine</option>
+                        <option value="DATE">Date</option>
+                        <option value="TBC">TBC</option>
                         <option value="VALIDE">Validé</option>
                       </select>
 
@@ -881,6 +991,17 @@ export const CardModal: React.FC<CardModalProps> = ({
                           onBlur={() => validerSemaine(jalon.code)}
                           aria-label={`Semaine cible du jalon ${jalon.code}`}
                           className={`w-8 shrink-0 px-0.5 py-0.5 text-[11px] font-bold text-center leading-4 rounded border bg-white focus:outline-hidden focus:ring-1 focus:ring-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${theme.controle} ${theme.bordure}`}
+                        />
+                      )}
+
+                      {/* Le calendrier n'existe que pour l'état « Date ». */}
+                      {datePrevue && (
+                        <input
+                          type="date"
+                          value={jalon.date ?? ''}
+                          onChange={(e) => setJalon(jalon.code, { date: e.target.value || null })}
+                          aria-label={`Date cible du jalon ${jalon.code}`}
+                          className={`w-[104px] shrink-0 px-1 py-0.5 text-[11px] font-semibold leading-4 rounded border bg-white cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${theme.controle} ${theme.bordure}`}
                         />
                       )}
                     </div>
@@ -913,9 +1034,9 @@ export const CardModal: React.FC<CardModalProps> = ({
                   onChange={(e) => {
                     const suivant = normaliserCodeJalon(e.target.value);
                     setNouveauCode(suivant);
-                    // Le code Devine la grandeur le temps de la frappe ; le sélecteur
-                    // reste disponible pour corriger un code inconnu ou mal classé.
-                    if (suivant) setNouvelleCategorie(categorieParCode(suivant));
+                    // Un code connu se range tout seul (vert nomenclature / bleu
+                    // statut) ; un code nouveau garde celle du groupe d'origine.
+                    if (suivant in CATEGORIES_PAR_CODE) setNouvelleCategorie(categorieParCode(suivant));
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
@@ -926,55 +1047,9 @@ export const CardModal: React.FC<CardModalProps> = ({
                   placeholder="Code"
                   maxLength={3}
                   aria-label="Code du nouveau jalon"
+                  autoFocus
                   className="w-16 px-2 py-1 text-xs font-bold uppercase text-center bg-white border border-slate-200 rounded focus:outline-hidden focus:ring-1 focus:ring-blue-400"
                 />
-                <input
-                  type="text"
-                  value={nouveauLibelle}
-                  onChange={(e) => setNouveauLibelle(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      handleAjoutJalon();
-                    }
-                  }}
-                  placeholder="Intitulé (ex: Essayage)"
-                  aria-label="Intitulé du nouveau jalon"
-                  className="flex-1 min-w-[10rem] px-2 py-1 text-xs bg-white border border-slate-200 rounded focus:outline-hidden focus:ring-1 focus:ring-blue-400"
-                />
-                {/* Le formulaire est ouvert depuis un groupe, sa grandeur est déjà préselectionnée.
-                Les deux boutons permettent de la corriger — un code inconnu, ou un
-                code connu classé dans l'autre groupe. */}
-                <div
-                  role="group"
-                  aria-label="Catégorie du nouveau jalon"
-                  className="flex overflow-hidden rounded border border-slate-200"
-                >
-                  {(['NOMENCLATURE', 'STATUT'] as const).map((cat) => (
-                    <button
-                      key={cat}
-                      type="button"
-                      aria-pressed={nouvelleCategorie === cat}
-                      onClick={() => setNouvelleCategorie(cat)}
-                      title={
-                        cat === 'NOMENCLATURE'
-                          ? 'Nomenclature : le jalon nomme la pièce, il s’affiche en vert'
-                          : 'Statut : le jalon décrit l’avancement, il s’affiche en bleu'
-                      }
-                      className={`px-2 py-1 text-[11px] font-semibold transition-colors cursor-pointer ${
-                        nouvelleCategorie === cat
-                          ? cat === 'NOMENCLATURE'
-                            ? 'bg-emerald-600 text-white'
-                            : 'bg-blue-600 text-white'
-                          : cat === 'NOMENCLATURE'
-                          ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
-                          : 'bg-blue-50 text-blue-700 hover:bg-blue-100'
-                      }`}
-                    >
-                      {titreCategorie(cat)}
-                    </button>
-                  ))}
-                </div>
                 <button
                   type="button"
                   onClick={handleAjoutJalon}
@@ -984,12 +1059,16 @@ export const CardModal: React.FC<CardModalProps> = ({
                   {ajoutEnCours ? 'Ajout...' : 'Ajouter'}
                 </button>
                 <p className="w-full text-[10px] text-slate-500 leading-tight">
-                  Ajouté à cette carte uniquement, dans{' '}
-                  <strong className="font-semibold">
+                  Un code connu se range tout seul{' '}
+                  <span
+                    className={`font-semibold ${
+                      nouvelleCategorie === 'NOMENCLATURE' ? 'text-emerald-600' : 'text-blue-600'
+                    }`}
+                  >
                     {titreCategorie(nouvelleCategorie).toLowerCase()}
-                  </strong>
-                  . Son intitulé et sa catégorie rejoignent le catalogue commun,
-                  réutilisable sur une autre carte.
+                  </span>
+                  ; le jalon n'apparaît que sur cette carte, mais son code reste
+                  réutilisable sur une autre.
                 </p>
                 {erreurJalon && (
                   <p className="w-full text-[10px] font-semibold text-rose-600">{erreurJalon}</p>
@@ -1006,9 +1085,12 @@ export const CardModal: React.FC<CardModalProps> = ({
                   </div>
                   <div className="text-rose-50">
                     {jalonsEnRetard
-                      .map(
-                        (j) =>
-                          `${j.code} attendu S${j.semaine} (${semaineCourante - j.semaine!} sem. de retard)`
+                      .map((j) =>
+                        j.etat === 'DATE' && j.date
+                          ? `${j.code} attendu le ${dateCourteJalon(j.date)}`
+                          : `${j.code} attendu S${j.semaine} (${
+                              semaineCourante - (j.semaine ?? semaineCourante)
+                            } sem. de retard)`
                       )
                       .join(' ⬢ ')}
                   </div>

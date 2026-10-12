@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INITIAL_CARDS } from './src/data/mockData.ts';
-import { CATALOGUE_INITIAL, CATEGORIES_PAR_CODE, cataloguePourType, categorieParCode } from './src/data/mockJalons.ts';
+import { CATALOGUE_INITIAL, CATEGORIES_PAR_CODE, CODE_TDS_PPS, cataloguePourType, categorieParCode } from './src/data/mockJalons.ts';
 import type {
   CardItem,
   CardJalon,
@@ -67,6 +67,8 @@ function initSchema(conn: DatabaseSync): void {
       code     TEXT NOT NULL REFERENCES jalons(code) ON DELETE CASCADE,
       valide   INTEGER NOT NULL DEFAULT 0,
       semaine  INTEGER,
+      date     TEXT,
+      tbc      INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (card_id, code)
     );
 
@@ -84,6 +86,18 @@ function initSchema(conn: DatabaseSync): void {
     for (const [code, categorie] of Object.entries(CATEGORIES_PAR_CODE)) {
       conn.prepare('UPDATE jalons SET categorie = ? WHERE code = ?').run(categorie, code);
     }
+  }
+
+  // L'échéance d'un jalon peut désormais être une date calendaire ou un « TBC »,
+  // en plus de la semaine : une base antérieure n'a pas ces colonnes. Idempotent.
+  const colonnesJalons = conn.prepare('PRAGMA table_info(card_jalons)').all() as {
+    name: string;
+  }[];
+  if (!colonnesJalons.some((c) => c.name === 'date')) {
+    conn.exec('ALTER TABLE card_jalons ADD COLUMN date TEXT');
+  }
+  if (!colonnesJalons.some((c) => c.name === 'tbc')) {
+    conn.exec('ALTER TABLE card_jalons ADD COLUMN tbc INTEGER NOT NULL DEFAULT 0');
   }
 
   // Les nomenclatures sont désormais celles des deux natures de matière (R et T) :
@@ -123,11 +137,26 @@ function initSchema(conn: DatabaseSync): void {
 
   // Les codes du catalogue commun absent d'une base existante (FT l'a rejoint) sont
   // ajoutés, pour qu'une base créée avant ce changement ne les propose pas.
+  const existaitTdsPps = Boolean(
+    conn.prepare('SELECT 1 FROM jalons WHERE code = ?').get(CODE_TDS_PPS)
+  );
   const insertManquant = conn.prepare(
     'INSERT OR IGNORE INTO jalons (code, libelle, categorie, ordre, cree_le) VALUES (?, ?, ?, ?, ?)'
   );
   for (const j of CATALOGUE_INITIAL) {
     insertManquant.run(j.code, j.libelle, j.categorie, j.ordre, now());
+  }
+
+  // Le statut TDS/PPS rejoint toutes les cartes existantes, une seule fois, au
+  // moment où il apparaît dans le catalogue. Sur une base neuve il n'y a pas
+  // encore de carte : seedIfEmpty les créera avec le jalon via cataloguePourType.
+  if (!existaitTdsPps) {
+    const lierStatut = conn.prepare(
+      'INSERT OR IGNORE INTO card_jalons (card_id, code, valide, semaine, date, tbc) VALUES (?, ?, 0, NULL, NULL, 0)'
+    );
+    for (const c of conn.prepare('SELECT id FROM cards').all() as { id: string }[]) {
+      lierStatut.run(c.id, CODE_TDS_PPS);
+    }
   }
 }
 
@@ -162,10 +191,16 @@ export function prochainIdCarte(): string {
   return `CRD-${String(max + 1).padStart(3, '0')}`;
 }
 
-/** Première initialisation : catalogue + jeu de démonstration, une seule fois. */
+/**
+ * Première initialisation : catalogue + jeu de démonstration, une seule fois.
+ * Une base est considérée comme neuve uniquement si les deux tables sont vides :
+ * dès que le catalogue existe (données réelles en cours), le seed de démonstration
+ * ne doit plus jamais repartir, même si toutes les cartes ont été supprimées.
+ */
 function seedIfEmpty(conn: DatabaseSync): void {
-  const count = conn.prepare('SELECT COUNT(*) AS n FROM cards').get() as { n: number };
-  if (count.n > 0) return;
+  const nbCartes = conn.prepare('SELECT COUNT(*) AS n FROM cards').get() as { n: number };
+  const nbJalons = conn.prepare('SELECT COUNT(*) AS n FROM jalons').get() as { n: number };
+  if (nbCartes.n > 0 || nbJalons.n > 0) return;
 
   const insertJalon = conn.prepare(
     'INSERT INTO jalons (code, libelle, categorie, ordre, cree_le) VALUES (?, ?, ?, ?, ?)'
@@ -378,12 +413,20 @@ export function deleteJalon(code: string): void {
 
 function etatsForCard(cardId: string): CardJalon[] {
   const rows = getDb()
-    .prepare('SELECT code, valide, semaine FROM card_jalons WHERE card_id = ?')
-    .all(cardId) as { code: string; valide: number; semaine: number | null }[];
+    .prepare('SELECT code, valide, semaine, date, tbc FROM card_jalons WHERE card_id = ?')
+    .all(cardId) as {
+    code: string;
+    valide: number;
+    semaine: number | null;
+    date: string | null;
+    tbc: number | null;
+  }[];
   return rows.map((r) => ({
     code: r.code,
     valide: Boolean(r.valide),
     ...(r.semaine != null ? { semaine: r.semaine } : {}),
+    ...(r.date != null ? { date: r.date } : {}),
+    ...(r.tbc ? { tbc: true } : {}),
   }));
 }
 
@@ -428,8 +471,12 @@ function writeJalons(cardId: string, etats: CardJalon[] | undefined): void {
   if (etats === undefined) return;
 
   const insert = conn.prepare(`
-    INSERT INTO card_jalons (card_id, code, valide, semaine) VALUES (?, ?, ?, ?)
-    ON CONFLICT(card_id, code) DO UPDATE SET valide = excluded.valide, semaine = excluded.semaine
+    INSERT INTO card_jalons (card_id, code, valide, semaine, date, tbc) VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(card_id, code) DO UPDATE SET
+      valide = excluded.valide,
+      semaine = excluded.semaine,
+      date = excluded.date,
+      tbc = excluded.tbc
   `);
   const connus = new Set(
     (conn.prepare('SELECT code FROM jalons').all() as { code: string }[]).map((r) => r.code)
@@ -437,7 +484,7 @@ function writeJalons(cardId: string, etats: CardJalon[] | undefined): void {
 
   for (const e of etats) {
     if (!connus.has(e.code)) continue;
-    insert.run(cardId, e.code, e.valide ? 1 : 0, e.semaine ?? null);
+    insert.run(cardId, e.code, e.valide ? 1 : 0, e.semaine ?? null, e.date ?? null, e.tbc ? 1 : 0);
   }
 }
 

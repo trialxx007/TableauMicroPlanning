@@ -5,10 +5,12 @@ import {
   getEtatJalon,
   marqueJalon,
   detailJalon,
+  dateDuJourJalon,
   groupesParCategorie,
   libelleCategorie,
   themeJalon,
   titreCategorie,
+  okProdAuto,
   type JalonEtat,
 } from '../utils/jalons.ts';
 import { categorieParCode } from '../data/mockJalons.ts';
@@ -27,25 +29,31 @@ import {
 } from 'lucide-react';
 
 /**
- * Traduit un choix de listbox en mise à jour de carte. Les trois états sont
- * distincts : « En attente » et « Validé » effacent la semaine, « Semaine » en exige
- * une (pré-remplie avec la semaine courante si le jalon n'en a pas encore).
+ * Traduit un choix de listbox en mise à jour de carte. « En attente », « TBC » et
+ * « Validé » effacent l'échéance, « Semaine » et « Date » en exigent une
+ * (pré-remplie avec la semaine ou le jour courants si le jalon n'en a pas encore).
  * Le tableau `jalons` remplace l'ensemble des états de la carte, donc on repart
  * de l'existant et on ne change que le code visé.
  */
 function patchJalonEtat(card: CardItem, code: JalonCode, etat: JalonEtat): Partial<CardItem> {
   const courant = getEtatJalon(card, code);
   const valide = etat === 'VALIDE';
-  const semaine = valide
-    ? null
-    : etat === 'SEMAINE'
-    ? (courant.semaine ?? getSemaineISO())
-    : null;
+  const tbc = etat === 'TBC';
+  const semaine =
+    valide || tbc ? null : etat === 'SEMAINE' ? (courant.semaine ?? getSemaineISO()) : null;
+  const date =
+    valide || tbc ? null : etat === 'DATE' ? (courant.date ?? dateDuJourJalon()) : null;
 
   return {
     jalons: [
       ...card.jalons.filter((j) => j.code !== code),
-      { code, valide, ...(semaine != null ? { semaine } : {}) },
+      {
+        code,
+        valide,
+        ...(semaine != null ? { semaine } : {}),
+        ...(date != null ? { date } : {}),
+        ...(tbc ? { tbc: true } : {}),
+      },
     ],
   };
 }
@@ -109,28 +117,8 @@ export const CardTable: React.FC<CardTableProps> = ({
   }, [enteteJalons, codesUtilises, codeRDL]);
 
   // Colonnes de la pastille de jalons, regroupées par grandeur : les nomenclatures
-  // à la suite, puis les statuts. Chaque pastille occupe une colonne de largeur fixe :
-  // les lignes s'alignent même si une carte ne porte qu'un sous-ensemble de jalons.
+  // en haut de la cellule, les statuts en dessous (séparés d'une ligne).
   const groupesEntete = useMemo(() => groupesParCategorie(enteteComplet), [enteteComplet]);
-  const colonnesJalons = useMemo(
-    () => groupesEntete.flatMap((groupe) => groupe.jalons.map((j) => j.code)),
-    [groupesEntete]
-  );
-
-  // Colonne d'ouverture de chaque groupe, pour les libellés et le filet qui les sépare.
-  // Les colonnes du catalogue viennent en tête et les hors catalogue à droite : leurs
-  // index dans `colonnesJalons` sont donc ceux calculés ici.
-  const debutGroupes = useMemo(() => {
-    let offset = 0;
-    return groupesEntete.map((groupe) => {
-      const debut = offset;
-      offset += groupe.jalons.length;
-      return debut;
-    });
-  }, [groupesEntete]);
-
-  // Position du filet entre deux groupes, -1 s'il n'y en a qu'un.
-  const frontiereCategories = debutGroupes[1] ?? -1;
 
   // Légende de bas de tableau : mêmes groupes que les colonnes, pour que le code
   // soit lu au même endroit que la pastille.
@@ -237,38 +225,25 @@ export const CardTable: React.FC<CardTableProps> = ({
                 )}
               </th>
               <th className="py-3.5 px-4 align-top">
-                {/* Une seule ligne d'en-tête : les codes des jalons. Les catégories sont
-                    distinguées par la couleur des pastilles (vert=nomenclature, bleu=statut)
-                    et une bordure verticale entre les deux groupes. */}
-                <div
-                  className="grid gap-1 justify-items-center w-fit"
-                  style={{
-                    gridTemplateColumns: `repeat(${Math.max(colonnesJalons.length, 1)}, 4.25rem)`,
-                  }}
-                >
-                  {colonnesJalons.map((code, indexColonne) => {
-                    const j = enteteComplet.find((x) => x.code === code);
-                    return (
-                      <span
-                        key={code}
-                        title={j ? `${libelleCategorie(j.categorie)} — ${j.libelle}` : undefined}
-                        className={`text-center text-[11px] leading-tight ${
-                          indexColonne === frontiereCategories ? 'border-l border-slate-300' : ''
-                        }`}
-                      >
-                        {code}
-                      </span>
-                    );
-                  })}
+                {/* Une seule colonne : nomenclatures (vert) en haut, statuts (bleu)
+                    en dessous. Les intitulés complets restent dans l'infobulle. */}
+                <div className="flex flex-col items-center gap-1">
+                  <span className="flex items-center gap-1.5 normal-case tracking-normal">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
+                    <span className="font-semibold">
+                      Nomenclatures
+                    </span>
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
+                    <span className="font-semibold">
+                      & Statuts
+                    </span>
+                  </span>
                   <span
-                    className="col-span-full cursor-help text-slate-400 hover:text-slate-600 flex items-center justify-center gap-1 normal-case tracking-normal font-normal"
+                    className="cursor-help text-slate-400 hover:text-slate-600 flex items-center justify-center gap-1"
                     title={
-                      colonnesJalons.length > 0
-                        ? colonnesJalons
-                            .map((code) => {
-                              const j = enteteComplet.find((x) => x.code === code);
-                              return `${code}: ${j ? j.libelle : 'sans intitulé'}`;
-                            })
+                      enteteComplet.length > 0
+                        ? enteteComplet
+                            .map((j) => `${libelleCategorie(j.categorie)} — ${j.libelle}`)
                             .join('\n')
                         : 'Aucune nomenclature ni statut suivi dans le catalogue'
                     }
@@ -305,10 +280,20 @@ export const CardTable: React.FC<CardTableProps> = ({
               // donc de la colonne Jalons pour ne pas la montrer deux fois.
               const jRDL = jalons.find((j) => j.code === 'RDL');
               const autresJalons = jalons.filter((j) => j.code !== 'RDL');
+              // Dans la cellule unique « Nomenclatures & Statuts », les jalons sont
+              // rangés par grandeur : nomenclatures en haut, statuts en dessous.
+              const nomenclaturesCarte = autresJalons.filter(
+                (j) => j.categorie === 'NOMENCLATURE'
+              );
+              const statutsCarte = autresJalons.filter((j) => j.categorie === 'STATUT');
+              const aJalons = autresJalons.length > 0;
               // Le RDL a sa propre pastille : mêmes couleurs que la colonne Jalons,
               // donc même lecture.
               const themeRDL = jRDL ? themeJalon(jRDL) : null;
               const detailRDL = jRDL ? detailJalon(jRDL) : '';
+              // Accord automatique : tant que DT, TC, FT et RDL sont validés,
+              // l'OK Prod ne peut pas être révoqué depuis le tableau.
+              const autoOkProd = okProdAuto(card.jalons);
               const progressPct =
                 card.quantiteDemandee > 0
                   ? Math.min(
@@ -408,11 +393,9 @@ export const CardTable: React.FC<CardTableProps> = ({
                             )}
                             <span>
                               {jRDL.code}:{' '}
-                              {jRDL.etat === 'VALIDE'
-                                ? '✓'
-                                : jRDL.etat === 'SEMAINE'
-                                ? `S${jRDL.semaine}`
-                                : '—'}
+                              <span className="inline-block w-9 text-center">
+                                {marqueJalon(jRDL)}
+                              </span>
                             </span>
                           </span>
                           <select
@@ -429,6 +412,8 @@ export const CardTable: React.FC<CardTableProps> = ({
                           >
                             <option value="EN_ATTENTE">En attente</option>
                             <option value="SEMAINE">Semaine</option>
+                            <option value="DATE">Date</option>
+                            <option value="TBC">TBC</option>
                             <option value="VALIDE">Validé</option>
                           </select>
                         </span>
@@ -436,79 +421,121 @@ export const CardTable: React.FC<CardTableProps> = ({
                     )}
                   </td>
 
-                  {/* Jalons de suivi — une colonne de largeur fixe par code, alignée sur l'en-tête.
-                      Une carte qui ne porte pas un code laisse la case vide : la
-                      pastille reste dans la même colonne d'une ligne à l'autre. */}
+                  {/* Nomenclatures & Statuts — une seule cellule pour tous les jalons hors RDL.
+                      Les nomenclatures occupent les premières lignes, et un saut de
+                      ligne isole les statuts en dessous, dans la même cellule. */}
                   <td className="py-3.5 px-4 align-top">
-                    <div
-                      className="grid gap-1 justify-items-center w-fit bg-slate-50 p-1 rounded-lg border border-slate-200/60"
-                      style={{
-                        gridTemplateColumns: `repeat(${Math.max(colonnesJalons.length, 1)}, 4.25rem)`,
-                      }}
-                    >
-                      {colonnesJalons.map((code, indexColonne) => {
-                        // Même filet que dans l'en-tête : la frontière entre les deux
-                        // grandeurs doit être visible sur chaque ligne.
-                        const bordure =
-                          indexColonne === frontiereCategories ? 'border-l border-slate-300' : '';
-                        const j = autresJalons.find((x) => x.code === code);
-                        if (!j) {
-                          return (
-                            <span
-                              key={code}
-                              className={`h-[19px] text-[11px] text-slate-200 text-center leading-[19px] ${bordure}`}
-                              title={`${code} : non porté par cette carte`}
-                            >
-                              –
-                            </span>
-                          );
-                        }
-                        // La couleur porte la grandeur du jalon (vert nomenclature,
-                        // bleu statut) ; seul le retard vire au rouge, pour sauter aux yeux.
-                        const colors = themeJalon(j).pastille;
-                        const detail = detailJalon(j);
+                    {!aJalons ? (
+                      <span className="text-[11px] text-slate-200">–</span>
+                    ) : (
+                      <div className="flex flex-col gap-1.5 bg-slate-50 p-1 rounded-lg border border-slate-200/60">
+                        {nomenclaturesCarte.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {nomenclaturesCarte.map((j) => {
+                              const colors = themeJalon(j).pastille;
+                              const detail = detailJalon(j);
 
-                        return (
-                          <span
-                            key={j.code}
-                            className={`group/j relative inline-grid shrink-0 w-full justify-self-center ${bordure}`}
-                            title={detail}
-                          >
-                            {j.enRetard && (
-                              <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" />
-                            )}
-                            <span
-                              className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[1.9rem_2.1rem] items-stretch overflow-hidden rounded text-[11px] font-bold border ${colors} ${
-                                j.enRetard ? 'motion-safe:animate-pulse' : ''
-                              }`}
-                            >
-                              <span className="flex items-center justify-center py-0.5 tracking-wide">
-                                {j.code}
-                              </span>
-                              <span className="flex items-center justify-center py-0.5 border-l border-black/10">
-                                {marqueJalon(j)}
-                              </span>
-                            </span>
-                            <select
-                              value={j.etat}
-                              onChange={(e) =>
-                                onUpdateCard(
-                                  card.id,
-                                  patchJalonEtat(card, j.code, e.target.value as JalonEtat)
-                                )
-                              }
-                              aria-label={`État du jalon ${j.code}`}
-                              title={detail}
-                              className={`col-start-1 row-start-1 relative z-10 w-full cursor-pointer rounded border px-1 text-[11px] font-bold opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto ${colors}`}
-                            >
-                              <option value="EN_ATTENTE">En attente</option>
-                              <option value="SEMAINE">Semaine</option>
-                              <option value="VALIDE">Validé</option>
-                            </select>
-                          </span>
-                        );
-                      })}
-                    </div>
+                              return (
+                                <span
+                                  key={j.code}
+                                  className="group/j relative inline-grid shrink-0 w-fit min-w-[4.25rem]"
+                                  title={detail}
+                                >
+                                  {j.enRetard && (
+                                    <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" />
+                                  )}
+                                  <span
+                                    className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.9rem,auto)_2.1rem] items-stretch overflow-hidden rounded text-[11px] font-bold border ${colors} ${
+                                      j.enRetard ? 'motion-safe:animate-pulse' : ''
+                                    }`}
+                                  >
+                                    <span className="flex items-center justify-center py-0.5 tracking-wide whitespace-nowrap">
+                                      {j.code}
+                                    </span>
+                                    <span className="flex items-center justify-center py-0.5 border-l border-black/10">
+                                      {marqueJalon(j)}
+                                    </span>
+                                  </span>
+                                  <select
+                                    value={j.etat}
+                                    onChange={(e) =>
+                                      onUpdateCard(
+                                        card.id,
+                                        patchJalonEtat(card, j.code, e.target.value as JalonEtat)
+                                      )
+                                    }
+                                    aria-label={`État du jalon ${j.code}`}
+                                    title={detail}
+                                    className={`col-start-1 row-start-1 relative z-10 w-full cursor-pointer rounded border px-1 text-[11px] font-bold opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto ${colors}`}
+                                  >
+                                    <option value="EN_ATTENTE">En attente</option>
+                                    <option value="SEMAINE">Semaine</option>
+                                    <option value="DATE">Date</option>
+                                    <option value="TBC">TBC</option>
+                                    <option value="VALIDE">Validé</option>
+                                  </select>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {nomenclaturesCarte.length > 0 && statutsCarte.length > 0 && (
+                          <div className="border-t border-slate-300" aria-hidden="true" />
+                        )}
+
+                        {statutsCarte.length > 0 && (
+                          <div className="flex flex-wrap gap-1">
+                            {statutsCarte.map((j) => {
+                              const colors = themeJalon(j).pastille;
+                              const detail = detailJalon(j);
+
+                              return (
+                                <span
+                                  key={j.code}
+                                  className="group/j relative inline-grid shrink-0 w-fit min-w-[4.25rem]"
+                                  title={detail}
+                                >
+                                  {j.enRetard && (
+                                    <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" />
+                                  )}
+                                  <span
+                                    className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.9rem,auto)_2.1rem] items-stretch overflow-hidden rounded text-[11px] font-bold border ${colors} ${
+                                      j.enRetard ? 'motion-safe:animate-pulse' : ''
+                                    }`}
+                                  >
+                                    <span className="flex items-center justify-center py-0.5 tracking-wide whitespace-nowrap">
+                                      {j.code}
+                                    </span>
+                                    <span className="flex items-center justify-center py-0.5 border-l border-black/10">
+                                      {marqueJalon(j)}
+                                    </span>
+                                  </span>
+                                  <select
+                                    value={j.etat}
+                                    onChange={(e) =>
+                                      onUpdateCard(
+                                        card.id,
+                                        patchJalonEtat(card, j.code, e.target.value as JalonEtat)
+                                      )
+                                    }
+                                    aria-label={`État du jalon ${j.code}`}
+                                    title={detail}
+                                    className={`col-start-1 row-start-1 relative z-10 w-full cursor-pointer rounded border px-1 text-[11px] font-bold opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto ${colors}`}
+                                  >
+                                    <option value="EN_ATTENTE">En attente</option>
+                                    <option value="SEMAINE">Semaine</option>
+                                    <option value="DATE">Date</option>
+                                    <option value="TBC">TBC</option>
+                                    <option value="VALIDE">Validé</option>
+                                  </select>
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    )}
                   </td>
 
                   {/* OK Prod */}
@@ -517,12 +544,21 @@ export const CardTable: React.FC<CardTableProps> = ({
                       {card.okProd ? (
                         <>
                           <button
-                            onClick={() => onUpdateCard(card.id, { okProd: false })}
-                            title="OK Prod validé en RDL - Cliquer pour révoquer"
-                            className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300 hover:bg-emerald-100 transition-colors cursor-pointer"
+                            onClick={() =>
+                              autoOkProd ? undefined : onUpdateCard(card.id, { okProd: false })
+                            }
+                            disabled={autoOkProd}
+                            title={
+                              autoOkProd
+                                ? 'OK Prod auto validé : DT, TC, FT et RDL sont validés'
+                                : 'OK Prod validé en RDL - Cliquer pour révoquer'
+                            }
+                            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300 transition-colors ${
+                              autoOkProd ? 'cursor-default' : 'hover:bg-emerald-100 cursor-pointer'
+                            }`}
                           >
                             <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
-                            <span>OK Prod Validé ✓</span>
+                            <span>{autoOkProd ? 'OK Prod auto ✓' : 'OK Prod Validé ✓'}</span>
                           </button>
                           <button
                             onClick={() => onEditCard(card)}
@@ -769,3 +805,4 @@ export const CardTable: React.FC<CardTableProps> = ({
     </div>
   );
 };
+

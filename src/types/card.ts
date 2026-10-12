@@ -74,6 +74,10 @@ export interface CardJalon {
   code: JalonCode;
   valide: boolean;
   semaine?: number;
+  /** Échéance calendaire (ISO `AAAA-MM-JJ`), alternative à `semaine`. */
+  date?: string;
+  /** Échéance non encore confirmée (« to be confirmed »). */
+  tbc?: boolean;
   categorie?: JalonCategorie;
 }
 

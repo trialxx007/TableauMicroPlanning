@@ -28,10 +28,9 @@ import {
   type AlerteCouleur,
   type AlerteManuelle,
 } from '../utils/alertesManuelles.ts';
-import { getJalonsEnRetard, getJalonsCard, detailJalon, type JalonInfo } from '../utils/jalons.ts';
-import { getNowParis } from '../utils/dateFrance.ts';
+import { getJalonsEnRetard, getJalonsCard, detailJalon, marqueJalon, themeJalon, type JalonInfo } from '../utils/jalons.ts';
+import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import {
-  blocEnTexte,
   blocInspectionVide,
   dateDuJourISO,
   normaliserBloc,
@@ -40,19 +39,15 @@ import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
 import { ViewSwitcher } from './ViewSwitcher.tsx';
 import {
   Plus,
-  RotateCcw,
-  Download,
-  Edit3,
-  Check,
-  Search,
   Sparkles,
-  Info,
   Truck,
   ExternalLink,
   X,
   AlertTriangle,
   ArrowLeftRight,
-  Zap,
+  ClipboardList,
+  Calendar,
+  Clock,
 } from 'lucide-react';
 
 
@@ -93,6 +88,10 @@ interface ActiveSlotAction {
   slotIndex?: number;
   slotTitle: string;
 }
+
+/** Alias historiques : la ligne du suivi global et la pile de deux cartes. */
+type SuiviRow = ChaineRow;
+type PileDeCartes = ChaineRow['modeleEnCoursCards'];
 
 /** Un ancien cache peut stocker une carte seule : on la remonte en pile. */
 function enPile(brut: unknown): PileDeCartes {
@@ -152,7 +151,7 @@ function normaliserLignes(brut: unknown): SuiviRow[] {
           reste.categorieId === 'BRODERIE_MAIN' || reste.categorieId === 'CONFECTION'
             ? reste.categorieId
             : 'CONFECTION',
-        nom: typeof reste.nom === 'string' ? reste.nom : '',
+        nom: typeof reste.nom === 'string' ? reste.nom.toUpperCase() : '',
         dotColor: typeof reste.dotColor === 'string' ? reste.dotColor : '#94a3b8',
         modeleEnCoursCards: enPile(reste.modeleEnCoursCards),
         inspections: [
@@ -167,7 +166,22 @@ function normaliserLignes(brut: unknown): SuiviRow[] {
         alertes,
       } satisfies SuiviRow;
     });
-  return lignes.length > 0 ? lignes : INITIAL_CHAINE_ROWS;
+  // Chaînes renommées / ajoutées / retirées après la mise en place initiale : on
+  // les applique aussi au cache local, sinon une session déjà ouverte garde
+  // l'ancien jeu (INITIAL_CHAINE_ROWS n'est lu qu'au tout premier lancement).
+  const renommages: Record<string, string> = { 'conf-tan': 'TANA', 'conf-mar': 'MARGUERITE' };
+  const supprimes = new Set(['conf-bleu']);
+  const ajouts = ['conf-pose-cuir', 'conf-sst'];
+  const migrees: SuiviRow[] = lignes
+    .filter((l) => !supprimes.has(l.id))
+    .map((l) => (renommages[l.id] ? { ...l, nom: renommages[l.id] } : l));
+  for (const id of ajouts) {
+    if (!migrees.some((l) => l.id === id)) {
+      const seed = INITIAL_CHAINE_ROWS.find((r) => r.id === id);
+      if (seed) migrees.push(seed);
+    }
+  }
+  return migrees.length > 0 ? migrees : INITIAL_CHAINE_ROWS;
 }
 
 /** Nombre de colonnes « Prochains Lancements ». Source unique pour l'affichage
@@ -284,43 +298,35 @@ function ChampAlerte({
 }
 
 /**
- * Une pastille de jalon. Vert (nomenclature) ou bleu (statut) à l'état normal ;
- * en cas de retard elle vire au rouge avec un triangle d'alerte, comme une
- * petite punaise posée sur la carte — uniquement pour les retards, les autres
- * états gardent leur couleur d'origine.
+ * Une pastille de jalon, lisible sur le tableau global. La marque courte (✓, S40,
+ * 12/06, TBC, —) tient dans une colonne fixe à droite, comme dans le Point
+ * Commande Journalière : le code s'étale dans la colonne de gauche sans jamais
+ * déborder de la cellule. La teinte vient de la grandeur (vert nomenclature,
+ * bleu statut) ; seule la nuance change avec l'avancement, et le rouge reste
+ * réservé au retard, avec son triangle d'alerte.
  */
 function PastilleJalon({ jalon }: { jalon: JalonInfo }) {
-  const teinte =
-    jalon.categorie === 'NOMENCLATURE'
-      ? {
-          fond: 'bg-emerald-50',
-          bordure: 'border-emerald-200',
-          texte: 'text-emerald-800',
-          marque: 'text-emerald-600',
-        }
-      : {
-          fond: 'bg-blue-50',
-          bordure: 'border-blue-200',
-          texte: 'text-blue-800',
-          marque: 'text-blue-600',
-        };
-
-  const classes = jalon.enRetard
-    ? `inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-rose-600 border border-rose-700 text-white text-[10px] font-semibold shadow-xs w-fit motion-safe:animate-pulse`
-    : `inline-flex items-center gap-1 px-1.5 py-0.5 rounded ${teinte.fond} ${teinte.bordure} ${teinte.texte} text-[10px] font-semibold shadow-xs w-fit`;
+  const colors = themeJalon(jalon).pastille;
+  const detail = detailJalon(jalon);
 
   return (
-    <div className={classes} title={detailJalon(jalon)}>
-      {jalon.enRetard && <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden />}
-      <span className="font-bold">{jalon.code}</span>
-      {jalon.etat === 'SEMAINE' && jalon.semaine != null ? (
-        <span className="font-mono">S{jalon.semaine}</span>
-      ) : jalon.etat === 'VALIDE' ? (
-        <span className={jalon.enRetard ? 'text-white' : teinte.marque}>✓</span>
-      ) : (
-        <span className={jalon.enRetard ? 'text-white/80' : `${teinte.marque}/70`}>—</span>
+    <span className="group/j relative inline-grid shrink-0 w-fit min-w-[3.75rem]" title={detail}>
+      {jalon.enRetard && (
+        <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" aria-hidden />
       )}
-    </div>
+      <span
+        className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.7rem,auto)_1.9rem] items-stretch overflow-hidden rounded text-[10px] font-bold border ${colors} ${
+          jalon.enRetard ? 'motion-safe:animate-pulse' : ''
+        }`}
+      >
+        <span className="flex items-center justify-center py-0 tracking-wide whitespace-nowrap">
+          {jalon.code}
+        </span>
+        <span className="flex items-center justify-center py-0 border-l border-black/10">
+          {marqueJalon(jalon)}
+        </span>
+      </span>
+    </span>
   );
 }
 
@@ -375,11 +381,26 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   onBackToPointJournalier,
   cards,
   onOpenCardModal,
+  onOpenCreateCard,
 }) => {
   const catalogue = useJalonCatalogue();
+  const [parisTime, setParisTime] = useState(getNowParis().timeStr);
+  const { fullFrenchDate } = getNowParis();
+
+  useEffect(() => {
+    const timer = setInterval(() => setParisTime(getNowParis().timeStr), 15000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Clé de sauvegarde du tableau : la version monte quand les données de
+  // démonstration persistées doivent être abandonnées (v2 → v3 au passage en
+  // données réelles). Les états saisis après cette version sont conservés.
+  const CLE_SAUVEGARDE = 'suivi_global_rows_v3';
   const [rows, setRows] = useState<SuiviRow[]>(() => {
       try {
-        const saved = localStorage.getItem('suivi_global_rows_v2');
+        // L'ancien cache de démonstration (v2) est définitivement obsolète.
+        localStorage.removeItem('suivi_global_rows_v2');
+        const saved = localStorage.getItem(CLE_SAUVEGARDE);
         if (saved) {
           // Le normalisateur accepte les anciens formats (carte unique,
           // lancements à plat) comme le format actuel en piles de 2.
@@ -391,9 +412,6 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       return INITIAL_CHAINE_ROWS;
   });
 
-  const [isEditMode, setIsEditMode] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [savedFeedback, setSavedFeedback] = useState(false);
   const [activePicker, setActivePicker] = useState<ActiveSlotPicker | null>(null);
 
   // Alertes saisies à la main dans le popover : source partagée (localStorage),
@@ -464,7 +482,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
   useEffect(() => {
     try {
-      localStorage.setItem('suivi_global_rows_v2', JSON.stringify(rows));
+      localStorage.setItem(CLE_SAUVEGARDE, JSON.stringify(rows));
     } catch {
       // ignore
     }
@@ -473,209 +491,19 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   // État pour SlotActionModal (choix nouvelle carte / carte existante)
   const [selectedSlotAction, setSelectedSlotAction] = useState<ActiveSlotAction | null>(null);
 
-  // Synchronise automatiquement les cartes selon la règle stricte OK Prod :
-  // - Cartes "OK Prod validé" → strictement dans "Modèle en cours"
-  // - Cartes "En attente OK Prod" → strictement dans "Prochains Lancements"
-  const reconcileRowsWithOkProdRule = (
-    currentRows: SuiviRow[],
-    allCards: CardItem[]
-  ): { newRows: SuiviRow[]; changed: boolean } => {
-    let changed = false;
-    const newRows = currentRows.map((row) => {
-      let currentModelePile = [...row.modeleEnCoursCards] as [ChaineSlotCard | null, ChaineSlotCard | null];
-      let nextLancements = [...row.prochainsLancementsCards] as SuiviRow['prochainsLancementsCards'];
-
-      // A) Si une carte en "Modèle en cours" n'a PAS OK Prod -> la migrer vers Prochains Lancements
-      currentModelePile = currentModelePile.map((slot, pileIdx) => {
-        if (slot?.cardId) {
-          const card = allCards.find((c) => c.id === slot.cardId);
-          if (card && !card.okProd) {
-            // Trouver une place libre dans Prochains Lancements
-            for (let i = 0; i < NOMBRE_LANCEMENTS; i++) {
-              const pile = nextLancements[i] ?? [null, null];
-              for (let j = 0; j < 2; j++) {
-                if (!pile[j]) {
-                  pile[j] = slot;
-                  nextLancements[i] = pile as [ChaineSlotCard | null, ChaineSlotCard | null];
-                  changed = true;
-                  return null;
-                }
-              }
-            }
-          }
-        }
-        return slot;
-      }) as [ChaineSlotCard | null, ChaineSlotCard | null];
-
-      // B) Si une carte en "Prochains Lancements" a l'OK Prod validé -> la glisser vers Modèle en cours
-      nextLancements = nextLancements.map((pile, i) => {
-        if (!pile) return [null, null];
-        const newPile = [...pile] as [ChaineSlotCard | null, ChaineSlotCard | null];
-        newPile.forEach((slot, j) => {
-          if (slot?.cardId) {
-            const card = allCards.find((c) => c.id === slot.cardId);
-            if (card && card.okProd) {
-              // Trouver une place libre dans Modèle en cours
-              const emptyIdx = currentModelePile.findIndex((s) => !s);
-              if (emptyIdx !== -1) {
-                currentModelePile[emptyIdx] = slot;
-                newPile[j] = null;
-                changed = true;
-              }
-            }
-          }
-        });
-        return newPile;
-      }) as SuiviRow['prochainsLancementsCards'];
-
-      return {
-        ...row,
-        modeleEnCoursCards: currentModelePile,
-        prochainsLancementsCards: nextLancements,
-      };
-    });
-
-    // 2) Placer les cartes avec OK Prod validé non encore dans le tableau dans "Modèle en cours"
-    const validatedCards = allCards.filter((c) => c.okProd);
-    validatedCards.forEach((c) => {
-      const alreadyInModeleEnCours = newRows.some((r) =>
-        r.modeleEnCoursCards.some((s) => s?.cardId === c.id)
-      );
-
-      if (!alreadyInModeleEnCours) {
-        const targetRow = c.chaineId
-          ? newRows.find((r) => r.id === c.chaineId)
-          : c.chaineNom
-          ? newRows.find(
-              (r) => r.nom.toLowerCase().trim() === c.chaineNom!.toLowerCase().trim()
-            )
-          : undefined;
-
-        if (targetRow) {
-          const emptyIdx = targetRow.modeleEnCoursCards.findIndex((s) => !s);
-          if (emptyIdx !== -1) {
-            targetRow.modeleEnCoursCards[emptyIdx] = {
-              cardId: c.id,
-              customLabel: c.modele,
-            };
-            changed = true;
-            return;
-          }
-        }
-
-        // Sinon trouver la première chaîne qui a son Modèle en cours libre
-        for (const r of newRows) {
-          const emptyIdx = r.modeleEnCoursCards.findIndex((s) => !s);
-          if (emptyIdx !== -1) {
-            r.modeleEnCoursCards[emptyIdx] = {
-              cardId: c.id,
-              customLabel: c.modele,
-            };
-            changed = true;
-            break;
-          }
-        }
-      }
-    });
-
-    // 3) Placer les cartes en attente d'OK Prod non encore dans le tableau dans "PROCHAINS LANCEMENTS"
-    const nonValidatedCards = allCards.filter((c) => !c.okProd);
-    nonValidatedCards.forEach((c) => {
-      const alreadyInLancements = newRows.some((r) =>
-        r.prochainsLancementsCards.some((pile) => pile?.some((s) => s?.cardId === c.id))
-      );
-
-      if (!alreadyInLancements) {
-        const targetRow = c.chaineId
-          ? newRows.find((r) => r.id === c.chaineId)
-          : c.chaineNom
-          ? newRows.find(
-              (r) => r.nom.toLowerCase().trim() === c.chaineNom!.toLowerCase().trim()
-            )
-          : undefined;
-
-        if (targetRow) {
-          for (let i = 0; i < NOMBRE_LANCEMENTS; i++) {
-            const pile = targetRow.prochainsLancementsCards[i] ?? [null, null];
-            const emptyIdx = pile.findIndex((s) => !s);
-            if (emptyIdx !== -1) {
-              pile[emptyIdx] = {
-                cardId: c.id,
-                customLabel: c.modele,
-              };
-              targetRow.prochainsLancementsCards[i] = pile as [ChaineSlotCard | null, ChaineSlotCard | null];
-              changed = true;
-              return;
-            }
-          }
-        }
-
-        for (const r of newRows) {
-          for (let i = 0; i < NOMBRE_LANCEMENTS; i++) {
-            const pile = r.prochainsLancementsCards[i] ?? [null, null];
-            const emptyIdx = pile.findIndex((s) => !s);
-            if (emptyIdx !== -1) {
-              pile[emptyIdx] = {
-                cardId: c.id,
-                customLabel: c.modele,
-              };
-              r.prochainsLancementsCards[i] = pile as [ChaineSlotCard | null, ChaineSlotCard | null];
-              changed = true;
-              return;
-            }
-          }
-        }
-      }
-    });
-
-    return { newRows, changed };
-  };
-
-  // Re-synchronisation automatique lorsque les cartes du Point Commande Journalière changent
-  useEffect(() => {
-    if (cards && cards.length > 0) {
-      setRows((prev) => {
-        const { newRows, changed } = reconcileRowsWithOkProdRule(prev, cards);
-        return changed ? newRows : prev;
-      });
-    }
-  }, [cards]);
-
   // Find CardItem from Point Commande Journalière by cardId
   const getCardById = (cardId?: string): CardItem | undefined => {
     if (!cardId) return undefined;
     return cards.find((c) => c.id === cardId);
   };
 
-  const handleCellChange = (
-    rowId: string,
-    field: 'nom' | `alertes.${number}.texte` | `alertes.${number}.teinte`,
-    value: string,
-    alertIndex?: number
-  ) => {
-    setRows((prev) =>
-      prev.map((r) => {
-        if (r.id !== rowId) return r;
-        if (field === 'nom') return { ...r, nom: value };
-        if (field.startsWith('alertes.')) {
-          const parts = field.split('.');
-          const idx = Number(parts[1]);
-          const prop = parts[2];
-          const newAlertes = [...r.alertes];
-          if (!newAlertes[idx]) newAlertes[idx] = { texte: '', teinte: TEINTE_ALERTE_DEFAUT };
-          newAlertes[idx] = { ...newAlertes[idx], [prop]: value };
-          return { ...r, alertes: newAlertes };
-        }
-        return r;
-      })
-    );
-  };
-
   // Ajoute un champ d'alerte vide à la fin
   const handleAddAlerte = (rowId: string) => {
     setRows((prev) =>
       prev.map((r) =>
-        r.id === rowId ? { ...r, alertes: [...r.alertes, { texte: '', teinte: TEINTE_ALERTE_DEFAUT }] } : r
+        r.id === rowId
+          ? { ...r, alertes: [...(r.alertes ?? []), { texte: '', teinte: TEINTE_ALERTE_DEFAUT }] }
+          : r
       )
     );
   };
@@ -684,8 +512,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   const handleRemoveAlerte = (rowId: string, index: number) => {
     setRows((prev) =>
       prev.map((r) =>
-        r.id === rowId && r.alertes.length > 1
-          ? { ...r, alertes: r.alertes.filter((_, i) => i !== index) }
+        r.id === rowId && (r.alertes?.length ?? 0) > 1
+          ? { ...r, alertes: (r.alertes ?? []).filter((_, i) => i !== index) }
           : r
       )
     );
@@ -698,64 +526,31 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     lancementIndex?: number,
     slotIndex = 0
   ) => {
-    // RÈGLE MÉTIER STRICTE :
-    // 1) Si affectation en "Modèle en cours" mais que la carte n'a pas OK Prod -> refusée & migrée en Prochains Lancements
-    if (slotType === 'modeleEnCours' && slotCard?.cardId) {
-      const card = getCardById(slotCard.cardId);
-      if (card && !card.okProd) {
-        alert(
-          `Action refusée : Seules les cartes avec accord "OK Prod validé" sont acceptées dans la colonne "Modèle en cours".\n\nLa carte "${card.modele}" (${card.reference}) est en attente d'OK Prod et a été automatiquement migrée dans "PROCHAINS LANCEMENTS".`
-        );
-        // Auto-migrer vers Prochains Lancements
-        setRows((prev) =>
-          prev.map((r) => {
-            if (r.id !== rowId) return r;
-            const nextLancements = [...r.prochainsLancementsCards] as SuiviRow['prochainsLancementsCards'];
-            for (let i = 0; i < NOMBRE_LANCEMENTS; i++) {
-              const pile = nextLancements[i] ?? [null, null];
-              const emptyIdx = pile.findIndex((s) => !s);
-              if (emptyIdx !== -1) {
-                pile[emptyIdx] = slotCard;
-                nextLancements[i] = pile as [ChaineSlotCard | null, ChaineSlotCard | null];
-                return { ...r, prochainsLancementsCards: nextLancements };
-              }
-            }
-            return r;
-          })
-        );
-        return;
-      }
-    }
-    // 2) Si affectation en "Prochains Lancements" mais que la carte a OK Prod -> la glisser vers Modèle en cours
-    if (slotType === 'lancement' && slotCard?.cardId) {
-      const card = getCardById(slotCard.cardId);
-      if (card && card.okProd) {
-        alert(
-          `Cette carte a l'OK Prod validé : elle a été automatiquement placée dans "Modèle en cours" (règle stricte).`
-        );
-        setRows((prev) =>
-          prev.map((r) => {
-            if (r.id !== rowId) return r;
-            const emptyIdx = r.modeleEnCoursCards.findIndex((s) => !s);
-            if (emptyIdx !== -1) {
-              const newModele = [...r.modeleEnCoursCards] as PileDeCartes;
-              newModele[emptyIdx] = slotCard;
-              // Retirer de Prochains Lancements
-              const nextLancements = [...r.prochainsLancementsCards] as SuiviRow['prochainsLancementsCards'];
-              const pile = nextLancements[lancementIndex ?? 0] ?? [null, null];
-              pile[slotIndex] = null;
-              nextLancements[lancementIndex ?? 0] = pile as [ChaineSlotCard | null, ChaineSlotCard | null];
-              return { ...r, modeleEnCoursCards: newModele, prochainsLancementsCards: nextLancements };
-            }
-            return r;
-          })
-        );
-        return;
-      }
-    }
+    // Affectation purement manuelle : OK Prod ne déplace jamais une carte ici.
+    // Une même carte ne peut occuper qu'une seule case du tableau : si elle est
+    // déjà posée ailleurs, elle en est retirée avant d'être placée à la demande.
+    const cardId = slotCard?.cardId;
 
-    setRows((prev) =>
-      prev.map((r) => {
+    setRows((prev) => {
+      let next = prev.map((r) => {
+        if (!cardId) return r;
+        // Retirer la carte de tous les emplacements où elle apparaît déjà.
+        const modelePile = (r.modeleEnCoursCards as [ChaineSlotCard | null, ChaineSlotCard | null]).map((s) =>
+          s?.cardId === cardId ? null : s
+        );
+        const lancementsPiles = (r.prochainsLancementsCards as ChaineRow['prochainsLancementsCards']).map((pile) =>
+          (pile ?? [null, null]).map((s) => (s?.cardId === cardId ? null : s)) as [ChaineSlotCard | null, ChaineSlotCard | null]
+        ) as ChaineRow['prochainsLancementsCards'];
+        return {
+          ...r,
+          modeleEnCoursCards: modelePile as [ChaineSlotCard | null, ChaineSlotCard | null],
+          prochainsLancementsCards: lancementsPiles,
+          expeditionCard: r.expeditionCard?.cardId === cardId ? null : r.expeditionCard,
+        };
+      });
+
+      // Placer la carte dans la case demandée.
+      next = next.map((r) => {
         if (r.id !== rowId) return r;
         if (slotType === 'modeleEnCours') {
           const pile = [...r.modeleEnCoursCards] as PileDeCartes;
@@ -773,21 +568,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           return { ...r, prochainsLancementsCards: nextLancements };
         }
         return r;
-      })
-    );
-  };
+      });
 
-  // Synchronisation manuelle OK Prod (bouton dans l'en-tête)
-  const handleSyncOkProd = () => {
-    const { newRows, changed } = reconcileRowsWithOkProdRule(rows, cards);
-    setRows(newRows);
-    setSavedFeedback(true);
-    setTimeout(() => setSavedFeedback(false), 2000);
-    alert(
-      changed
-        ? 'Migration stricte OK Prod effectuée :\n• Les cartes "OK Prod Validé" ont été migrées en colonne "Modèle en cours".\n• Les cartes "En attente OK Prod" ont été migrées en colonne "PROCHAINS LANCEMENTS".'
-        : 'Le tableau est déjà parfaitement aligné :\n• Toutes les cartes validées sont en "Modèle en cours".\n• Toutes les cartes en attente sont en "PROCHAINS LANCEMENTS".'
-    );
+      return next;
+    });
   };
 
   // Ouvre SlotActionModal au lieu de CardPickerModal direct
@@ -815,7 +599,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     const { rowId, slotType, lancementIndex, slotIndex } = selectedSlotAction;
     const isModeleEnCours = slotType === 'modeleEnCours';
     const prefill: Partial<CardFormData> = {
-      ...(isModeleEnCours ? { okProd: true, statut: 'EN_COURS' } : { okProd: false, statut: 'A_DEMARRER' }),
+      ...(isModeleEnCours ? { okProd: true, statut: 'EN_COURS' } : { okProd: false, statut: 'EN_ATTENTE' }),
     };
     onOpenCreateCard(prefill, (createdCard) => {
       handleAssignSlotCard(rowId, slotType, { cardId: createdCard.id, customLabel: createdCard.modele }, lancementIndex, slotIndex);
@@ -893,41 +677,6 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     anchor: HTMLElement;
   } | null>(null);
 
-  const handleResetToDefault = () => {
-    if (
-      window.confirm(
-        'Voulez-vous réinitialiser le tableau du suivi global avec les cartes d’origine ?'
-      )
-    ) {
-      setRows(INITIAL_CHAINE_ROWS);
-      localStorage.removeItem('suivi_global_rows_v2');
-    }
-  };
-
-  const handleAddChaine = (categorieId: 'BRODERIE_MAIN' | 'CONFECTION') => {
-    const nomPrompt = window.prompt(
-      `Nom de la nouvelle chaîne pour ${
-        categorieId === 'BRODERIE_MAIN' ? 'Broderie Main' : 'Confection'
-      } :`,
-      categorieId === 'BRODERIE_MAIN' ? 'Lys' : 'Ligne 4'
-    );
-    if (!nomPrompt || !nomPrompt.trim()) return;
-
-    const newRow: SuiviRow = {
-      id: `${categorieId.toLowerCase()}-${Date.now()}`,
-      categorieId,
-      nom: nomPrompt.trim(),
-      dotColor: CATEGORIES_CONFIG[categorieId]?.defaultDotColor || '#94a3b8',
-      modeleEnCoursCards: [null, null],
-      inspections: [blocInspectionVide(), blocInspectionVide()],
-      prochainsLancementsCards: lancementsVides(),
-      expeditionCard: null,
-      alertes: [{ texte: '', teinte: TEINTE_ALERTE_DEFAUT }],
-    };
-
-    setRows((prev) => [...prev, newRow]);
-  };
-
   /** Texte d'une case : modèle lié, sinon libellé saisi, sinon vide. */
   const texteSlot = (slot?: ChaineSlotCard | null) =>
     slot ? getCardById(slot.cardId)?.modele || slot.customLabel || '' : '';
@@ -938,91 +687,22 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     return texteSlot(slot) || `Modèle ${blocIndex + 1}`;
   };
 
-  /** Blocs d'inspection à afficher : un par modèle en cours occupé
-   *  (le premier seul tant que la deuxième case est vide). */
+  /** Blocs d'inspection à afficher : un par modèle en cours occupé.
+   *  Sans modèle en cours, aucun bloc n'est affiché (pas d'OF sans modèle). */
   const blocsInspectionAffiches = (row: SuiviRow) => {
     const indices = row.modeleEnCoursCards
       .map((slot, i) => (slot ? i : -1))
       .filter((i) => i >= 0);
-    return (indices.length > 0 ? indices : [0]).map((blocIndex) => ({
+    return indices.map((blocIndex) => ({
       blocIndex,
       bloc: row.inspections[blocIndex] ?? blocInspectionVide(),
       libelle: libelleModele(row, blocIndex),
     }));
   };
 
-  const handleExportCSV = () => {
-    const headers = [
-      'Type',
-      'Chaîne',
-      'Modèle en cours',
-      'Inspection',
-      ...Array.from({ length: 5 }, (_, i) => `Alerte ${i + 1}`),
-      ...Array.from(
-        { length: NOMBRE_LANCEMENTS },
-        (_, i) => `Prochain Lancement ${i + 1}`
-      ),
-      'Expédition',
-    ];
-
-    const echapper = (v: string) => `"${v.replace(/"/g, '""')}"`;
-    const csvRows = [headers.map(echapper).join(';')];
-    rows.forEach((r) => {
-      const catTitle = CATEGORIES_CONFIG[r.categorieId]?.titre || r.categorieId;
-      const modeleEnCoursText = r.modeleEnCoursCards.map(texteSlot).filter(Boolean).join(' / ');
-
-      const lancementsTexts = Array.from(
-        { length: NOMBRE_LANCEMENTS },
-        (_, i) => (r.prochainsLancementsCards?.[i] ?? []).map(texteSlot).filter(Boolean).join(' / ')
-      );
-
-      const inspectionText = r.inspections.map(blocEnTexte).filter(Boolean).join(' | ');
-
-      const expeditionText = texteSlot(r.expeditionCard);
-
-      const alertesText = Array.from({ length: 5 }, (_, i) => r.alertes[i]?.texte ?? '');
-
-      const values = [
-        catTitle,
-        r.nom,
-        modeleEnCoursText,
-        inspectionText,
-        ...alertesText,
-        ...lancementsTexts,
-        expeditionText,
-      ].map((v) => `"${String(v ?? '').replace(/"/g, '""')}"`);
-      csvRows.push(values.join(';'));
-    });
-
-    const blob = new Blob(['\uFEFF' + csvRows.join('\n')], {
-      type: 'text/csv;charset=utf-8;',
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    // Date du jour au format JJ/MM/AAAA, alignée sur le reste de l'application.
-    link.download = `Suivi_Global_Chaines_Cartes_${getNowParis().dateStr.replace(/\//g, '-')}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
   const categoriesList = ['BRODERIE_MAIN', 'CONFECTION'];
 
-  const filteredRows = rows.filter((r) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    const libellesModeles = [
-      ...r.modeleEnCoursCards.map((slot) => getCardById(slot?.cardId)?.modele),
-      ...r.modeleEnCoursCards.map((slot) => slot?.customLabel),
-    ];
-    const alertesText = r.alertes.map((a) => a.texte).join(' ');
-    return (
-      r.nom.toLowerCase().includes(q) ||
-      libellesModeles.some((l) => l && l.toLowerCase().includes(q)) ||
-      alertesText.toLowerCase().includes(q) ||
-      r.inspections.some((b) => b.commentaire.toLowerCase().includes(q))
-    );
-  });
+  const filteredRows = rows;
 
   // Cartes liées à une ligne, dans l'ordre d'affichage, sans doublon : une même
   // carte peut occuper plusieurs colonnes de la ligne.
@@ -1153,7 +833,7 @@ if (!label) {
             </button>
           )}
           <div
-            className={`group relative w-full min-h-[52px] flex flex-col justify-start px-2 py-1.5 bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left flex-1 ${
+            className={`group relative w-full min-h-[52px] flex flex-col justify-start px-2 py-1.5 overflow-hidden bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left flex-1 ${
               enAlerte ? 'rounded-b-xl border-t-0' : 'rounded-b-xl'
             }`}
           >
@@ -1289,27 +969,32 @@ if (!label) {
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
       {/* Top Banner / Actions Bar */}
       <div className="bg-white border-b border-slate-200 relative z-20 shadow-xs">
-        {/* Même grille que l'en-tête Point Commande : titre à gauche,
-            sélecteur de vue centré, actions à droite. */}
-        <div className="max-w-[1850px] mx-auto px-4 sm:px-6 lg:px-8 py-3.5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
-          {/* Left: Page title */}
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
+          {/* Gauche : titre + date & heure, comme le Point Commande Journalière */}
           <div className="flex items-center gap-3">
+            <div className="w-11 h-11 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
+              <ClipboardList className="w-6 h-6" />
+            </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-                  Suivi Global des Chaînes & Prochains Lancements
-                </h1>
-                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                  Vue Atelier Connectée aux Cartes
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                Tableau AIC
+              </h1>
+              <div className="flex flex-wrap items-center gap-2.5 text-xs sm:text-sm text-slate-500 mt-0.5">
+                <span className="flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                  {fullFrenchDate}
+                </span>
+                <span className="text-slate-300">•</span>
+                <span className="flex items-center gap-1 font-semibold text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/60">
+                  <Clock className="w-3.5 h-3.5 text-blue-600" />
+                  {parisTime}
+                  <span className="text-[10px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
                 </span>
               </div>
-              <p className="text-xs text-slate-500">
-                Les cases de « Modèle en cours », « Prochains Lancements » et « Expédition » reçoivent directement les cartes de commande.
-              </p>
             </div>
           </div>
 
-          {/* Center: View switcher — même emplacement que dans l'en-tête Point Commande */}
+          {/* Centre : sélecteur de vue (Point Commande / Suivi Global) */}
           <div className="flex md:justify-center">
             <ViewSwitcher
               currentPage="suivi-global"
@@ -1317,116 +1002,13 @@ if (!label) {
             />
           </div>
 
-          {/* Right: Controls & Quick Actions */}
-          <div className="flex flex-wrap items-center gap-2 md:justify-end">
-            {/* Search */}
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Filtrer chaîne, modèle..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg w-44 sm:w-56 focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:bg-white"
-              />
-            </div>
-
-            {/* Quick edit mode toggle for Chaîne / Alertes */}
-            <button
-              onClick={() => {
-                setIsEditMode(!isEditMode);
-                if (isEditMode) {
-                  setSavedFeedback(true);
-                  setTimeout(() => setSavedFeedback(false), 2000);
-                }
-              }}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
-                isEditMode
-                  ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
-                  : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-300'
-              }`}
-              title="Modifier directement le nom de la chaîne et sa colonne Alertes"
-            >
-              {isEditMode ? (
-                <>
-                  <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span>Enregistrer</span>
-                </>
-              ) : (
-                <>
-                  <Edit3 className="w-3.5 h-3.5" />
-                  <span>Édition Chaîne & Alertes</span>
-                </>
-              )}
-            </button>
-
-            {savedFeedback && (
-              <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1 animate-in fade-in">
-                <Check className="w-3.5 h-3.5" />
-                Enregistré
-              </span>
-            )}
-
-            {/* Export CSV */}
-            <button
-              onClick={handleExportCSV}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-              title="Exporter le tableau en format CSV / Excel"
-            >
-              <Download className="w-3.5 h-3.5 text-slate-500" />
-              <span className="hidden sm:inline">Exporter</span>
-            </button>
-
-            {/* Sync OK Prod */}
-            <button
-              onClick={handleSyncOkProd}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-900 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors cursor-pointer"
-              title="Synchroniser les cartes selon la règle OK Prod (validé → Modèle en cours, en attente → Prochains Lancements)"
-            >
-              <Zap className="w-3.5 h-3.5 text-emerald-600" />
-              <span className="hidden sm:inline">Sync OK Prod</span>
-            </button>
-
-            {/* Reset */}
-            <button
-              onClick={handleResetToDefault}
-              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-              title="Réinitialiser avec les valeurs par défaut"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-            </button>
-          </div>
+          {/* Droite : vide, pour équilibrer et garder le sélecteur centré */}
+          <div aria-hidden="true" />
         </div>
       </div>
 
       {/* Main Board Container */}
       <div className="max-w-[1850px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* Help / Guidance pill */}
-        <div className="mb-4 bg-white border border-slate-200/80 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 shadow-2xs">
-          <div className="flex items-center gap-2">
-            <Info className="w-4 h-4 text-blue-600 shrink-0" />
-            <span>
-              <strong>Attribution des cartes :</strong> Cliquez sur n'importe quelle case de <em>Modèle en cours</em>, <em>Prochains Lancements (1 à 5)</em> ou <em>Expédition</em> pour choisir la carte de commande correspondante. Chaque case accueille <strong>2 cartes empilées</strong>. La colonne <em>Inspection</em> suit les contrôles OF / I du jour et la colonne <em>Alertes</em> reste propre à chaque chaîne.
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleAddChaine('BRODERIE_MAIN')}
-              className="text-xs font-semibold text-[#881337] bg-[#fbe7e2] hover:bg-[#f6c2b7] px-2.5 py-1 rounded-md transition-colors cursor-pointer flex items-center gap-1"
-            >
-              <Plus className="w-3 h-3" />
-              Chaîne Broderie
-            </button>
-            <button
-              onClick={() => handleAddChaine('CONFECTION')}
-              className="text-xs font-semibold text-[#0369a1] bg-[#e0f2fe] hover:bg-[#bae6fd] px-2.5 py-1 rounded-md transition-colors cursor-pointer flex items-center gap-1"
-            >
-              <Plus className="w-3 h-3" />
-              Chaîne Confection
-            </button>
-          </div>
-        </div>
-
         {/* The Exact Table matching the PNG + Expedition column */}
         <div className="bg-[#eef2f6]/90 p-3 sm:p-4 rounded-2xl border border-slate-200/90 shadow-xs overflow-x-auto">
           <table className="w-full border-separate border-spacing-x-2 border-spacing-y-2 min-w-[2900px]">
@@ -1534,26 +1116,17 @@ if (!label) {
                       )}
 
                       {/* Column 2: Chaîne (Name) */}
-                        <td className="h-[136px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs align-middle">
+                        <td className="h-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs align-middle">
                           <div className="h-full min-h-[72px] flex items-center justify-center">
-                            {isEditMode ? (
-                              <input
-                                type="text"
-                                value={row.nom}
-                                onChange={(e) => handleCellChange(row.id, 'nom', e.target.value)}
-                                className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 bg-slate-50 border border-slate-300 rounded px-1.5 py-1 focus:bg-white focus:outline-hidden"
-                              />
-                            ) : (
-                              <span className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 truncate">
-                                {row.nom}
-                              </span>
-                            )}
+                            <span className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 truncate">
+                              {row.nom}
+                            </span>
                           </div>
                         </td>
 
                       {/* Column 3: Modèle en cours (Carte du Point Commande Journalière) */}
                         <td
-                          className="h-[136px] group bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle"
+                          className="h-[170px] group bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle"
                         >
                           <div className="h-full min-h-[84px] flex flex-col gap-1">
 
@@ -1573,7 +1146,7 @@ if (!label) {
 
 
                       {/* Column 4: Inspection (un bloc par modèle en cours) */}
-                        <td className="h-[136px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle">
+                        <td className="h-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle">
                           <div className="h-full min-h-[84px] flex flex-col gap-1">
                             {blocsInspectionAffiches(row).map(
                               ({ blocIndex, bloc, libelle }) => (
@@ -1638,7 +1211,7 @@ if (!label) {
                         </td>
 
                       {/* Column 5: Alertes par carte */}
-                        <td className="h-[136px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs align-middle">
+                        <td className="h-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs align-middle">
                           <div className="h-full flex flex-col justify-start gap-1.5 overflow-y-auto">
                             {/* Alertes : blocs separees comme la colonne Inspection */}
                             <div className="h-full min-h-[84px] flex flex-col gap-1">
@@ -1669,7 +1242,7 @@ if (!label) {
                         return (
                           <td
                             key={slotIdx}
-                            className="h-[136px] w-[330px] min-w-[290px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle"
+                            className="h-[170px] w-[330px] min-w-[290px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle"
                           >
                             <div className="h-full min-h-[88px] flex flex-col justify-start items-stretch">
                               <div className="flex flex-col gap-1 w-full h-full">
@@ -1691,7 +1264,7 @@ if (!label) {
                       })}
 
                       {/* Column 12: EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
-                        <td className="h-[136px] min-w-[145px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle">
+                        <td className="h-[170px] min-w-[145px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle">
                         <div className="h-full min-h-[88px] flex flex-col justify-center items-center">
                           {renderCardSlotContent(
                             row.expeditionCard,
