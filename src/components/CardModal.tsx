@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import {
   CardFormData,
   CardItem,
@@ -172,6 +172,12 @@ export const CardModal: React.FC<CardModalProps> = ({
   const [ajoutEnCours, setAjoutEnCours] = useState(false);
   const [erreurJalon, setErreurJalon] = useState<string | null>(null);
   const [ouvertureAjout, setOuvertureAjout] = useState(false);
+  // Popover pour ajouter une nomenclature : liste les codes dispo pour le type carte
+  const [popoverAnchor, setPopoverAnchor] = useState<HTMLElement | null>(null);
+  const [popoverCategorie, setPopoverCategorie] = useState<JalonCategorie | null>(null);
+  // La popover n'est pas un descendant du bouton : pour ne pas la fermer quand
+  // on clique dedans, on exclut aussi son propre nœud du « clic extérieur ».
+  const popoverRef = useRef<HTMLDivElement | null>(null);
   // Saisie de la semaine en cours, par code. Sans ce brouillon, effacer le champ
   // passerait le jalon à « En attente » et le champ disparaîtrait aussitôt : on ne
   // pourrait plus retaper une semaine. Le brouillon vit le temps de la saisie, la
@@ -271,6 +277,23 @@ export const CardModal: React.FC<CardModalProps> = ({
       return rangCode(a) - rangCode(b);
     });
   }, [jalons, catalogue, typeCarte]);
+
+  // Fermer le popover nomenclature si clic en dehors (doit être avant le early return)
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      const node = e.target as Node;
+      if (
+        popoverAnchor &&
+        !popoverAnchor.contains(node) &&
+        !popoverRef.current?.contains(node)
+      ) {
+        setPopoverAnchor(null);
+        setPopoverCategorie(null);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [popoverAnchor]);
 
   if (!isOpen) return null;
 
@@ -890,18 +913,66 @@ export const CardModal: React.FC<CardModalProps> = ({
                       </h4>
                       {/* L'ajout se fait depuis le groupe visé : la grandeur est déjà
                           préselectionnée dans le formulaire, il n'y a plus à la choisir. */}
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setNouvelleCategorie(groupe.categorie);
-                          setOuvertureAjout((v) => !v);
-                        }}
-                        title={`Ajouter dans ${titreCategorie(groupe.categorie).toLowerCase()}`}
-                        aria-label={`Ajouter dans ${titreCategorie(groupe.categorie).toLowerCase()}`}
-                        className="w-4 h-4 rounded border border-dashed border-slate-300 text-slate-400 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50/50 flex items-center justify-center transition-colors cursor-pointer"
-                      >
-                        <Plus className="w-2.5 h-2.5" />
-                      </button>
+                      {groupe.categorie === 'NOMENCLATURE' ? (
+                        <div className="relative">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              setNouvelleCategorie(groupe.categorie);
+                              setPopoverAnchor(e.currentTarget);
+                              setPopoverCategorie(groupe.categorie);
+                            }}
+                            title={`Ajouter dans ${titreCategorie(groupe.categorie).toLowerCase()}`}
+                            aria-label={`Ajouter dans ${titreCategorie(groupe.categorie).toLowerCase()}`}
+                            className="w-4 h-4 rounded border border-dashed border-slate-300 text-slate-400 hover:text-emerald-600 hover:border-emerald-300 hover:bg-emerald-50/50 flex items-center justify-center transition-colors cursor-pointer"
+                          >
+                            <Plus className="w-2.5 h-2.5" />
+                          </button>
+                          {popoverAnchor && popoverCategorie === groupe.categorie && (
+                            <div
+                              ref={popoverRef}
+                              className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-50 bg-white border border-slate-200 rounded-lg shadow-lg p-2 min-w-[140px]"
+                            >
+                              {NOMENCLATURES_PAR_TYPE[typeCarte]
+                                .filter((n) => !(n.code in jalons))
+                                .map((n) => (
+                                  <button
+                                    key={n.code}
+                                    type="button"
+                                    onClick={() => {
+                                      basculerNomenclature(typeCarte, n.code);
+                                      setPopoverAnchor(null);
+                                      setPopoverCategorie(null);
+                                    }}
+                                    className="w-full text-left px-3 py-1.5 text-[11px] font-mono font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 rounded transition-colors flex items-center gap-2"
+                                  >
+                                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                    <span>{n.code}</span>
+                                    <span className="text-[10px] text-slate-400 ml-auto">{n.libelle}</span>
+                                  </button>
+                                ))}
+                              {NOMENCLATURES_PAR_TYPE[typeCarte].every((n) => n.code in jalons) && (
+                                <p className="px-3 py-2 text-[10px] text-slate-400 text-center">
+                                  Toutes les nomenclatures {LIBELLE_TYPE_CARTE[typeCarte]} sont déjà ajoutées
+                                </p>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setNouvelleCategorie(groupe.categorie);
+                            setOuvertureAjout(true);
+                          }}
+                          title={`Ajouter dans ${titreCategorie(groupe.categorie).toLowerCase()}`}
+                          aria-label={`Ajouter dans ${titreCategorie(groupe.categorie).toLowerCase()}`}
+                          className="w-4 h-4 rounded border border-dashed border-slate-300 text-slate-400 hover:text-blue-600 hover:border-blue-300 hover:bg-blue-50/50 flex items-center justify-center transition-colors cursor-pointer"
+                        >
+                          <Plus className="w-2.5 h-2.5" />
+                        </button>
+                      )}
                     </div>
                     {/* Les pastilles se rabattent sur la ligne suivante quand la place manque :
                         elles gardent la largeur de leur contenu au lieu de se
@@ -1026,7 +1097,7 @@ export const CardModal: React.FC<CardModalProps> = ({
               </div>
             )}
 
-            {ouvertureAjout && (
+            {ouvertureAjout && nouvelleCategorie === 'STATUT' && (
               <div className="flex flex-wrap items-center gap-2 p-2.5 rounded-lg border border-slate-200 bg-slate-50">
                 <input
                   type="text"
@@ -1060,11 +1131,7 @@ export const CardModal: React.FC<CardModalProps> = ({
                 </button>
                 <p className="w-full text-[10px] text-slate-500 leading-tight">
                   Un code connu se range tout seul{' '}
-                  <span
-                    className={`font-semibold ${
-                      nouvelleCategorie === 'NOMENCLATURE' ? 'text-emerald-600' : 'text-blue-600'
-                    }`}
-                  >
+                  <span className="font-semibold text-blue-600">
                     {titreCategorie(nouvelleCategorie).toLowerCase()}
                   </span>
                   ; le jalon n'apparaît que sur cette carte, mais son code reste

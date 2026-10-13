@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlertTriangle, X, Plus, Trash2 } from 'lucide-react';
+import { AlertTriangle, X, Plus, Trash2, Columns, CheckCircle2, RotateCcw } from 'lucide-react';
 import { CardItem } from '../types/card.ts';
 import {
   getJalonsCard,
@@ -15,10 +15,15 @@ import {
   useAlertesManuelles,
   ecrireAlertesManuelles,
   alertesCarte,
+  alerteEnColonne,
+  alerteActive,
+  alerteResolue,
   type AlerteManuelle,
   type AlerteCouleur,
+  type VisibiliteAlerte,
   ALERTES_COULEURS,
   ALERTES_COULEUR_DEFAUT,
+  VISIBILITE_ALERTE_DEFAUT,
 } from '../utils/alertesManuelles.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
 
@@ -67,6 +72,8 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
   const manuelles = useAlertesManuelles();
   const [saisie, setSaisie] = useState('');
   const [couleur, setCouleur] = useState<AlerteCouleur>(ALERTES_COULEUR_DEFAUT);
+  const [visibilite, setVisibilite] = useState<VisibiliteAlerte>(VISIBILITE_ALERTE_DEFAUT);
+  const [onglet, setOnglet] = useState<'en-cours' | 'resolues'>('en-cours');
 
   // Position : à droite de la bande, aligné sur son sommet — le panneau se
   // superpose temporairement aux colonnes voisines (Inspection) plutôt que de
@@ -155,7 +162,9 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
       jalons: enRetard.filter((j) => j.categorie === categorie),
     })).filter((g) => g.jalons.length > 0);
   const alertesManuelles = alertesCarte(manuelles, card.id);
-  const totalAlertes = enRetard.length + alertesManuelles.length;
+  const alertesEnCours = alertesManuelles.filter((a) => alerteActive(a));
+  const alertesHistorique = alertesManuelles.filter((a) => alerteResolue(a));
+  const totalAlertes = enRetard.length + alertesEnCours.length;
 
   const ajouterAlerte = () => {
     const texte = saisie.trim();
@@ -165,6 +174,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
       id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       texte,
       couleur,
+      visibilite,
       creeLe: `${now.dateStr} à ${now.timeStr}`,
     };
     ecrireAlertesManuelles({
@@ -178,6 +188,37 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
     ecrireAlertesManuelles({
       ...manuelles,
       [card.id]: alertesManuelles.filter((a) => a.id !== id),
+    });
+  };
+
+  // Une alerte change de type sans être réécrite : « colonne » ou « popover uniquement ».
+  const basculerVisibilite = (a: AlerteManuelle) => {
+    const nouvelle: VisibiliteAlerte = alerteEnColonne(a) ? 'popover' : 'colonne';
+    ecrireAlertesManuelles({
+      ...manuelles,
+      [card.id]: alertesManuelles.map((x) => (x.id === a.id ? { ...x, visibilite: nouvelle } : x)),
+    });
+  };
+
+  // Marque une alerte comme réglée : elle est archivée dans l'historique et
+  // n'allume plus la bande ni la colonne.
+  const reglerAlerte = (a: AlerteManuelle) => {
+    const now = getNowParis();
+    ecrireAlertesManuelles({
+      ...manuelles,
+      [card.id]: alertesManuelles.map((x) =>
+        x.id === a.id ? { ...x, resolueLe: `${now.dateStr} à ${now.timeStr}` } : x
+      ),
+    });
+  };
+
+  // Réouvre une alerte réglée : elle revient dans les alertes en cours.
+  const rouvrirAlerte = (a: AlerteManuelle) => {
+    const restauree: AlerteManuelle = { ...a };
+    delete restauree.resolueLe;
+    ecrireAlertesManuelles({
+      ...manuelles,
+      [card.id]: alertesManuelles.map((x) => (x.id === a.id ? restauree : x)),
     });
   };
 
@@ -282,45 +323,142 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
           )}
         </section>
 
-        {/* Alertes écrites à la main */}
+        {/* Alertes écrites à la main : onglets « En cours » / « Résolues » */}
         <section>
-          <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
-            Alertes ajoutées ({alertesManuelles.length})
-          </h4>
-
           {alertesManuelles.length === 0 ? (
-            <p className="text-xs text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg p-2.5">
-              Aucune alerte ajoutée pour l'instant.
-            </p>
+            <>
+              <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
+                Alertes ajoutées (0)
+              </h4>
+              <p className="text-xs text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg p-2.5">
+                Aucune alerte ajoutée pour l'instant.
+              </p>
+            </>
           ) : (
-            <ul className="space-y-2">
-              {alertesManuelles.map((a) => {
-                const cls = COULEUR_ALERTE_CLS[(a.couleur || ALERTES_COULEUR_DEFAUT)] ?? COULEUR_ALERTE_CLS.rouge;
-                return (
-                <li
-                  key={a.id}
-                  className={cls.fond + ' border ' + cls.bordure + ' rounded-xl p-2.5 flex items-start gap-2.5'}
+            <>
+              <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-lg p-1 mb-2">
+                <button
+                  type="button"
+                  onClick={() => setOnglet('en-cours')}
+                  className={`flex-1 px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors cursor-pointer ${
+                    onglet === 'en-cours'
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
                 >
-                  <AlertTriangle className={'w-3.5 h-3.5 shrink-0 mt-0.5 ' + cls.icone} />
-                  <div className="min-w-0 flex-1">
-                    <div className="text-xs font-semibold text-slate-800 whitespace-pre-wrap break-words">
-                      {a.texte}
-                    </div>
-                    <div className="text-[10px] text-rose-700/70 mt-0.5">
-                      Ajoutée le {a.creeLe}
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => supprimerAlerte(a.id)}
-                    title="Supprimer cette alerte"
-                    className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded cursor-pointer shrink-0"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </li>
-                );
-              })}
-            </ul>
+                  En cours ({alertesEnCours.length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOnglet('resolues')}
+                  className={`flex-1 px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors cursor-pointer ${
+                    onglet === 'resolues'
+                      ? 'bg-white text-slate-800 shadow-sm'
+                      : 'text-slate-500 hover:text-slate-700'
+                  }`}
+                >
+                  Résolues ({alertesHistorique.length})
+                </button>
+              </div>
+
+              {onglet === 'en-cours' ? (
+                alertesEnCours.length === 0 ? (
+                  <p className="text-xs text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg p-2.5">
+                    Aucune alerte en cours.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {alertesEnCours.map((a) => {
+                      const cls = COULEUR_ALERTE_CLS[(a.couleur || ALERTES_COULEUR_DEFAUT)] ?? COULEUR_ALERTE_CLS.rouge;
+                      return (
+                      <li
+                        key={a.id}
+                        className={cls.fond + ' border ' + cls.bordure + ' rounded-xl p-2.5 flex items-start gap-2.5'}
+                      >
+                        <AlertTriangle className={'w-3.5 h-3.5 shrink-0 mt-0.5 ' + cls.icone} />
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs font-semibold text-slate-800 whitespace-pre-wrap break-words">
+                            {a.texte}
+                          </div>
+                          <div className="text-[10px] text-rose-700/70 mt-0.5">
+                            Ajoutée le {a.creeLe}
+                          </div>
+                          <label
+                            className="mt-1.5 inline-flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 cursor-pointer select-none hover:text-blue-700 transition-colors"
+                            title="Cocher pour afficher cette alerte dans la colonne Alertes du tableau"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={alerteEnColonne(a)}
+                              onChange={() => basculerVisibilite(a)}
+                              className="accent-blue-600 w-3 h-3 cursor-pointer"
+                            />
+                            <Columns className="w-3 h-3 text-blue-600" />
+                            Colonne Alertes
+                          </label>
+                        </div>
+                        <div className="flex flex-col gap-1 shrink-0">
+                          <button
+                            onClick={() => reglerAlerte(a)}
+                            title="Marquer comme réglée"
+                            className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-emerald-100 rounded cursor-pointer"
+                          >
+                            <CheckCircle2 className="w-3.5 h-3.5" />
+                          </button>
+                          <button
+                            onClick={() => supprimerAlerte(a.id)}
+                            title="Supprimer cette alerte"
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </li>
+                      );
+                    })}
+                  </ul>
+                )
+              ) : alertesHistorique.length === 0 ? (
+                <p className="text-xs text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg p-2.5">
+                  Aucune alerte résolue.
+                </p>
+              ) : (
+                <ul className="space-y-2">
+                  {alertesHistorique.map((a) => (
+                    <li
+                      key={a.id}
+                      className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-start gap-2.5"
+                    >
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5 text-emerald-500" />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-xs font-semibold text-slate-500 line-through whitespace-pre-wrap break-words">
+                          {a.texte}
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">
+                          Réglée le {a.resolueLe}
+                        </div>
+                      </div>
+                      <div className="flex flex-col gap-1 shrink-0">
+                        <button
+                          onClick={() => rouvrirAlerte(a)}
+                          title="Rouvrir cette alerte"
+                          className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded cursor-pointer"
+                        >
+                          <RotateCcw className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          onClick={() => supprimerAlerte(a.id)}
+                          title="Supprimer définitivement"
+                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded cursor-pointer"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </>
           )}
         </section>
       </div>
@@ -328,6 +466,20 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
       {/* Saisie : ancrée en bas du popover, toujours visible quelle que soit
           la longueur de la liste défilante. */}
       <div className="shrink-0 border-t border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
+
+        <div className="flex items-center gap-1.5 mb-1.5">
+          <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Visible</span>
+          <label className="inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold text-slate-600 bg-white border border-slate-300 rounded-md cursor-pointer select-none hover:border-blue-300 transition-colors">
+            <input
+              type="checkbox"
+              checked={visibilite === 'colonne'}
+              onChange={() => setVisibilite(visibilite === 'colonne' ? 'popover' : 'colonne')}
+              className="accent-blue-600 w-3.5 h-3.5 cursor-pointer"
+            />
+            <Columns className="w-3 h-3 text-blue-600" />
+            Afficher dans la colonne Alertes
+          </label>
+        </div>
 
         <div className="flex items-center gap-1.5 mb-1.5">
           <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Couleur</span>

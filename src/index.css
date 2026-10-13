@@ -34,6 +34,14 @@
   animation: carte-in 0.2s ease-out;
 }
 
+/* Grande table du Suivi Global : les pulsations (bandes Alerte, jalons en
+   retard) continuent de repaint chaque frame ; on les met en pause pendant
+   que la table défile, le temps de garder un défilement horizontal fluide.
+   La classe est posée/retirée sur le conteneur par un écouteur de scroll. */
+.suivi-table-au-scroll .animate-pulse {
+  animation-play-state: paused !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-popover-in,
   .animate-carte-in {

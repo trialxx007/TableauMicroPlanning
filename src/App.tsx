@@ -14,7 +14,14 @@ import { getNowParis } from './utils/dateFrance.ts';
 import { RefreshCw, FileSpreadsheet, Check, Plus } from 'lucide-react';
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState<AppPage>('point-journalier');
+  // Sur un rechargement, on revient à l'onglet où l'on était : la vue courante
+  // est mémorisée pour cette session (sessionStorage), pas imposée par défaut.
+  const [currentPage, setCurrentPage] = useState<AppPage>(() => {
+    const sauvegarde = sessionStorage.getItem('aic_vue_actuelle_v1');
+    return sauvegarde === 'suivi-global' || sauvegarde === 'point-journalier'
+      ? sauvegarde
+      : 'point-journalier';
+  });
   const [cards, setCards] = useState<CardItem[]>([]);
   const [catalogue, setCatalogue] = useState<JalonCatalogue[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,14 +41,16 @@ export default function App() {
   const [notification, setNotification] = useState<string | null>(null);
   const [isMeetingFilterActive, setIsMeetingFilterActive] = useState(false);
 
-  const fetchCards = async () => {
+  const fetchCards = async (silent = false) => {
     try {
       // Le catalogue d'abord : les jalons affichés en dépendent.
       const [jalons, data] = await Promise.all([jalonApi.getAll(), cardApi.getAll()]);
-      setCatalogue(jalons);
-      setCards(data);
+      // On ne remplace l'état que si le contenu a réellement changé : le polling
+      // passe toutes les quelques secondes et ne doit pas relancer un rendu inutile.
+      setCatalogue((prev) => (JSON.stringify(prev) === JSON.stringify(jalons) ? prev : jalons));
+      setCards((prev) => (JSON.stringify(prev) === JSON.stringify(data) ? prev : data));
     } catch (e) {
-      console.error('Erreur chargement cartes', e);
+      if (!silent) console.error('Erreur chargement cartes', e);
     } finally {
       setLoading(false);
     }
@@ -50,6 +59,19 @@ export default function App() {
   useEffect(() => {
     fetchCards();
   }, []);
+
+  // Synchronisation entre postes : les cartes ajoutées ou modifiées sur un poste
+  // (y compris depuis le Suivi Global) doivent apparaître ici sans rechargement.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchCards(true);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    sessionStorage.setItem('aic_vue_actuelle_v1', currentPage);
+  }, [currentPage]);
 
   const showNotification = (msg: string) => {
     setNotification(msg);
@@ -382,7 +404,7 @@ export default function App() {
 
           <div className="flex items-center gap-2 self-start sm:self-auto">
             <button
-              onClick={fetchCards}
+              onClick={() => fetchCards()}
               className="p-1.5 text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg shadow-xs transition-colors cursor-pointer"
               title="Actualiser la liste"
             >

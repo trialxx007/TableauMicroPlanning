@@ -6,6 +6,13 @@ export const ALERTES_COULEURS: AlerteCouleur[] = ['rouge', 'orange', 'jaune', 'v
 
 export const ALERTES_COULEUR_DEFAUT: AlerteCouleur = 'rouge';
 
+/** Où une alerte manuelle est visible :
+ *  - 'colonne' : dans la colonne Alertes du Suivi Global (et dans le popover) ;
+ *  - 'popover' : uniquement dans le popover, jamais dans la colonne. */
+export type VisibiliteAlerte = 'popover' | 'colonne';
+
+/** Anciennes alertes (sans champ visibilite) : affichées dans la colonne. */
+export const VISIBILITE_ALERTE_DEFAUT: VisibiliteAlerte = 'colonne';
 
 /** Alerte saisie à la main dans le popover, rattachée à une carte. */
 export interface AlerteManuelle {
@@ -15,6 +22,32 @@ export interface AlerteManuelle {
   couleur?: AlerteCouleur;
   /** Date et heure de saisie, fuseau du site : +06/10/2026+ 14:32+. */
   creeLe: string;
+  /** Où l'alerte s'affiche (défaut 'colonne'). */
+  visibilite?: VisibiliteAlerte;
+  /** Date et heure à laquelle l'alerte a été marquée comme réglée. Absent tant
+   *  que l'alerte est en cours : l'alerte est alors archivée dans l'historique,
+   *  elle n'allume plus la bande ni la colonne. */
+  resolueLe?: string;
+}
+
+/** Une alerte manuelle affichée dans la colonne Alertes du tableau. */
+export function alerteEnColonne(a: AlerteManuelle): boolean {
+  return (a.visibilite ?? VISIBILITE_ALERTE_DEFAUT) === 'colonne';
+}
+
+/** Alerte en cours (jamais marquée comme réglée). */
+export function alerteActive(a: AlerteManuelle): boolean {
+  return !a.resolueLe;
+}
+
+/** Alerte archivée dans l'historique (marquée comme réglée). */
+export function alerteResolue(a: AlerteManuelle): boolean {
+  return Boolean(a.resolueLe);
+}
+
+/** Alerte en cours et visible dans la colonne Alertes. */
+export function alerteActiveEnColonne(a: AlerteManuelle): boolean {
+  return alerteActive(a) && alerteEnColonne(a);
 }
 
 /** Clé de persistance des alertes manuelles, par carte. */

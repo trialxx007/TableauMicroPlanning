@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, X } from 'lucide-react';
+import { Plus, X, Truck } from 'lucide-react';
 import { InspectionBloc, InspectionValeur } from '../types/suiviGlobal.ts';
 import { aControle50, dateCourte, libelleValeur } from '../utils/inspections.ts';
 
@@ -14,21 +14,19 @@ interface InspectionCellProps {
   onBadgeClick: (valeurId: string, anchor: HTMLElement) => void;
   /** Clic sur un libelle OF (OF1, OF2...) : ouvre le popover de detail. */
   onOfClick?: (indice: number, anchor: HTMLElement) => void;
-  onCommentaire: (texte: string) => void;
 }
 
 /**
  * Cellule Inspection : deux mini colonnes de contrôles — OF à gauche, I à
  * droite (uniquement 50 % ou 100 %) — chacune avec sa date modifiable et son
- * badge Pass/Fail, puis un commentaire qui remplit tout le reste de la case
- * et s'adapte à la hauteur prise par les contrôles.
+ * badge Pass/Fail, puis un bouton d'envoi en expédition qui remplit le reste
+ * de la case.
  */
 export const InspectionCell: React.FC<InspectionCellProps> = ({
   onAjouterValeur,
   onSupprimerValeur,
   onMajDate,
   onBadgeClick,
-  onCommentaire,
   onOfClick,
   bloc,
 }) => {
@@ -182,14 +180,19 @@ export const InspectionCell: React.FC<InspectionCellProps> = ({
         </div>
       </div>
 
-      {/* Commentaire : remplit tout le vide restant sous les contrôles */}
-      <textarea
-        value={bloc.commentaire}
-        onChange={(e) => onCommentaire(e.target.value)}
-        placeholder="Commentaire..."
-        aria-label="Commentaire d'inspection"
-        className="flex-1 min-h-[52px] w-full resize-none text-[11px] leading-snug text-slate-700 bg-slate-50/70 border border-transparent hover:border-slate-300 rounded-md px-1.5 py-1 focus:bg-white focus:border-blue-400 focus:outline-hidden focus:ring-1 focus:ring-blue-400"
-      />
+      {/* Envoi en expédition : remplit tout le vide restant sous les contrôles.
+          Ne fait rien pour le moment. */}
+      <button
+        type="button"
+        onClick={() => {
+          /* Envoi en expédition — à implémenter */
+        }}
+        title="Envoyer en expédition"
+        className="mt-auto w-full inline-flex items-center justify-center gap-1.5 rounded-md border border-dashed border-emerald-300 bg-emerald-50/50 text-emerald-700 text-[11px] font-bold uppercase tracking-wide px-2 py-1.5 hover:bg-emerald-50 hover:border-emerald-400 transition-colors cursor-pointer"
+      >
+        <Truck className="w-4 h-4" />
+        Envoyer en expédition
+      </button>
     </div>
   );
 };

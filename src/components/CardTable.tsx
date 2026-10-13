@@ -78,6 +78,15 @@ export const CardTable: React.FC<CardTableProps> = ({
   const [editingFinieId, setEditingFinieId] = useState<string | null>(null);
   const [inputFinieValue, setInputFinieValue] = useState<string>('');
 
+  // Jalons par carte calculés une seule fois tant que les cartes (ou le
+  // catalogue) ne changent pas : la table en relit une entrée à chaque ligne
+  // à chaque rendu (filtre, tri, point…), et getJalonsCard reconstruit un Map
+  // et effectue un tri à chaque appel.
+  const jalonsParCarte = useMemo(
+    () => new Map(cards.map((c) => [c.id, getJalonsCard(c, catalogue)])),
+    [cards, catalogue]
+  );
+
   const handleCopyRef = (ref: string) => {
     navigator.clipboard.writeText(ref);
     setCopiedRef(ref);
@@ -275,7 +284,7 @@ export const CardTable: React.FC<CardTableProps> = ({
           <tbody className="divide-y divide-slate-100 text-sm">
             {cards.map((card) => {
               const statusInfo = getStatusBadge(card.statut);
-              const jalons = getJalonsCard(card, catalogue);
+              const jalons = jalonsParCarte.get(card.id) ?? [];
               // RDL a sa propre pastille dans la colonne « Référence », on l'exclut
               // donc de la colonne Jalons pour ne pas la montrer deux fois.
               const jRDL = jalons.find((j) => j.code === 'RDL');

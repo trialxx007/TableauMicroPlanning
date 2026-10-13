@@ -19,6 +19,8 @@ import {
   resetDatabase,
   setJalonCategorie,
   updateCardData,
+  getSuiviGlobalLayout,
+  setSuiviGlobalLayout,
 } from './db.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -449,8 +451,54 @@ apiRouter.get('/stats', (_req: Request, res: Response) => {
       bloquees,
       enAttente,
     },
-  });
 });
+});
+/* ------------------------------------------------------------------ suivi global layout */
+
+// GET layout partagé
+apiRouter.get('/suivi-layout', (_req: Request, res: Response) => {
+  try {
+    const layout = getSuiviGlobalLayout();
+    res.json({ success: true, data: layout?.rows ?? [] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
+// PUT layout partagé (remplace tout)
+apiRouter.put('/suivi-layout', (req: Request, res: Response) => {
+  try {
+    const rows = req.body?.rows;
+    if (!Array.isArray(rows)) {
+      return res.status(400).json({ success: false, error: 'rows doit être un tableau' });
+    }
+    setSuiviGlobalLayout(rows);
+    res.json({ success: true, message: 'Layout Suivi Global sauvegardé' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
+// POST layout partagé : utilisé par navigator.sendBeacon à la fermeture de page.
+// sendBeacon envoie le corps en text/plain (non lu par express.json), on parse donc
+// le corps brut. Réponse 204 : sendBeacon ne lit pas la réponse.
+apiRouter.post(
+  '/suivi-layout',
+  express.text({ type: '*/*', limit: '4mb' }),
+  (req: Request, res: Response) => {
+    try {
+      const parsed = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      const rows = parsed?.rows;
+      if (!Array.isArray(rows)) {
+        return res.status(400).json({ success: false, error: 'rows doit être un tableau' });
+      }
+      setSuiviGlobalLayout(rows);
+      res.status(204).end();
+    } catch (err) {
+      res.status(500).json({ success: false, error: (err as Error).message });
+    }
+  }
+);
 
 // Mount /api/v1
 app.use('/api/v1', apiRouter);

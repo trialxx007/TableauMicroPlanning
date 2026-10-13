@@ -345,3 +345,57 @@ export const jalonApi = {
     }
   },
 };
+
+/* ------------------------------------------------------------------ suivi global layout */
+
+export interface SuiviGlobalLayoutRow {
+  id: string;
+  nom: string;
+  categorieId: string;
+  dotColor: string;
+  modeleEnCoursCards: (unknown | null)[];
+  inspections: unknown[];
+  prochainsLancementsCards: unknown[];
+  expeditionCard?: unknown | null;
+  alertes?: unknown[];
+}
+
+export const suiviGlobalApi = {
+  async getLayout(): Promise<SuiviGlobalLayoutRow[]> {
+    try {
+      const res = await fetch('/api/v1/suivi-layout');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        return json.data;
+      }
+    } catch {
+      // Fallback localStorage si serveur indisponible
+    }
+    // Fallback localStorage (pour compatibilité / hors ligne)
+    try {
+      const raw = localStorage.getItem('suivi_global_rows_v3');
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return [];
+  },
+
+  async setLayout(rows: SuiviGlobalLayoutRow[]): Promise<void> {
+    try {
+      const res = await fetch('/api/v1/suivi-layout', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error);
+    } catch (e) {
+      console.warn('Erreur sauvegarde layout serveur, fallback localStorage', e);
+    }
+    // Fallback localStorage toujours écrit pour accès immédiat
+    try {
+      localStorage.setItem('suivi_global_rows_v3', JSON.stringify(rows));
+    } catch {}
+  },
+};

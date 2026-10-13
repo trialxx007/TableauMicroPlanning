@@ -3,7 +3,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { INITIAL_CARDS } from './src/data/mockData.ts';
-import { CATALOGUE_INITIAL, CATEGORIES_PAR_CODE, CODE_TDS_PPS, cataloguePourType, categorieParCode } from './src/data/mockJalons.ts';
+import {
+  CATALOGUE_INITIAL,
+  CATEGORIES_PAR_CODE,
+  CODE_TDS_PPS,
+  NOMENCLATURES_PAR_TYPE,
+  cataloguePourType,
+  categorieParCode,
+} from './src/data/mockJalons.ts';
 import type {
   CardItem,
   CardJalon,
@@ -70,6 +77,12 @@ function initSchema(conn: DatabaseSync): void {
       date     TEXT,
       tbc      INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (card_id, code)
+    );
+
+    CREATE TABLE IF NOT EXISTS suivi_global_layout (
+      id          TEXT PRIMARY KEY,
+      data        TEXT NOT NULL,
+      maj_le      TEXT NOT NULL
     );
 
     CREATE INDEX IF NOT EXISTS idx_card_jalons_card ON card_jalons(card_id);
@@ -147,6 +160,16 @@ function initSchema(conn: DatabaseSync): void {
     insertManquant.run(j.code, j.libelle, j.categorie, j.ordre, now());
   }
 
+  // Les nomenclatures propres à chaque nature de matière (R et T) rejoignent aussi
+  // une base existante : un code ajouté au catalogue commun (C pour le Cuir, etc.)
+  // doit être servi par l'API sans attendre une nouvelle base. Même ordre que le
+  // seed, défini d'après la position dans la liste du type.
+  for (const nomenclatures of Object.values(NOMENCLATURES_PAR_TYPE)) {
+    for (const [i, n] of nomenclatures.entries()) {
+      insertManquant.run(n.code, n.libelle, 'NOMENCLATURE', 100 + (i + 1) * 10, now());
+    }
+  }
+
   // Le statut TDS/PPS rejoint toutes les cartes existantes, une seule fois, au
   // moment où il apparaît dans le catalogue. Sur une base neuve il n'y a pas
   // encore de carte : seedIfEmpty les créera avec le jalon via cataloguePourType.
@@ -157,6 +180,19 @@ function initSchema(conn: DatabaseSync): void {
     for (const c of conn.prepare('SELECT id FROM cards').all() as { id: string }[]) {
       lierStatut.run(c.id, CODE_TDS_PPS);
     }
+  }
+
+  // Table suivi_global_layout pour le partage du Tableau AIC entre postes.
+  // Une base créée avant cet ajout n'a pas la table : on la crée ici.
+  const tables = conn.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='suivi_global_layout'").all() as { name: string }[];
+  if (tables.length === 0) {
+    conn.exec(`
+      CREATE TABLE suivi_global_layout (
+        id          TEXT PRIMARY KEY,
+        data        TEXT NOT NULL,
+        maj_le      TEXT NOT NULL
+      );
+    `);
   }
 }
 
@@ -538,4 +574,31 @@ export function resetDatabase(): void {
 
 export function cardJalonOf(card: CardItem | undefined, code: JalonCode): CardJalon | undefined {
   return card?.jalons.find((j) => j.code === code);
+}
+
+/** Layout partagé du Suivi Global (Tableau AIC). */
+export interface SuiviGlobalLayout {
+  rows: unknown[];
+}
+
+/** Récupère le layout partagé (unique, id='global'). */
+export function getSuiviGlobalLayout(): SuiviGlobalLayout | undefined {
+  const conn = getDb();
+  const row = conn.prepare('SELECT data FROM suivi_global_layout WHERE id = ?').get('global') as
+    | { data: string }
+    | undefined;
+  if (!row) return undefined;
+  const parsed: unknown = JSON.parse(row.data);
+  // Ancienne sauvegarde : tableau nu au lieu de { rows }.
+  if (Array.isArray(parsed)) return { rows: parsed };
+  return parsed as SuiviGlobalLayout;
+}
+
+/** Sauvegarde le layout partagé. */
+export function setSuiviGlobalLayout(rows: unknown[]): void {
+  const conn = getDb();
+  conn.prepare(`
+    INSERT INTO suivi_global_layout (id, data, maj_le) VALUES ('global', ?, ?)
+    ON CONFLICT(id) DO UPDATE SET data = excluded.data, maj_le = excluded.maj_le
+  `).run(JSON.stringify({ rows }), now());
 }

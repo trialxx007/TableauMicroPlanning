@@ -1,4 +1,17 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import {
+  DndContext,
+  DragOverlay,
+  KeyboardSensor,
+  PointerSensor,
+  pointerWithin,
+  useSensor,
+  useSensors,
+  type DragCancelEvent,
+  type DragEndEvent,
+  type DragStartEvent,
+  type DropAnimation,
+} from '@dnd-kit/core';
 import { CardFormData, CardItem } from '../types/card.ts';
 import {
   ChaineRow,
@@ -7,28 +20,17 @@ import {
   InspectionBloc,
   InspectionValeur,
   AlerteChamp,
-  TeinteAlerte,
-  TEINTES_ALERTE,
   TEINTE_ALERTE_DEFAUT,
   normaliserTeinteAlerte,
 } from '../types/suiviGlobal.ts';
 import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS } from '../data/mockSuiviGlobal.ts';
 import { CardPickerModal } from './CardPickerModal.tsx';
 import { SlotActionModal } from './SlotActionModal.tsx';
-import { InspectionCell } from './InspectionCell.tsx';
 import { InspectionEtatMenu } from './InspectionEtatMenu.tsx';
 import { OfPopover } from './OfPopover.tsx';
 import { AlertePopover } from './AlertePopover.tsx';
-import {
-  alertesCarte,
-  useAlertesManuelles,
-  ecrireAlertesManuelles,
-  ALERTES_COULEUR_DEFAUT,
-  ALERTES_COULEURS,
-  type AlerteCouleur,
-  type AlerteManuelle,
-} from '../utils/alertesManuelles.ts';
-import { getJalonsEnRetard, getJalonsCard, detailJalon, marqueJalon, themeJalon, type JalonInfo } from '../utils/jalons.ts';
+import { useAlertesManuelles } from '../utils/alertesManuelles.ts';
+import { getJalonsCard, type JalonInfo } from '../utils/jalons.ts';
 import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import {
   blocInspectionVide,
@@ -37,14 +39,20 @@ import {
 } from '../utils/inspections.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
 import { ViewSwitcher } from './ViewSwitcher.tsx';
+import { suiviGlobalApi, type SuiviGlobalLayoutRow } from '../services/api.ts';
 import {
-  Plus,
+  LigneTableSuivi,
+  NOMBRE_LANCEMENTS,
+  PastilleJalon,
+  type AlerteOuverteGlobal,
+  type ApercuBanniere,
+  type MenuEtatInspection,
+  type OfOuvertGlobal,
+  type TypeSlotGlobal,
+} from './LigneTableSuivi.tsx';
+import {
   Sparkles,
   Truck,
-  ExternalLink,
-  X,
-  AlertTriangle,
-  ArrowLeftRight,
   ClipboardList,
   Calendar,
   Clock,
@@ -71,15 +79,6 @@ interface ActiveSlotPicker {
   slotTitle: string;
 }
 
-/** Menu Pass/Fail ouvert sur un contrôle d'inspection. */
-interface MenuEtatInspection {
-  rowId: string;
-  blocIndex: number;
-  valeurId: string;
-  anchor: HTMLElement;
-  actuel: 'P' | 'F' | null;
-}
-
 /** Pour SlotActionModal : case en attente de choix (nouvelle carte ou existante). */
 interface ActiveSlotAction {
   rowId: string;
@@ -92,6 +91,80 @@ interface ActiveSlotAction {
 /** Alias historiques : la ligne du suivi global et la pile de deux cartes. */
 type SuiviRow = ChaineRow;
 type PileDeCartes = ChaineRow['modeleEnCoursCards'];
+
+/** Coordonnées d'une case du tableau (pour déplacer une carte par glisser-déposer). */
+interface CoordCase {
+  rowId: string;
+  slotType: TypeSlotGlobal;
+  lancementIndex?: number;
+  slotIndex?: number;
+}
+
+/** Carte posée dans une case, ou null si la case est vide. */
+function lireCarteEnCase(lignes: SuiviRow[], c: CoordCase): ChaineSlotCard | null {
+  const ligne = lignes.find((r) => r.id === c.rowId);
+  if (!ligne) return null;
+  if (c.slotType === 'modeleEnCours') return ligne.modeleEnCoursCards[c.slotIndex ?? 0] ?? null;
+  if (c.slotType === 'expedition') return ligne.expeditionCard ?? null;
+  return ligne.prochainsLancementsCards[c.lancementIndex ?? 0]?.[c.slotIndex ?? 0] ?? null;
+}
+
+/** Remplace la carte d'une case (null pour la vider), sans toucher aux autres. */
+function ecrireCarteEnCase(lignes: SuiviRow[], c: CoordCase, carte: ChaineSlotCard | null): SuiviRow[] {
+  return lignes.map((r) => {
+    if (r.id !== c.rowId) return r;
+    if (c.slotType === 'modeleEnCours') {
+      const pile = [...r.modeleEnCoursCards] as PileDeCartes;
+      pile[c.slotIndex ?? 0] = carte;
+      return { ...r, modeleEnCoursCards: pile };
+    }
+    if (c.slotType === 'expedition') {
+      return { ...r, expeditionCard: carte ?? null };
+    }
+    const lancements = [...r.prochainsLancementsCards] as ChaineRow['prochainsLancementsCards'];
+    const pile = [...(lancements[c.lancementIndex ?? 0] ?? [null, null])] as PileDeCartes;
+    pile[c.slotIndex ?? 0] = carte;
+    lancements[c.lancementIndex ?? 0] = pile;
+    return { ...r, prochainsLancementsCards: lancements };
+  });
+}
+
+/** Retire cette carte de toutes les cases où elle apparaît (une carte = une case). */
+function retirerCarteDePartout(lignes: SuiviRow[], cardId: string): SuiviRow[] {
+  return lignes.map((r) => {
+    const modelePile = (r.modeleEnCoursCards as PileDeCartes).map((s) =>
+      s?.cardId === cardId ? null : s
+    ) as PileDeCartes;
+    const lancementsPiles = (r.prochainsLancementsCards as ChaineRow['prochainsLancementsCards']).map(
+      (pile) => (pile ?? [null, null]).map((s) => (s?.cardId === cardId ? null : s))
+    ) as ChaineRow['prochainsLancementsCards'];
+    return {
+      ...r,
+      modeleEnCoursCards: modelePile,
+      prochainsLancementsCards: lancementsPiles,
+      expeditionCard: r.expeditionCard?.cardId === cardId ? null : r.expeditionCard,
+    };
+  });
+}
+
+/** Localise l'unique case où est posée cette carte, si elle est dans le tableau. */
+function localiserCarte(lignes: SuiviRow[], cardId: string): CoordCase | null {
+  for (const r of lignes) {
+    for (const [i, s] of r.modeleEnCoursCards.entries()) {
+      if (s?.cardId === cardId) return { rowId: r.id, slotType: 'modeleEnCours', slotIndex: i };
+    }
+    for (let li = 0; li < r.prochainsLancementsCards.length; li++) {
+      const pile = r.prochainsLancementsCards[li] ?? [];
+      for (let si = 0; si < pile.length; si++) {
+        if (pile[si]?.cardId === cardId) {
+          return { rowId: r.id, slotType: 'lancement', lancementIndex: li, slotIndex: si };
+        }
+      }
+    }
+    if (r.expeditionCard?.cardId === cardId) return { rowId: r.id, slotType: 'expedition' };
+  }
+  return null;
+}
 
 /** Un ancien cache peut stocker une carte seule : on la remonte en pile. */
 function enPile(brut: unknown): PileDeCartes {
@@ -184,151 +257,11 @@ function normaliserLignes(brut: unknown): SuiviRow[] {
   return migrees.length > 0 ? migrees : INITIAL_CHAINE_ROWS;
 }
 
-/** Nombre de colonnes « Prochains Lancements ». Source unique pour l'affichage
- *  et l'affectation, pour qu'ajouter une colonne ne demande pas deux edits. */
-const NOMBRE_LANCEMENTS = 5;
-
 const BANNER_LINE_RATIO = 1.06;
 const BANNER_WORD_GAP = 0.45;
 const BANNER_FILL_W = 0.72;
 const BANNER_FILL_H = 0.88;
 const BANNER_GLYPH_W_RATIO = 0.66;
-
-function computeCardProgress(card?: CardItem): number | null {
-  return card && card.quantiteDemandee > 0
-    ? Math.min(100, Math.round((card.quantiteFinie / card.quantiteDemandee) * 100))
-    : null;
-}
-
-/**
- * Un champ d'alerte de la colonne Alertes. Saisie libre à l'état vide ; dès que
- * le texte est là, il s'affiche en badge coloré en gras avec le triangle
- * d'alerte. La teinte se choisit dans une petite palette (rouge par défaut).
- */
-function ChampAlerte({
-  valeur,
-  teinte,
-  placeholder,
-  onChanger,
-  onTeinte,
-  libelle,
-}: {
-  valeur: string;
-  teinte: TeinteAlerte;
-  placeholder: string;
-  onChanger: (v: string) => void;
-  onTeinte: (t: TeinteAlerte) => void;
-  libelle: string;
-}) {
-  const [paletteOuverte, setPaletteOuverte] = useState(false);
-  const t = TEINTES_ALERTE[teinte] ?? TEINTES_ALERTE[TEINTE_ALERTE_DEFAUT];
-  const rempli = Boolean(valeur.trim());
-
-  return (
-    <div className="relative flex-1 min-w-0">
-      <div
-        className={`flex items-center gap-1 px-1.5 py-1.5 rounded-lg border transition-colors ${
-          rempli
-            ? `${t.fond} ${t.bordure} shadow-xs`
-            : 'bg-slate-50 border-slate-300 focus-within:border-blue-400 focus-within:bg-white'
-        }`}
-      >
-        <AlertTriangle
-          className={`w-3.5 h-3.5 shrink-0 ${rempli ? 'text-white' : 'text-slate-300'}`}
-          aria-hidden
-        />
-        <input
-          type="text"
-          value={valeur}
-          placeholder={placeholder}
-          onChange={(e) => onChanger(e.target.value)}
-          aria-label={libelle}
-          className={`w-full min-w-0 bg-transparent text-[11px] outline-hidden placeholder:text-slate-400 ${
-            rempli
-              ? 'text-white font-bold placeholder:text-white/70'
-              : 'text-slate-700 font-medium'
-          }`}
-        />
-        <button
-          type="button"
-          onClick={() => setPaletteOuverte((o) => !o)}
-          title="Changer la couleur de l'alerte"
-          aria-haspopup="menu"
-          aria-expanded={paletteOuverte}
-          className={`shrink-0 w-4 h-4 rounded-full border-2 transition-transform hover:scale-110 ${
-            rempli ? 'border-white/80' : 'border-slate-300'
-          } ${t.pastille}`}
-        />
-      </div>
-
-      {paletteOuverte && (
-        <>
-          <div
-            className="fixed inset-0 z-30"
-            onClick={() => setPaletteOuverte(false)}
-            aria-hidden
-          />
-          <div
-            role="menu"
-            className="absolute right-0 top-full mt-1 z-40 flex items-center gap-1.5 bg-white border border-slate-200 rounded-lg px-2 py-1.5 shadow-lg"
-          >
-            {(Object.keys(TEINTES_ALERTE) as TeinteAlerte[]).map((id) => {
-              const option = TEINTES_ALERTE[id];
-              return (
-                <button
-                  key={id}
-                  type="button"
-                  role="menuitem"
-                  title={option.nom}
-                  onClick={() => {
-                    onTeinte(id);
-                    setPaletteOuverte(false);
-                  }}
-                  className={`w-5 h-5 rounded-full ${option.pastille} transition-transform hover:scale-110 ${
-                    teinte === id ? 'ring-2 ring-slate-400 ring-offset-1' : ''
-                  }`}
-                />
-              );
-            })}
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/**
- * Une pastille de jalon, lisible sur le tableau global. La marque courte (✓, S40,
- * 12/06, TBC, —) tient dans une colonne fixe à droite, comme dans le Point
- * Commande Journalière : le code s'étale dans la colonne de gauche sans jamais
- * déborder de la cellule. La teinte vient de la grandeur (vert nomenclature,
- * bleu statut) ; seule la nuance change avec l'avancement, et le rouge reste
- * réservé au retard, avec son triangle d'alerte.
- */
-function PastilleJalon({ jalon }: { jalon: JalonInfo }) {
-  const colors = themeJalon(jalon).pastille;
-  const detail = detailJalon(jalon);
-
-  return (
-    <span className="group/j relative inline-grid shrink-0 w-fit min-w-[3.75rem]" title={detail}>
-      {jalon.enRetard && (
-        <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" aria-hidden />
-      )}
-      <span
-        className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.7rem,auto)_1.9rem] items-stretch overflow-hidden rounded text-[10px] font-bold border ${colors} ${
-          jalon.enRetard ? 'motion-safe:animate-pulse' : ''
-        }`}
-      >
-        <span className="flex items-center justify-center py-0 tracking-wide whitespace-nowrap">
-          {jalon.code}
-        </span>
-        <span className="flex items-center justify-center py-0 border-l border-black/10">
-          {marqueJalon(jalon)}
-        </span>
-      </span>
-    </span>
-  );
-}
 
 function buildBanner(
   catConfig: CategorieConfig,
@@ -386,31 +319,59 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   const catalogue = useJalonCatalogue();
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
+  const [layoutLoading, setLayoutLoading] = useState(true);
 
   useEffect(() => {
     const timer = setInterval(() => setParisTime(getNowParis().timeStr), 15000);
     return () => clearInterval(timer);
   }, []);
 
-  // Clé de sauvegarde du tableau : la version monte quand les données de
-  // démonstration persistées doivent être abandonnées (v2 → v3 au passage en
-  // données réelles). Les états saisis après cette version sont conservés.
-  const CLE_SAUVEGARDE = 'suivi_global_rows_v3';
-  const [rows, setRows] = useState<SuiviRow[]>(() => {
-      try {
-        // L'ancien cache de démonstration (v2) est définitivement obsolète.
-        localStorage.removeItem('suivi_global_rows_v2');
-        const saved = localStorage.getItem(CLE_SAUVEGARDE);
-        if (saved) {
-          // Le normalisateur accepte les anciens formats (carte unique,
-          // lancements à plat) comme le format actuel en piles de 2.
-          return normaliserLignes(JSON.parse(saved));
-        }
-      } catch {
-        // Fallback
+  // Layout partagé via API (DB SQLite) avec polling + localStorage fallback
+  const [rows, setRows] = useState<SuiviRow[]>(() => INITIAL_CHAINE_ROWS);
+
+  const loadLayout = useCallback(async (isInitial = false) => {
+    try {
+      if (isInitial) console.log('[SuiviGlobal] Chargement layout via API...');
+      const data = await suiviGlobalApi.getLayout();
+      if (isInitial) console.log('[SuiviGlobal] Layout reçu:', data.length, 'lignes');
+      if (data.length > 0) {
+        const normalized = normaliserLignes(data);
+        setRows((prev) => {
+          const prevStr = JSON.stringify(prev);
+          const nextStr = JSON.stringify(normalized);
+          if (prevStr !== nextStr) {
+            if (!isInitial) console.log('[SuiviGlobal] Layout mis à jour depuis le serveur');
+            return normalized;
+          }
+          return prev;
+        });
+      } else if (isInitial) {
+        console.log('[SuiviGlobal] Layout vide, utilisation INITIAL_CHAINE_ROWS');
       }
-      return INITIAL_CHAINE_ROWS;
-  });
+    } catch (e) {
+      console.warn('[SuiviGlobal] Erreur chargement layout', e);
+    } finally {
+      if (isInitial) setLayoutLoading(false);
+    }
+  }, []);
+
+  // Chargement initial
+  useEffect(() => {
+    let mounted = true;
+    const init = async () => {
+      await loadLayout(true);
+    };
+    init();
+    return () => { mounted = false; };
+  }, [loadLayout]);
+
+  // Polling toutes les 3s pour synchroniser avec les autres postes
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadLayout(false);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [loadLayout]);
 
   const [activePicker, setActivePicker] = useState<ActiveSlotPicker | null>(null);
 
@@ -418,12 +379,31 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   // écrites par le popover, lues ici pour allumer la bande de la ligne.
   const alertesManuelles = useAlertesManuelles();
 
+  // --- Caches de lecture rendu par rendu -------------------------------
+  // Le tableau affiche jusqu'à ~12 lignes × 13 cases : sans cache, chaque rendu
+  // refait getCardById (find linéaire) et getJalonsCard (construction d'un Map +
+  // tri) des dizaines de fois. Ces caches ne se recalculent que quand les cartes
+  // ou le catalogue changent, pas à chaque rendu (horloge 15 s, saisie, etc.).
+  const cardsParId = useMemo(
+    () => new Map(cards.map((c) => [c.id, c])),
+    [cards]
+  );
+  const jalonInfosParCarte = useMemo(() => {
+    const m = new Map<string, JalonInfo[]>();
+    for (const c of cards) m.set(c.id, getJalonsCard(c, catalogue));
+    return m;
+  }, [cards, catalogue]);
+  const cartesAlerteRetard = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of cards) {
+      const infos = jalonInfosParCarte.get(c.id);
+      if (infos?.some((j) => j.enRetard)) s.add(c.id);
+    }
+    return s;
+  }, [cards, jalonInfosParCarte]);
+
   // Popover d'alerte ouvert : la carte concernée, son titre de case, l'ancre DOM.
-  const [alerteOuverte, setAlerteOuverte] = useState<{
-    card: CardItem;
-    slotTitle?: string;
-    anchor: HTMLElement;
-  } | null>(null);
+  const [alerteOuverte, setAlerteOuverte] = useState<AlerteOuverteGlobal | null>(null);
 
   // Taille réelle de chaque bandeau vertical, pour dimensionner le texte
   // proportionnellement à la hauteur cumulée des modèles en cours de la catégorie.
@@ -431,6 +411,30 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   const bannerNodesRef = useRef<Record<string, HTMLTableCellElement | null>>({});
   const bannerObserverRef = useRef<ResizeObserver | null>(null);
   const bannerRefCacheRef = useRef<Record<string, (el: HTMLTableCellElement | null) => void>>({});
+
+  // Conteneur défilant de la table : pendant le défilement, on met en pause les
+  // animations de pulsation pour éviter de repeindre chaque frame (fluide au
+  // scroll horizontal). La classe est retirée ~200 ms après l'arrêt.
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = tableScrollRef.current;
+    if (!el) return;
+    let fin: number | undefined;
+    const stop = () => {
+      el.classList.remove('suivi-table-au-scroll');
+      fin = undefined;
+    };
+    const onScroll = () => {
+      el.classList.add('suivi-table-au-scroll');
+      if (fin) window.clearTimeout(fin);
+      fin = window.setTimeout(stop, 200);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      if (fin) window.clearTimeout(fin);
+    };
+  }, []);
 
   const getBannerRef = (catId: string) => {
     const cache = bannerRefCacheRef.current;
@@ -481,119 +485,199 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   }, []);
 
   useEffect(() => {
+    if (layoutLoading) return; // Ne pas sauvegarder pendant le chargement initial
+    // Sauvegarde locale immédiate (réactivité)
     try {
-      localStorage.setItem(CLE_SAUVEGARDE, JSON.stringify(rows));
-    } catch {
-      // ignore
-    }
+      localStorage.setItem('suivi_global_rows_v3', JSON.stringify(rows));
+    } catch {}
+    // Sauvegarde serveur (partagée) - debounced via timeout
+    const timeout = setTimeout(() => {
+      suiviGlobalApi.setLayout(rows).catch(console.warn);
+    }, 500);
+    return () => clearTimeout(timeout);
+  }, [rows, layoutLoading]);
+
+  // Flush avant fermeture page (recharge, onglet fermé)
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      try {
+        localStorage.setItem('suivi_global_rows_v3', JSON.stringify(rows));
+      } catch {}
+      // sendBeacon pour serveur même si page déchargée
+      navigator.sendBeacon('/api/v1/suivi-layout', JSON.stringify({ rows }));
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [rows]);
 
   // État pour SlotActionModal (choix nouvelle carte / carte existante)
   const [selectedSlotAction, setSelectedSlotAction] = useState<ActiveSlotAction | null>(null);
 
-  // Find CardItem from Point Commande Journalière by cardId
-  const getCardById = (cardId?: string): CardItem | undefined => {
-    if (!cardId) return undefined;
-    return cards.find((c) => c.id === cardId);
-  };
+  const handleAssignSlotCard = useCallback(
+    (
+      rowId: string,
+      slotType: 'modeleEnCours' | 'lancement' | 'expedition',
+      slotCard: ChaineSlotCard | null,
+      lancementIndex?: number,
+      slotIndex = 0
+    ) => {
+      // Affectation purement manuelle : OK Prod ne déplace jamais une carte ici.
+      // Une même carte ne peut occuper qu'une seule case du tableau : si elle est
+      // déjà posée ailleurs, elle en est retirée avant d'être placée à la demande.
+      const cardId = slotCard?.cardId;
 
-  // Ajoute un champ d'alerte vide à la fin
-  const handleAddAlerte = (rowId: string) => {
-    setRows((prev) =>
-      prev.map((r) =>
-        r.id === rowId
-          ? { ...r, alertes: [...(r.alertes ?? []), { texte: '', teinte: TEINTE_ALERTE_DEFAUT }] }
-          : r
-      )
-    );
-  };
-
-  // Supprime un champ d'alerte (si plus d'un)
-  const handleRemoveAlerte = (rowId: string, index: number) => {
-    setRows((prev) =>
-      prev.map((r) =>
-        r.id === rowId && (r.alertes?.length ?? 0) > 1
-          ? { ...r, alertes: (r.alertes ?? []).filter((_, i) => i !== index) }
-          : r
-      )
-    );
-  };
-
-  const handleAssignSlotCard = (
-    rowId: string,
-    slotType: 'modeleEnCours' | 'lancement' | 'expedition',
-    slotCard: ChaineSlotCard | null,
-    lancementIndex?: number,
-    slotIndex = 0
-  ) => {
-    // Affectation purement manuelle : OK Prod ne déplace jamais une carte ici.
-    // Une même carte ne peut occuper qu'une seule case du tableau : si elle est
-    // déjà posée ailleurs, elle en est retirée avant d'être placée à la demande.
-    const cardId = slotCard?.cardId;
-
-    setRows((prev) => {
-      let next = prev.map((r) => {
-        if (!cardId) return r;
-        // Retirer la carte de tous les emplacements où elle apparaît déjà.
-        const modelePile = (r.modeleEnCoursCards as [ChaineSlotCard | null, ChaineSlotCard | null]).map((s) =>
-          s?.cardId === cardId ? null : s
+      setRows((prev) => {
+        const retrait = cardId ? retirerCarteDePartout(prev, cardId) : prev;
+        return ecrireCarteEnCase(
+          retrait,
+          { rowId, slotType, lancementIndex, slotIndex },
+          slotCard
         );
-        const lancementsPiles = (r.prochainsLancementsCards as ChaineRow['prochainsLancementsCards']).map((pile) =>
-          (pile ?? [null, null]).map((s) => (s?.cardId === cardId ? null : s)) as [ChaineSlotCard | null, ChaineSlotCard | null]
-        ) as ChaineRow['prochainsLancementsCards'];
-        return {
-          ...r,
-          modeleEnCoursCards: modelePile as [ChaineSlotCard | null, ChaineSlotCard | null],
-          prochainsLancementsCards: lancementsPiles,
-          expeditionCard: r.expeditionCard?.cardId === cardId ? null : r.expeditionCard,
-        };
       });
+    },
+    []
+  );
 
-      // Placer la carte dans la case demandée.
-      next = next.map((r) => {
-        if (r.id !== rowId) return r;
-        if (slotType === 'modeleEnCours') {
-          const pile = [...r.modeleEnCoursCards] as PileDeCartes;
-          pile[slotIndex] = slotCard;
-          return { ...r, modeleEnCoursCards: pile };
-        }
-        if (slotType === 'expedition') {
-          return { ...r, expeditionCard: slotCard || null };
-        }
-        if (slotType === 'lancement' && typeof lancementIndex === 'number') {
-          const nextLancements = [...r.prochainsLancementsCards] as ChaineRow['prochainsLancementsCards'];
-          const pile = [...(nextLancements[lancementIndex] ?? [null, null])] as PileDeCartes;
-          pile[slotIndex] = slotCard;
-          nextLancements[lancementIndex] = pile;
-          return { ...r, prochainsLancementsCards: nextLancements };
-        }
-        return r;
+  // Glisser-déposer d'une carte déjà posée vers une autre case : la carte de la
+  // case cible reprend la place de celle qu'on déplace (échange), plutôt que
+  // d'être écartée, pour ne jamais perdre une affectation.
+  const handleDropCarte = useCallback(
+    (
+      rowId: string,
+      slotType: TypeSlotGlobal,
+      cardId: string,
+      lancementIndex?: number,
+      slotIndex?: number
+    ) => {
+      const carte = cardsParId.get(cardId);
+      if (!carte) return;
+      const cible: CoordCase = { rowId, slotType, lancementIndex, slotIndex };
+      const carteDeposee: ChaineSlotCard = { cardId: carte.id, customLabel: carte.modele };
+
+      setRows((prev) => {
+        const source = localiserCarte(prev, carte.id);
+        const memeCase =
+          source &&
+          source.rowId === cible.rowId &&
+          source.slotType === cible.slotType &&
+          (source.lancementIndex ?? 0) === (cible.lancementIndex ?? 0) &&
+          (source.slotIndex ?? 0) === (cible.slotIndex ?? 0);
+        if (memeCase) return prev;
+
+        const carteEnCible = lireCarteEnCase(prev, cible);
+        let prochain = retirerCarteDePartout(prev, carte.id);
+        prochain = ecrireCarteEnCase(prochain, cible, carteDeposee);
+        if (carteEnCible && source) prochain = ecrireCarteEnCase(prochain, source, carteEnCible);
+        return prochain;
       });
+    },
+    [cardsParId]
+  );
 
-      return next;
-    });
-  };
+  // --- Glisser-déposer (géré par @dnd-kit) -----------------------
+  // Les cartes ont une « vraie » présence pendant le glisser : le DragOverlay
+  // affiche la carte soulevée et la fait suivre le curseur, puis l'anime vers
+  // sa case de dépôt (drop animation) avant que l'état des lignes ne change.
+  const [cardIdEnVol, setCardIdEnVol] = useState<string | null>(null);
+  // Case d'arrivée capturée au lâcher : la drop animation y fait voler la carte
+  // soulevée, et c'est seulement une fois posée (sideEffects) que l'état des
+  // lignes est échangé — on ne démonte pas la case source pendant le vol, sinon
+  // dnd-kit abandonnerait l'animation.
+  const cibleVolRef = useRef<{
+    cardId: string;
+    rowId: string;
+    slotType: TypeSlotGlobal;
+    lancementIndex?: number;
+    slotIndex?: number;
+    rect: { left: number; top: number; width: number; height: number } | null;
+  } | null>(null);
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor)
+  );
+
+  const onDragStart = useCallback((event: DragStartEvent) => {
+    cibleVolRef.current = null;
+    setCardIdEnVol(String(event.active.id));
+  }, []);
+
+  const onDragCancel = useCallback((_event: DragCancelEvent) => {
+    cibleVolRef.current = null;
+    setCardIdEnVol(null);
+  }, []);
+
+  const onDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over) {
+      cibleVolRef.current = null;
+      setCardIdEnVol(null);
+      return;
+    }
+    const cible = over.data.current as
+      | { rowId: string; slotType: TypeSlotGlobal; lancementIndex?: number; slotIndex?: number }
+      | undefined;
+    const carteSource = active.data.current as { cardId?: string } | undefined;
+    const rect = over.rect;
+    if (
+      !cible ||
+      !carteSource?.cardId ||
+      !rect
+    ) {
+      cibleVolRef.current = null;
+      setCardIdEnVol(null);
+      return;
+    }
+    // On ne modifie PAS encore les lignes : l'échange sera appliqué par
+    // sideEffects de la drop animation, une fois la carte arrivée à destination.
+    cibleVolRef.current = {
+      cardId: carteSource.cardId,
+      rowId: cible.rowId,
+      slotType: cible.slotType,
+      lancementIndex: cible.lancementIndex,
+      slotIndex: cible.slotIndex,
+      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+    };
+  }, []);
+
+  const dropAnimation = useMemo<DropAnimation>(
+    () => ({
+      duration: 220,
+      easing: 'cubic-bezier(0.25, 0.9, 0.3, 1.05)',
+      keyframes: (params) => {
+        const cible = cibleVolRef.current;
+        const cur = params.dragOverlay.rect;
+        const startX = cur.left;
+        const startY = cur.top;
+        let destX = startX;
+        let destY = startY;
+        if (cible?.rect) {
+          destX = cible.rect.left + (cible.rect.width - cur.width) / 2;
+          destY = cible.rect.top + 4;
+        }
+        return [
+          { transform: `translate3d(${startX}px, ${startY}px, 0) scale(1.02)`, opacity: 1 },
+          { transform: `translate3d(${destX}px, ${destY}px, 0) scale(0.97)`, opacity: 0.2 },
+        ];
+      },
+      sideEffects: () => {
+        const vol = cibleVolRef.current;
+        cibleVolRef.current = null;
+        setCardIdEnVol(null);
+        if (vol) {
+          handleDropCarte(vol.rowId, vol.slotType, vol.cardId, vol.lancementIndex, vol.slotIndex);
+        }
+      },
+    }),
+    [handleDropCarte]
+  );
+
+  const carteSoulevee = useMemo(() => {
+    const card = cardIdEnVol ? cardsParId.get(cardIdEnVol) : undefined;
+    const jalons = card ? (jalonInfosParCarte.get(card.id) ?? []) : [];
+    return { card, jalons };
+  }, [cardIdEnVol, cardsParId, jalonInfosParCarte]);
 
   // Ouvre SlotActionModal au lieu de CardPickerModal direct
-  const handleOpenSlotAction = (
-    rowId: string,
-    slotType: 'modeleEnCours' | 'lancement' | 'expedition',
-    lancementIndex?: number,
-    slotIndex = 0
-  ) => {
-    const row = rows.find((r) => r.id === rowId);
-    if (!row) return;
-    let titreSlot = '';
-    if (slotType === 'modeleEnCours') {
-      titreSlot = `Modèle en cours${slotIndex === 1 ? ' — 2ᵉ carte' : ''} (${row.nom})`;
-    } else if (slotType === 'expedition') {
-      titreSlot = `Expédition (${row.nom})`;
-    } else {
-      titreSlot = `Prochain Lancement #${(lancementIndex || 0) + 1}${slotIndex === 1 ? ' — 2ᵉ carte' : ''} (${row.nom})`;
-    }
-    setSelectedSlotAction({ rowId, slotType, lancementIndex, slotIndex, slotTitle: titreSlot });
-  };
-
   const handleSlotActionChooseNew = () => {
     if (!selectedSlotAction || !onOpenCreateCard) return;
     const { rowId, slotType, lancementIndex, slotIndex } = selectedSlotAction;
@@ -638,317 +722,98 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     );
   };
 
-  const majValeur = (
-    rowId: string,
-    blocIndex: number,
-    valeurId: string,
-    maj: (valeur: InspectionValeur) => InspectionValeur
-  ) =>
-    majBlocInspection(rowId, blocIndex, (bloc) => ({
-      ...bloc,
-      valeurs: bloc.valeurs.map((v) => (v.id === valeurId ? maj(v) : v)),
-    }));
+  const majValeur = useCallback(
+    (
+      rowId: string,
+      blocIndex: number,
+      valeurId: string,
+      maj: (valeur: InspectionValeur) => InspectionValeur
+    ) =>
+      majBlocInspection(rowId, blocIndex, (bloc) => ({
+        ...bloc,
+        valeurs: bloc.valeurs.map((v) => (v.id === valeurId ? maj(v) : v)),
+      })),
+    [majBlocInspection]
+  );
 
-  const ajouterValeur = (
-    rowId: string,
-    blocIndex: number,
-    type: 'I' | 'OF',
-    pct?: 50 | 100
-  ) =>
-    majBlocInspection(rowId, blocIndex, (bloc) => ({
-      ...bloc,
-      valeurs: [
-        ...bloc.valeurs,
-        {
-          id: `val-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-          type,
-          ...(type === 'I' ? { pct: pct ?? 50 } : {}),
-          date: dateDuJourISO(),
-          resultat: null,
-        },
-      ],
-    }));
+  const ajouterValeur = useCallback(
+    (
+      rowId: string,
+      blocIndex: number,
+      type: 'I' | 'OF',
+      pct?: 50 | 100
+    ) =>
+      majBlocInspection(rowId, blocIndex, (bloc) => ({
+        ...bloc,
+        valeurs: [
+          ...bloc.valeurs,
+          {
+            id: `val-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            type,
+            ...(type === 'I' ? { pct: pct ?? 50 } : {}),
+            date: dateDuJourISO(),
+            resultat: null,
+          },
+        ],
+      })),
+    [majBlocInspection]
+  );
 
   const [menuEtat, setMenuEtat] = useState<MenuEtatInspection | null>(null);
-  const [ofOuvert, setOfOuvert] = useState<{
-    card: CardItem;
-    numero: number;
-    slotTitle: string;
-    anchor: HTMLElement;
-  } | null>(null);
-
-  /** Texte d'une case : modèle lié, sinon libellé saisi, sinon vide. */
-  const texteSlot = (slot?: ChaineSlotCard | null) =>
-    slot ? getCardById(slot.cardId)?.modele || slot.customLabel || '' : '';
-
-  /** Libellé court d'un modèle en cours, pour l'en-tête du bloc d'inspection. */
-  const libelleModele = (row: SuiviRow, blocIndex: number) => {
-    const slot = row.modeleEnCoursCards[blocIndex];
-    return texteSlot(slot) || `Modèle ${blocIndex + 1}`;
-  };
-
-  /** Blocs d'inspection à afficher : un par modèle en cours occupé.
-   *  Sans modèle en cours, aucun bloc n'est affiché (pas d'OF sans modèle). */
-  const blocsInspectionAffiches = (row: SuiviRow) => {
-    const indices = row.modeleEnCoursCards
-      .map((slot, i) => (slot ? i : -1))
-      .filter((i) => i >= 0);
-    return indices.map((blocIndex) => ({
-      blocIndex,
-      bloc: row.inspections[blocIndex] ?? blocInspectionVide(),
-      libelle: libelleModele(row, blocIndex),
-    }));
-  };
+  const [ofOuvert, setOfOuvert] = useState<OfOuvertGlobal | null>(null);
 
   const categoriesList = ['BRODERIE_MAIN', 'CONFECTION'];
 
   const filteredRows = rows;
 
-  // Cartes liées à une ligne, dans l'ordre d'affichage, sans doublon : une même
-  // carte peut occuper plusieurs colonnes de la ligne.
-  const cartesLigne = (row: ChaineRow): CardItem[] => {
-    const slots = [
-      ...row.modeleEnCoursCards,
-      ...row.prochainsLancementsCards.flat(),
-      row.expeditionCard,
-    ];
-    const cartes = new Map<string, CardItem>();
-    for (const slot of slots) {
-      if (!slot?.cardId) continue;
-      const card = getCardById(slot.cardId);
-      if (card) cartes.set(card.id, card);
+  // Le bandeau vertical est propre à la catégorie (pas à chaque ligne) :
+  // calculé une seule fois par catégorie, et stable pour un même bannerSizes,
+  // pour préserver la mémoïsation des lignes.
+  const catBanners = useMemo(() => {
+    const out: Record<string, ApercuBanniere> = {};
+    for (const catKey of categoriesList) {
+      const cfg = CATEGORIES_CONFIG[catKey];
+      const size = bannerSizes[catKey];
+      out[catKey] = buildBanner(cfg, size?.w ?? 0, size?.h ?? 0);
     }
-    return [...cartes.values()];
-  };
+    return out;
+  }, [categoriesList, bannerSizes]);
 
-  // Une carte mérite sa bande d'alerte si un jalon est en retard ou si une
-  // alerte y a été saisie à la main.
-  const carteEnAlerte = (card: CardItem): boolean =>
-    getJalonsEnRetard(card, catalogue).length > 0 ||
-    alertesCarte(alertesManuelles, card.id).length > 0;
+  /** Ouvre le menu d'action (nouvelle carte / carte existante) pour une case. */
+  const onOuvrirActionSlot = useCallback(
+    (
+      rowId: string,
+      titreSlot: string,
+      slotType: TypeSlotGlobal,
+      lancementIndex?: number,
+      slotIndex?: number
+    ) => {
+      setSelectedSlotAction({ rowId, slotType, lancementIndex, slotIndex, slotTitle: titreSlot });
+    },
+    []
+  );
 
-  // Helper to render card chip inside table cell
-  const renderCardSlotContent = (
-    slotCard: ChaineSlotCard | null | undefined,
-    row: ChaineRow,
-    slotType: 'modeleEnCours' | 'lancement' | 'expedition',
-    lancementIndex?: number,
-    slotIndex?: number
-  ) => {
-    const rangSuffixe = slotIndex === 1 ? ' — 2ᵉ carte' : '';
-    const titreSlot =
-      slotType === 'modeleEnCours'
-        ? `Modèle en cours${rangSuffixe} (${row.nom})`
-        : slotType === 'expedition'
-        ? `Expédition (${row.nom})`
-        : `Prochain Lancement #${(lancementIndex || 0) + 1}${rangSuffixe} (${row.nom})`;
-    const linkedCard = slotCard?.cardId ? getCardById(slotCard.cardId) : undefined;
-          const label = linkedCard ? linkedCard.modele : slotCard?.customLabel;
-          const subLabel = linkedCard ? `${linkedCard.reference} • ${linkedCard.client}` : null;
-          const jalonsCarte = linkedCard ? getJalonsCard(linkedCard, catalogue) : [];
-          const jalonsNomenclatures = jalonsCarte.filter((j) => j.categorie === 'NOMENCLATURE');
-          const jalonsStatuts = jalonsCarte.filter((j) => j.categorie === 'STATUT');
+  /** Ouvre le sélecteur de carte existante pour une case. */
+  const onOuvrirPicker = useCallback(
+    (
+      rowId: string,
+      titreSlot: string,
+      slotType: TypeSlotGlobal,
+      lancementIndex?: number,
+      slotIndex?: number
+    ) => {
+      setActivePicker({ rowId, slotType, lancementIndex, slotIndex, slotTitle: titreSlot });
+    },
+    []
+  );
 
-    // La case jauge deux cases empilées : si l'autre slot est déjà rempli, le
-    // slot vide reste compact (min-h) et la carte occupe tout le reste.
-    const pileCourante =
-      slotType === 'modeleEnCours'
-        ? row.modeleEnCoursCards
-        : slotType === 'lancement' && lancementIndex != null
-        ? (row.prochainsLancementsCards?.[lancementIndex] ?? [])
-        : [];
-    const autreSlotRempli =
-      slotIndex != null ? Boolean(pileCourante[1 - slotIndex]) : false;
-
-if (!label) {
-      return (
-        <button
-          onClick={() =>
-            handleOpenSlotAction(
-              row.id,
-              slotType,
-              lancementIndex,
-              slotIndex
-            )
-          }
-          className={`w-full min-h-[50px] flex items-center justify-center text-[11px] font-medium text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 rounded-xl transition-all border border-dashed border-slate-200 hover:border-blue-300 cursor-pointer p-1 ${
-            autreSlotRempli ? 'flex-none' : 'flex-1'
-          }`}
-          title="Cliquez pour assigner une carte du Point Commande Journalière"
-        >
-          <span className="flex items-center gap-1">
-            <Plus className="w-3 h-3" />
-            <span>
-              {slotType === 'expedition'
-                ? 'Expédition'
-                : slotIndex === 1
-                ? 'Carte 2'
-                : slotType === 'lancement'
-                ? `# ${(lancementIndex || 0) + 1}`
-                : 'Carte'}
-            </span>
-          </span>
-        </button>
-      );
-    }
-
-    const handleSlotClick = () => {
-      if (linkedCard && onOpenCardModal) {
-        onOpenCardModal(linkedCard);
-      } else {
-        handleOpenSlotAction(row.id, slotType, lancementIndex, slotIndex);
-      }
-    };
-
-    const isMergedModele =
-      slotType === 'modeleEnCours' || slotType === 'lancement';
-    const progress = computeCardProgress(linkedCard);
-    const enAlerte = linkedCard ? carteEnAlerte(linkedCard) : false;
-
-    return (
-      <div className="flex flex-col gap-1 flex-1 min-h-0 w-full">
-        {/* Conteneur unifié : la ring relie la bande Alerte + la carte */}
-        <div
-          className={`relative w-full flex flex-col flex-1 min-h-0 ${
-            enAlerte ? 'ring-2 ring-rose-300/60 shadow-[0_0_0_1px_rgba(251,113,133,0.5)] rounded-xl' : 'rounded-xl'
-          }`}
-        >
-          {/* Bande d'alerte de la carte : rien que le mot, le détail est au clic. */}
-          {enAlerte && linkedCard && (
-            <button
-              type="button"
-              onClick={(event) =>
-                setAlerteOuverte({
-                  card: linkedCard,
-                  slotTitle: titreSlot,
-                  anchor: event.currentTarget,
-                })
-              }
-              className="shrink-0 w-full flex items-center justify-center gap-1 px-2 py-1 rounded-t-xl bg-red-600 text-white shadow-2xs motion-safe:animate-pulse text-[10px] font-extrabold uppercase tracking-wider cursor-pointer hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-white/80 transition-colors relative z-20"
-              title="Voir le détail de l'alerte"
-              aria-haspopup="dialog"
-            >
-              <AlertTriangle className="w-3 h-3 shrink-0" />
-              Alerte
-            </button>
-          )}
-          <div
-            className={`group relative w-full min-h-[52px] flex flex-col justify-start px-2 py-1.5 overflow-hidden bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left flex-1 ${
-              enAlerte ? 'rounded-b-xl border-t-0' : 'rounded-b-xl'
-            }`}
-          >
-        <div
-          onClick={handleSlotClick}
-          className="cursor-pointer flex-1 min-h-0 w-full flex flex-col justify-start items-start"
-          title={
-            linkedCard
-              ? `Afficher la fiche identitaire : ${linkedCard.modele} (${linkedCard.reference})`
-              : 'Cliquer pour modifier ou assigner une carte'
-          }
-        >
-          <div className="flex items-center justify-between gap-2">
-            <span
-              className={`font-bold text-[11px] sm:text-xs leading-snug line-clamp-1 ${
-                isMergedModele ? 'text-slate-900' : 'text-slate-900'
-              } truncate`}
-            >
-              {label}
-            </span>
-            {isMergedModele && progress !== null && (
-              <div className="flex items-center gap-1.5 ml-2 shrink-0">
-                <div className="w-14 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full ${
-                      progress === 100 ? 'bg-emerald-500' : 'bg-blue-600'
-                    }`}
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-                <span className="text-[10px] font-bold font-mono text-slate-600 w-[28px] text-right">
-                  {progress}%
-                </span>
-              </div>
-            )}
-          </div>
-
-          {isMergedModele ? (
-            <div className="relative z-10 flex flex-col gap-2 mt-1">
-              {/* Nomenclatures (vert) - ligne du haut */}
-              {jalonsNomenclatures.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-1">
-                  {jalonsNomenclatures.map((j, i) => (
-                    <PastilleJalon key={`${j.code}-${i}`} jalon={j} />
-                  ))}
-                </div>
-              ) : null}
-              {/* Statuts (bleu) - ligne du bas */}
-              {jalonsStatuts.length > 0 ? (
-                <div className="flex flex-wrap items-center gap-1">
-                  {jalonsStatuts.map((j, i) => (
-                    <PastilleJalon key={`${j.code}-${i}`} jalon={j} />
-                  ))}
-                </div>
-              ) : (
-                <div className="flex flex-wrap items-center gap-1">
-                  <div className="inline-flex items-center justify-center px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-500 text-[10px] font-medium w-fit">
-                    {linkedCard?.statut === 'TERMINE' ? 'Terminé' : linkedCard?.statut === 'EN_COURS' ? 'En cours' : linkedCard?.statut === 'BLOQUE' ? 'Bloqué' : 'À démarrer'}
-                  </div>
-                </div>
-              )}
-            </div>
-          ) : (
-            subLabel ? (
-              <div className="relative z-10 text-[10px] text-slate-500 font-mono truncate mt-0.5">
-                {subLabel}
-              </div>
-            ) : null
-          )}
-
-          <span />
-
-          {/* Expedition Specific Tags */}
-          {slotType === 'expedition' && slotCard?.dateExpedition && (
-            <div className="flex items-center gap-1 text-[10px] font-semibold text-emerald-800 bg-emerald-100/70 px-1.5 py-0.2 rounded mt-0.5 w-fit">
-              <Truck className="w-2.5 h-2.5" />
-              <span>{slotCard.dateExpedition}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Hover Quick Action Buttons */}
-        <div className="absolute right-1 top-1 hidden group-hover:flex items-center gap-1 bg-white/95 backdrop-blur-xs p-0.5 rounded-md shadow-xs border border-slate-200 z-10">
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              setActivePicker({
-                rowId: row.id,
-                slotType,
-                lancementIndex,
-                slotIndex,
-                slotTitle: titreSlot,
-              });
-            }}
-            title="Changer / Réassigner une autre carte"
-            className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
-          >
-            <ArrowLeftRight className="w-3 h-3" />
-          </button>
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              handleAssignSlotCard(row.id, slotType, null, lancementIndex, slotIndex);
-            }}
-            title="Retirer la carte de cette case"
-            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-        </div>
-      </div>
-    </div>
-    );
-  };
+  /** Ouvre la fiche carte. */
+  const onCarteClick = useCallback(
+    (card: CardItem) => {
+      if (onOpenCardModal) onOpenCardModal(card);
+    },
+    [onOpenCardModal]
+  );
 
   // Currently selected slot for CardPickerModal
   const currentSlotForPicker = (() => {
@@ -1010,56 +875,59 @@ if (!label) {
       {/* Main Board Container */}
       <div className="max-w-[1850px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
         {/* The Exact Table matching the PNG + Expedition column */}
-        <div className="bg-[#eef2f6]/90 p-3 sm:p-4 rounded-2xl border border-slate-200/90 shadow-xs overflow-x-auto">
+        <div
+          ref={tableScrollRef}
+          className="bg-[#eef2f6]/90 p-3 sm:p-4 rounded-2xl border border-slate-200/90 shadow-xs overflow-x-auto overscroll-x-contain"
+        >
           <table className="w-full border-separate border-spacing-x-2 border-spacing-y-2 min-w-[2900px]">
             {/* Header Row */}
             <thead>
               <tr>
                 {/* Type */}
                 <th className="w-14 min-w-[56px] max-w-[56px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 ">
                     Type
                   </div>
                 </th>
 
                 {/* Chaîne */}
                 <th className="w-36 min-w-[130px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 shadow-2xs">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 ">
                     Chaîne
                   </div>
                 </th>
 
                 {/* Modèle en cours (Carte) */}
                 <th className="w-[330px] min-w-[290px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 shadow-2xs">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 ">
                     Modèle en cours
                   </div>
                 </th>
 
                 {/* Inspection (OF / I du jour, un bloc par modèle en cours) */}
                 <th className="w-[260px] min-w-[230px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 ">
                     Inspection
                   </div>
                 </th>
 
                 {/* Alertes */}
                 <th className="w-60 min-w-[190px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 shadow-2xs">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 ">
                     Alertes
                   </div>
                 </th>
 
                 {/* PROCHAINS LANCEMENTS (Spans 5 columns) */}
                 <th colSpan={NOMBRE_LANCEMENTS}>
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-4 text-center text-xs sm:text-sm font-extrabold text-[#1e40af] tracking-wider uppercase shadow-2xs">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-4 text-center text-xs sm:text-sm font-extrabold text-[#1e40af] tracking-wider uppercase ">
                     PROCHAINS LANCEMENTS
                   </div>
                 </th>
 
                 {/* EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
                 <th className="w-52 min-w-[170px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-extrabold text-emerald-800 tracking-wider uppercase shadow-2xs flex items-center justify-center gap-1.5">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-extrabold text-emerald-800 tracking-wider uppercase  flex items-center justify-center gap-1.5">
                     <Truck className="w-3.5 h-3.5 text-emerald-600" />
                     <span>Expédition</span>
                   </div>
@@ -1067,222 +935,64 @@ if (!label) {
               </tr>
             </thead>
 
-            {/* Table Body with Categorized Rows */}
+{/* Table Body with Categorized Rows */}
             <tbody>
-              {categoriesList.map((catKey) => {
-                const catConfig = CATEGORIES_CONFIG[catKey];
-                const catRows = filteredRows.filter((r) => r.categorieId === catKey);
+              <DndContext
+                sensors={sensors}
+                collisionDetection={pointerWithin}
+                onDragStart={onDragStart}
+                onDragEnd={onDragEnd}
+                onDragCancel={onDragCancel}
+              >
+                {categoriesList.map((catKey) => {
+                  const catConfig = CATEGORIES_CONFIG[catKey];
+                  const catRows = filteredRows.filter((r) => r.categorieId === catKey);
 
-                if (catRows.length === 0) return null;
+                  if (catRows.length === 0) return null;
 
-                return catRows.map((row, index) => {
-                  const isFirstRowOfCategory = index === 0;
-                  // La ligne est soulignée de rouge dès qu'une de ses cartes alerte ;
-                  // le détail, lui, vit sur la bande de chaque carte.
-                  const isRowAlert = cartesLigne(row).some((card) => carteEnAlerte(card));
-                  const bannerSize = bannerSizes[catKey];
-                  const catBanner = buildBanner(catConfig, bannerSize?.w ?? 0, bannerSize?.h ?? 0);
+                  const catBanner = catBanners[catKey];
 
-                  return (
-                    <tr key={row.id}>
-                      {/* Column 1: Type (Vertical category banner spanning all rows of this category) */}
-                      {isFirstRowOfCategory && (
-                        <td
-                          ref={getBannerRef(catKey)}
-                          data-banner-cat={catKey}
-                          rowSpan={catRows.length}
-                          className={`relative align-middle border-2 rounded-xl sm:rounded-2xl shadow-2xs overflow-hidden ${catConfig.bgClass} ${catConfig.borderClass}`}
-                        >
-                          <svg
-                            viewBox={`0 0 ${catBanner.vbW} ${catBanner.vbH}`}
-                            preserveAspectRatio="xMidYMid meet"
-                            className="absolute inset-0 w-full h-full select-none"
-                          >
-                            {catBanner.glyphs.map((glyph, glyphIdx) => (
-                              <text
-                                key={glyphIdx}
-                                x={glyph.x}
-                                y={glyph.y}
-                                textAnchor="middle"
-                                fontSize={glyph.size}
-                                fontWeight={800}
-                                fill={catConfig.textColor}
-                              >
-                                {glyph.char}
-                              </text>
-                            ))}
-                          </svg>
-                        </td>
-                      )}
+                  return catRows.map((row, index) => (
+                    <LigneTableSuivi
+                      key={row.id}
+                      row={row}
+                      isFirstRowOfCategory={index === 0}
+                      rowSpan={catRows.length}
+                      catConfig={catConfig}
+                      catBanner={catBanner}
+                      bannerRef={getBannerRef(catKey)}
+                      cardsParId={cardsParId}
+                      jalonInfosParCarte={jalonInfosParCarte}
+                      cartesAlerteRetard={cartesAlerteRetard}
+                      alertesManuelles={alertesManuelles}
+                      onCarteClick={onCarteClick}
+                      onOuvrirActionSlot={onOuvrirActionSlot}
+                      onOuvrirPicker={onOuvrirPicker}
+                      onAssignerSlot={handleAssignSlotCard}
+                      onMajBloc={majBlocInspection}
+                      onAjouterValeur={ajouterValeur}
+                      onMajValeur={majValeur}
+                      setAlerteOuverte={setAlerteOuverte}
+                      setOfOuvert={setOfOuvert}
+                      setMenuEtat={setMenuEtat}
+                    />
+                  ));
+                })}
 
-                      {/* Column 2: Chaîne (Name) */}
-                        <td className="h-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 shadow-2xs align-middle">
-                          <div className="h-full min-h-[72px] flex items-center justify-center">
-                            <span className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 truncate">
-                              {row.nom}
-                            </span>
-                          </div>
-                        </td>
-
-                      {/* Column 3: Modèle en cours (Carte du Point Commande Journalière) */}
-                        <td
-                          className="h-[170px] group bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle"
-                        >
-                          <div className="h-full min-h-[84px] flex flex-col gap-1">
-
-                            {row.modeleEnCoursCards.map((slot, pileIdx) => (
-                              <React.Fragment key={pileIdx}>
-                                {renderCardSlotContent(
-                                  slot,
-                                  row,
-                                  'modeleEnCours',
-                                  undefined,
-                                  pileIdx
-                                )}
-                              </React.Fragment>
-                            ))}
-                          </div>
-                        </td>
-
-
-                      {/* Column 4: Inspection (un bloc par modèle en cours) */}
-                        <td className="h-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 shadow-2xs align-middle">
-                          <div className="h-full min-h-[84px] flex flex-col gap-1">
-                            {blocsInspectionAffiches(row).map(
-                              ({ blocIndex, bloc, libelle }) => (
-                                <div
-                                  key={blocIndex}
-                                  className="flex-1 min-w-0 flex flex-col border border-slate-200/70 bg-slate-50/30 rounded-lg px-1 py-1"
-                                >
-                                  <span className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400 truncate">
-                                    {libelle}
-                                  </span>
-                                  <InspectionCell
-                                    bloc={bloc}
-                                    onAjouterValeur={(type, pct) =>
-                                      ajouterValeur(row.id, blocIndex, type, pct)
-                                    }
-                                    onSupprimerValeur={(valeurId) =>
-                                      majBlocInspection(row.id, blocIndex, (b) => ({
-                                        ...b,
-                                        valeurs: b.valeurs.filter((v) => v.id !== valeurId),
-                                      }))
-                                    }
-                                    onMajDate={(valeurId, date) =>
-                                      majValeur(row.id, blocIndex, valeurId, (v) => ({
-                                        ...v,
-                                        date,
-                                      }))
-                                    }
-                                    onOfClick={(numero, anchor) => {
-                                      const slot = row.modeleEnCoursCards[blocIndex];
-                                      const card = slot?.cardId ? getCardById(slot.cardId) : undefined;
-                                      if (card) {
-                                        setOfOuvert({
-                                          card,
-                                          numero,
-                                          slotTitle: libelleModele(row, blocIndex),
-                                          anchor,
-                                        });
-                                      }
-                                    }}
-                                    onBadgeClick={(valeurId, anchor) =>
-                                      setMenuEtat({
-                                        rowId: row.id,
-                                        blocIndex,
-                                        valeurId,
-                                        anchor,
-                                        actuel:
-                                          bloc.valeurs.find((v) => v.id === valeurId)
-                                            ?.resultat ?? null,
-                                      })
-                                    }
-                                    onCommentaire={(texte) =>
-                                      majBlocInspection(row.id, blocIndex, (b) => ({
-                                        ...b,
-                                        commentaire: texte,
-                                      }))
-                                    }
-                                  />
-                                </div>
-                              )
-                            )}
-                          </div>
-                        </td>
-
-                      {/* Column 5: Alertes par carte */}
-                        <td className="h-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs align-middle">
-                          <div className="h-full flex flex-col justify-start gap-1.5 overflow-y-auto">
-                            {/* Alertes : blocs separees comme la colonne Inspection */}
-                            <div className="h-full min-h-[84px] flex flex-col gap-1">
-                              {row.modeleEnCoursCards.map((slotCard, pileIdx) =>
-                                slotCard ? (
-                                  <div
-                                    key={`mec-${pileIdx}`}
-                                    className="min-w-0 flex-1 flex flex-col"
-                                  >
-                                    <AlertesCarte
-                                      slotCard={slotCard}
-                                      rowId={row.id}
-                                      slotType="modeleEnCours"
-                                      slotIndex={pileIdx}
-                                      titre={`Carte ${pileIdx + 1}`}
-                                      label={texteSlot(slotCard)}
-                                    />
-                                  </div>
-                                ) : null
-                              )}
-                            </div>
-                          </div>
-                        </td>
-
-                      {/* Columns 7 to 11: 5 Slots under PROCHAINS LANCEMENTS (Cartes) */}
-                      {Array.from({ length: NOMBRE_LANCEMENTS }, (_, slotIdx) => {
-                        const pile = row.prochainsLancementsCards[slotIdx] ?? [null, null];
-                        return (
-                          <td
-                            key={slotIdx}
-                            className="h-[170px] w-[330px] min-w-[290px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle"
-                          >
-                            <div className="h-full min-h-[88px] flex flex-col justify-start items-stretch">
-                              <div className="flex flex-col gap-1 w-full h-full">
-                                {pile.map((slotCard, pileIdx) => (
-                                  <React.Fragment key={pileIdx}>
-                                    {renderCardSlotContent(
-                                      slotCard,
-                                      row,
-                                      'lancement',
-                                      slotIdx,
-                                      pileIdx
-                                    )}
-                                  </React.Fragment>
-                                ))}
-                              </div>
-                            </div>
-                          </td>
-                        );
-                      })}
-
-                      {/* Column 12: EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
-                        <td className="h-[170px] min-w-[145px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs align-middle">
-                        <div className="h-full min-h-[88px] flex flex-col justify-center items-center">
-                          {renderCardSlotContent(
-                            row.expeditionCard,
-                            row,
-                            'expedition'
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                });
-              })}
+                {/* Carte soulevée : suit le curseur, puis « vole » vers sa case
+                    au lâcher (drop animation gérée par @dnd-kit). */}
+                <DragOverlay dropAnimation={dropAnimation}>
+                  {carteSoulevee.card ? (
+                    <CarteSoulevee card={carteSoulevee.card} jalons={carteSoulevee.jalons} />
+                  ) : null}
+                </DragOverlay>
+              </DndContext>
             </tbody>
           </table>
         </div>
 
         {/* Footer Summary / Quick stats */}
-        <div className="mt-4 bg-white border border-slate-200 rounded-xl p-3.5 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-3 shadow-2xs">
+        <div className="mt-4 bg-white border border-slate-200 rounded-xl p-3.5 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-3 ">
           <div className="flex flex-wrap items-center gap-3">
             <span>
               Total chaînes : <strong>{rows.length}</strong>
@@ -1309,7 +1019,8 @@ if (!label) {
           <div className="flex items-center gap-2 text-slate-600">
             <Sparkles className="w-3.5 h-3.5 text-blue-600" />
             <span>
-              Cliquez sur une case pour lier instantanément une carte de commande.
+              Cliquez sur une case pour lier une carte de commande, ou glissez-déposez
+              une carte vers une autre case.
             </span>
           </div>
         </div>
@@ -1387,147 +1098,76 @@ if (!label) {
     </div>
   );
 };
-
-export default SuiviGlobalView;
-
-function AlertesCarte({
-  slotCard,
-  rowId,
-  slotType,
-  lancementIndex,
-  slotIndex,
-  titre,
-  label,
-}: {
-  slotCard: ChaineSlotCard;
-  rowId: string;
-  slotType: 'modeleEnCours' | 'lancement' | 'expedition';
-  lancementIndex?: number;
-  slotIndex?: number;
-  titre: string;
-  label?: string;
-}) {
-  const alertesManuelles = useAlertesManuelles();
-  const alertes = alertesCarte(alertesManuelles, slotCard?.cardId);
-
-  const [ouvert, setOuvert] = useState(false);
-  const [texte, setTexte] = useState('');
-  const [couleur, setCouleur] = useState<AlerteCouleur>(ALERTES_COULEUR_DEFAUT);
-
-  const ajouter = () => {
-    const t = texte.trim();
-    if (!t || !slotCard?.cardId) return;
-    const now = getNowParis();
-    const entree: AlerteManuelle = {
-      id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      texte: t,
-      couleur,
-      creeLe: `${now.dateStr} à ${now.timeStr}`,
-    };
-    ecrireAlertesManuelles({
-      ...alertesManuelles,
-      [slotCard.cardId]: [...alertes, entree],
-    });
-    setTexte('');
-    setOuvert(false);
-  };
-
-  const supprimer = (id: string) => {
-    if (!slotCard?.cardId) return;
-    ecrireAlertesManuelles({
-      ...alertesManuelles,
-      [slotCard.cardId]: alertes.filter((a) => a.id !== id),
-    });
-  };
+ 
+/** Aperçu de la carte soulevée, affiché dans le DragOverlay du Suivi Global :
+ *  elle suit le curseur puis « vole » vers sa case d'arrivée à lâcher. */
+function CarteSoulevee({ card, jalons }: { card: CardItem; jalons: JalonInfo[] }) {
+  const progress =
+    card.quantiteDemandee > 0
+      ? Math.min(100, Math.round((card.quantiteFinie / card.quantiteDemandee) * 100))
+      : null;
+  const jalonsNomenclatures = jalons.filter((j) => j.categorie === 'NOMENCLATURE');
+  const jalonsStatuts = jalons.filter((j) => j.categorie === 'STATUT');
 
   return (
-    <div className="flex-1 min-w-0 flex flex-col">
-      <div className="flex justify-end mb-1">
-        <button
-          type="button"
-          onClick={() => setOuvert((v) => !v)}
-          title="Ajouter une alerte"
-          className="shrink-0 w-4 h-4 rounded-full border border-slate-300 bg-white text-slate-500 hover:text-rose-600 hover:border-rose-300 text-[11px] leading-none cursor-pointer flex items-center justify-center"
-        >
-          +
-        </button>
-      </div>
-
-      <div className="flex flex-col gap-1 flex-1">
-        {alertes.map((a) => {
-          const c = a.couleur || ALERTES_COULEUR_DEFAUT;
-          const cls =
-            c === 'orange' ? 'text-orange-600 bg-orange-50 border-orange-200'
-            : c === 'jaune' ? 'text-yellow-600 bg-yellow-50 border-yellow-300'
-            : c === 'vert' ? 'text-emerald-600 bg-emerald-50 border-emerald-200'
-            : 'text-rose-600 bg-rose-50 border-rose-200';
-          return (
-            <div
-              key={a.id}
-              className={'group/a flex items-start gap-1.5 text-[12px] font-bold leading-tight rounded-md border px-1.5 py-1 ' + cls}
-            >
-              <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
-              <span className="break-words flex-1">{a.texte}</span>
-              <button
-                type="button"
-                onClick={() => supprimer(a.id)}
-                title="Supprimer"
-                className="shrink-0 opacity-0 group-hover/a:opacity-100 cursor-pointer text-current/60 hover:text-current"
-              >
-                <X className="w-3 h-3" />
-              </button>
+    <div
+      className="w-[300px] select-none rounded-xl border border-blue-300 bg-slate-50 px-2 py-1.5 shadow-[0_18px_36px_rgba(15,23,42,.28),0_4px_8px_rgba(15,23,42,.15)]"
+      style={{ transform: 'rotate(-1deg) scale(1.03)' }}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="font-bold text-[11px] sm:text-xs leading-snug text-slate-900 truncate">
+          {card.modele}
+        </span>
+        {progress !== null && (
+          <div className="flex items-center gap-1.5 ml-2 shrink-0">
+            <div className="w-14 h-1.5 bg-slate-200 rounded-full overflow-hidden">
+              <div
+                className={`h-full ${progress === 100 ? 'bg-emerald-500' : 'bg-blue-600'}`}
+                style={{ width: `${progress}%` }}
+              />
             </div>
-          );
-        })}
-        {alertes.length === 0 && !ouvert && (
-          <div className="text-[10px] text-slate-400 italic">Aucune alerte</div>
+            <span className="text-[10px] font-bold font-mono text-slate-600 w-[28px] text-right">
+              {progress}%
+            </span>
+          </div>
         )}
       </div>
 
-      {ouvert && (
-        <div className="mt-1 border-t border-slate-200 pt-1.5">
-          <textarea
-            value={texte}
-            onChange={(e) => setTexte(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                e.preventDefault();
-                ajouter();
-              }
-            }}
-            rows={2}
-            placeholder="Nouvelle alerte..."
-            autoFocus
-            className="w-full resize-none text-[10px] leading-snug text-slate-700 bg-white border border-slate-300 rounded px-1.5 py-1 focus:border-rose-300 focus:outline-hidden"
-          />
-          <div className="flex items-center justify-between gap-1 mt-1">
-            <div className="flex items-center gap-1">
-              {ALERTES_COULEURS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  onClick={() => setCouleur(c)}
-                  title={c}
-                  className={
-                    'w-3.5 h-3.5 rounded-full border cursor-pointer ' +
-                    (c === 'rouge' ? 'bg-rose-500 ' : c === 'orange' ? 'bg-orange-500 ' : c === 'jaune' ? 'bg-yellow-400 ' : 'bg-emerald-500 ') +
-                    (couleur === c ? 'border-slate-700' : 'border-white')
-                  }
-                />
-              ))}
-            </div>
-            <button
-              type="button"
-              onClick={ajouter}
-              disabled={!texte.trim()}
-              className="px-1.5 py-0.5 text-[10px] font-semibold rounded bg-rose-600 text-white hover:bg-rose-700 disabled:opacity-40 cursor-pointer"
-            >
-              Ajouter
-            </button>
+      <div className="flex flex-col gap-2 mt-1">
+        {jalonsNomenclatures.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1">
+            {jalonsNomenclatures.map((j, i) => (
+              <PastilleJalon key={`${j.code}-${i}`} jalon={j} />
+            ))}
           </div>
-        </div>
-      )}
+        )}
+        {jalonsStatuts.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1">
+            {jalonsStatuts.map((j, i) => (
+              <PastilleJalon key={`${j.code}-${i}`} jalon={j} />
+            ))}
+          </div>
+        ) : (
+          <div className="flex flex-wrap items-center gap-1">
+            <div className="inline-flex items-center justify-center px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-500 text-[10px] font-medium w-fit">
+              {card.statut === 'TERMINE'
+                ? 'Terminé'
+                : card.statut === 'EN_COURS'
+                ? 'En cours'
+                : card.statut === 'BLOQUE'
+                ? 'Bloqué'
+                : 'À démarrer'}
+            </div>
+          </div>
+        )}
+      </div>
+
+      <div className="relative z-10 text-[10px] text-slate-500 font-mono truncate mt-0.5">
+        {card.reference} • {card.client}
+      </div>
     </div>
   );
-
 }
+
+export default SuiviGlobalView;
+
