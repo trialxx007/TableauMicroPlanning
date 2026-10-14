@@ -72,8 +72,19 @@ function ligneVide(
       null,
       null,
     ]) as ChaineRow['prochainsLancementsCards'],
-    expeditionCard: null,
+    expeditionCards: [null, null],
   };
+}
+
+/** Nouvelle chaîne créée à la main : même structure vide que les lignes initiales,
+ *  la couleur de point venant du type choisi. L'id est unique et stable. */
+export function nouvelleChaineVide(
+  categorieId: 'BRODERIE_MAIN' | 'CONFECTION',
+  nom: string
+): ChaineRow {
+  const id = `chaine-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const dotColor = CATEGORIES_CONFIG[categorieId]?.defaultDotColor ?? '#94a3b8';
+  return ligneVide(id, categorieId, nom, dotColor);
 }
 
 /** Lignes de chaînes au premier lancement : entièrement vides, sans jeu de démonstration.

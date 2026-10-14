@@ -43,6 +43,9 @@ function patchJalonEtat(card: CardItem, code: JalonCode, etat: JalonEtat): Parti
     valide || tbc ? null : etat === 'SEMAINE' ? (courant.semaine ?? getSemaineISO()) : null;
   const date =
     valide || tbc ? null : etat === 'DATE' ? (courant.date ?? dateDuJourJalon()) : null;
+  // Nomenclature R : la semaine de fin (marge) est conservée tant qu'on reste en
+  // « Semaine » ; tout autre état l'efface, la plage n'ayant plus de sens.
+  const semaineFin = code === 'R' && etat === 'SEMAINE' ? courant.semaineFin ?? null : null;
 
   return {
     jalons: [
@@ -51,6 +54,7 @@ function patchJalonEtat(card: CardItem, code: JalonCode, etat: JalonEtat): Parti
         code,
         valide,
         ...(semaine != null ? { semaine } : {}),
+        ...(semaineFin != null ? { semaineFin } : {}),
         ...(date != null ? { date } : {}),
         ...(tbc ? { tbc: true } : {}),
       },
@@ -77,6 +81,8 @@ export const CardTable: React.FC<CardTableProps> = ({
   const [copiedRef, setCopiedRef] = useState<string | null>(null);
   const [editingFinieId, setEditingFinieId] = useState<string | null>(null);
   const [inputFinieValue, setInputFinieValue] = useState<string>('');
+  const [editingDemandeeId, setEditingDemandeeId] = useState<string | null>(null);
+  const [inputDemandeeValue, setInputDemandeeValue] = useState<string>('');
 
   // Jalons par carte calculés une seule fois tant que les cartes (ou le
   // catalogue) ne changent pas : la table en relit une entrée à chaque ligne
@@ -144,6 +150,19 @@ export const CardTable: React.FC<CardTableProps> = ({
       await onUpdateCard(cardId, { quantiteFinie: val });
     }
     setEditingFinieId(null);
+  };
+
+  const handleStartEditDemandee = (card: CardItem) => {
+    setEditingDemandeeId(card.id);
+    setInputDemandeeValue(card.quantiteDemandee.toString());
+  };
+
+  const handleSaveDemandee = async (cardId: string) => {
+    const val = parseInt(inputDemandeeValue, 10);
+    if (!isNaN(val) && val > 0) {
+      await onUpdateCard(cardId, { quantiteDemandee: val });
+    }
+    setEditingDemandeeId(null);
   };
 
   const handleQuickAdd = async (card: CardItem, amount: number) => {
@@ -217,9 +236,9 @@ export const CardTable: React.FC<CardTableProps> = ({
           <thead>
             <tr className="bg-slate-50/80 border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase tracking-wider">
               <th className="py-3.5 px-4">Client</th>
-              <th className="py-3.5 px-4">Modèle & Nom</th>
+              <th className="py-3.5 px-4">Nom</th>
               <th className="py-3.5 px-4">
-                Référence
+                Batch
                 {/* Le RDL a une colonne à lui, hors du bloc des catégories : son
                     intitulé de groupe est donc rappelé sur sa propre pastille. */}
                 {jalonRDLPresent && (
@@ -285,7 +304,7 @@ export const CardTable: React.FC<CardTableProps> = ({
             {cards.map((card) => {
               const statusInfo = getStatusBadge(card.statut);
               const jalons = jalonsParCarte.get(card.id) ?? [];
-              // RDL a sa propre pastille dans la colonne « Référence », on l'exclut
+              // RDL a sa propre pastille dans la colonne « Batch », on l'exclut
               // donc de la colonne Jalons pour ne pas la montrer deux fois.
               const jRDL = jalons.find((j) => j.code === 'RDL');
               const autresJalons = jalons.filter((j) => j.code !== 'RDL');
@@ -333,7 +352,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                     </div>
                   </td>
 
-                  {/* Modèle & Nom */}
+                  {/* Nom */}
                   <td
                     onClick={() => onEditCard(card)}
                     className="py-3.5 px-4 max-w-[220px] cursor-pointer group/cell hover:bg-blue-50/60 transition-colors"
@@ -345,12 +364,6 @@ export const CardTable: React.FC<CardTableProps> = ({
                     >
                       {card.modele}
                     </div>
-                    <div
-                      className="text-xs text-slate-500 group-hover/cell:text-blue-600 transition-colors truncate"
-                      title={card.nom}
-                    >
-                      {card.nom}
-                    </div>
                     {card.decisionReunion && (
                       <div
                         className="mt-1 text-[11px] font-medium text-blue-800 bg-blue-50 px-2 py-0.5 rounded-md border border-blue-200/70 truncate"
@@ -361,24 +374,24 @@ export const CardTable: React.FC<CardTableProps> = ({
                     )}
                   </td>
 
-                  {/* Référence & RDL */}
+                  {/* Batch & RDL */}
                   <td className="py-3.5 px-4 whitespace-nowrap">
                     <div
                       onClick={() => onEditCard(card)}
                       className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-100/90 hover:bg-blue-100 hover:text-blue-800 text-xs font-mono font-medium text-slate-700 transition-colors cursor-pointer"
                       title="Cliquer pour ouvrir la carte"
                     >
-                      <span>{card.reference}</span>
+                      <span>{card.batch}</span>
                       <button
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleCopyRef(card.reference);
+                          handleCopyRef(card.batch);
                         }}
-                        title="Copier la référence"
+                        title="Copier le batch"
                         className="p-0.5 hover:bg-slate-200/80 rounded transition-colors text-slate-400 hover:text-blue-700 cursor-pointer"
                       >
-                        {copiedRef === card.reference ? (
+                        {copiedRef === card.batch ? (
                           <CheckCheck className="w-3 h-3 text-emerald-600" />
                         ) : (
                           <Copy className="w-3 h-3" />
@@ -454,7 +467,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                                     <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" />
                                   )}
                                   <span
-                                    className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.9rem,auto)_2.1rem] items-stretch overflow-hidden rounded text-[11px] font-bold border ${colors} ${
+                                    className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.9rem,auto)_minmax(2.1rem,auto)] items-stretch overflow-hidden rounded text-[11px] font-bold border ${colors} ${
                                       j.enRetard ? 'motion-safe:animate-pulse' : ''
                                     }`}
                                   >
@@ -509,7 +522,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                                     <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" />
                                   )}
                                   <span
-                                    className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.9rem,auto)_2.1rem] items-stretch overflow-hidden rounded text-[11px] font-bold border ${colors} ${
+                                    className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.9rem,auto)_minmax(2.1rem,auto)] items-stretch overflow-hidden rounded text-[11px] font-bold border ${colors} ${
                                       j.enRetard ? 'motion-safe:animate-pulse' : ''
                                     }`}
                                   >
@@ -601,9 +614,44 @@ export const CardTable: React.FC<CardTableProps> = ({
 
                   {/* Qté Demandée */}
                   <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                    <span className="font-semibold text-slate-900 text-sm">
-                      {card.quantiteDemandee.toLocaleString('fr-FR')}
-                    </span>
+                    {editingDemandeeId === card.id ? (
+                      <div className="flex items-center justify-end gap-1">
+                        <input
+                          type="number"
+                          min="1"
+                          value={inputDemandeeValue}
+                          onChange={(e) => setInputDemandeeValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveDemandee(card.id);
+                            if (e.key === 'Escape') setEditingDemandeeId(null);
+                          }}
+                          autoFocus
+                          className="w-20 px-1.5 py-0.5 text-xs text-right border border-blue-500 rounded font-bold text-slate-900 focus:outline-hidden"
+                        />
+                        <button
+                          onClick={() => handleSaveDemandee(card.id)}
+                          className="p-1 text-emerald-600 hover:bg-emerald-50 rounded"
+                          title="Valider"
+                        >
+                          <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                        </button>
+                        <button
+                          onClick={() => setEditingDemandeeId(null)}
+                          className="p-1 text-slate-400 hover:bg-slate-100 rounded"
+                          title="Annuler"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => handleStartEditDemandee(card)}
+                        className="font-semibold text-slate-900 text-sm hover:text-blue-600 px-2 py-0.5 rounded hover:bg-slate-100 transition-colors cursor-pointer"
+                        title="Cliquer pour modifier la quantité demandée"
+                      >
+                        {card.quantiteDemandee.toLocaleString('fr-FR')}
+                      </button>
+                    )}
                   </td>
 
                   {/* Qté Finie (Point journalier) */}
@@ -808,7 +856,7 @@ export const CardTable: React.FC<CardTableProps> = ({
           ))}
         </div>
         <div className="text-[11px] text-slate-500">
-          💡 Cliquez sur le nom ou la référence d'un modèle pour <strong>ouvrir sa carte</strong>
+          💡 Cliquez sur le nom ou le batch d'un modèle pour <strong>ouvrir sa carte</strong>
         </div>
       </div>
     </div>

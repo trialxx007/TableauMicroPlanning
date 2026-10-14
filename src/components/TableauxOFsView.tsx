@@ -1,0 +1,303 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  CardItem,
+  OrdreFabrication,
+  OFType,
+  OF_TYPES,
+  normalizeOFType,
+} from '../types/card.ts';
+import { AppPage, ViewSwitcher } from './ViewSwitcher.tsx';
+import { normalizeCases, computeOfQuantiteFinie } from './OFSubTable.tsx';
+import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { Calendar, Clock, Table2 } from 'lucide-react';
+
+interface TableauxOFsViewProps {
+  cards: CardItem[];
+  onUpdateCard: (id: string, updates: Partial<CardItem>) => Promise<void>;
+  onChangePage: (page: AppPage) => void;
+  onOpenCardModal?: (card: CardItem) => void;
+}
+
+/** Un OF affiché dans les tableaux : ses cases + son type, éditables. */
+const OF_TYPES_AFFICHES: OFType[] = ['L', 'O', 'I'];
+
+/**
+ * Recalcule les champs dérivés d'un OF après une saisie : la quantité finie est
+ * la première case, le reste en découle, et le statut suit la progression.
+ */
+function recalcOF(of: OrdreFabrication): OrdreFabrication {
+  const nb = of.nbCases || 5;
+  const total = Number(of.quantiteDemandee) || 0;
+  const cases = normalizeCases(of.casesEnCours, nb, total);
+  const finie = Number(cases[0]) || 0;
+  let statut = of.statut;
+  if (finie >= total && total > 0) statut = 'TERMINE';
+  else if (finie > 0 && of.statut === 'EN_ATTENTE') statut = 'EN_COURS';
+  return {
+    ...of,
+    casesEnCours: cases,
+    quantiteFinie: finie,
+    resteAProduire: Math.max(0, total - finie),
+    statut,
+  };
+}
+
+/**
+ * Applique la saisie d'une case. La dernière case est le total confié à l'OF :
+ * la modifier change la quantité demandée de l'OF, pas une étape.
+ */
+function appliquerCase(of: OrdreFabrication, idx: number, val: number): OrdreFabrication {
+  const nb = of.nbCases || 5;
+  const cases = normalizeCases(of.casesEnCours, nb, of.quantiteDemandee);
+  if (idx === nb - 1) {
+    const total = Math.max(0, val);
+    return recalcOF({
+      ...of,
+      quantiteDemandee: total,
+      casesEnCours: normalizeCases(cases, nb, total),
+    });
+  }
+  const next = [...cases];
+  next[idx] = Math.max(0, val);
+  return recalcOF({ ...of, casesEnCours: normalizeCases(next, nb, of.quantiteDemandee) });
+}
+
+const OFRowEditable: React.FC<{
+  of: OrdreFabrication;
+  numero: number;
+  onCommitCase: (idx: number, val: number) => void;
+  onCommitType: (t: OFType) => void;
+}> = ({ of, numero, onCommitCase, onCommitType }) => {
+  const nb = of.nbCases || 5;
+  const cases = normalizeCases(of.casesEnCours, nb, of.quantiteDemandee);
+  const type = normalizeOFType(of.type);
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <span className="w-6 text-right text-[11px] font-bold text-slate-500 tabular-nums">
+        {numero}:
+      </span>
+
+      <div className="inline-flex items-center">
+        {cases.map((val, idx) => (
+          <React.Fragment key={idx}>
+            {idx > 0 && <span className="px-0.5 text-slate-300 font-bold select-none">/</span>}
+            <input
+              type="number"
+              min={0}
+              defaultValue={val}
+              onBlur={(e) => onCommitCase(idx, parseInt(e.target.value, 10) || 0)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+              }}
+              title={
+                idx === nb - 1
+                  ? "Total confié à cet OF (dernière case)"
+                  : `Case ${idx + 1} : quantité ayant atteint cette étape`
+              }
+              className={`w-12 text-center text-[11px] font-bold px-1 py-0.5 rounded border border-slate-300 focus:outline-hidden focus:border-emerald-500 focus:bg-emerald-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
+                idx === nb - 1 ? 'bg-slate-100 text-slate-900' : 'bg-white text-slate-700'
+              }`}
+            />
+          </React.Fragment>
+        ))}
+      </div>
+
+      <select
+        value={type}
+        onChange={(e) => onCommitType(e.target.value as OFType)}
+        title={`Traitant : ${OF_TYPES[type].label}`}
+        className={`text-[11px] font-bold rounded-md px-1.5 py-0.5 border cursor-pointer ${OF_TYPES[type].classe}`}
+      >
+        {OF_TYPES_AFFICHES.map((t) => (
+          <option key={t} value={t} title={OF_TYPES[t].label}>
+            {t}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+};
+
+/**
+ * Vue « Tableaux des OFs » : un tableau par client, une ligne par carte, et pour
+ * chaque carte ses OFs (cases + type) éditables.
+ */
+export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
+  cards,
+  onUpdateCard,
+  onChangePage,
+  onOpenCardModal,
+}) => {
+  const [parisTime, setParisTime] = useState(getNowParis().timeStr);
+  const { fullFrenchDate } = getNowParis();
+
+  useEffect(() => {
+    const timer = setInterval(() => setParisTime(getNowParis().timeStr), 15000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Un tableau par client, et seulement les cartes qui portent au moins un OF.
+  const parClient = useMemo(() => {
+    const map = new Map<string, CardItem[]>();
+    for (const card of cards) {
+      if (!card.ofs || card.ofs.length === 0) continue;
+      const liste = map.get(card.client) ?? [];
+      liste.push(card);
+      map.set(card.client, liste);
+    }
+    return Array.from(map.entries())
+      .sort((a, b) => b[0].localeCompare(a[0], 'fr'))
+      .map(
+        ([client, liste]) =>
+          [
+            client,
+            [...liste].sort(
+              (a, b) =>
+                a.modele.localeCompare(b.modele, 'fr') ||
+                a.batch.localeCompare(b.batch, 'fr')
+            ),
+          ] as [string, CardItem[]]
+      );
+  }, [cards]);
+
+  const commitOfs = (card: CardItem, newOfs: OrdreFabrication[]) => {
+    const quantiteFinie = newOfs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0);
+    onUpdateCard(card.id, { ofs: newOfs, quantiteFinie });
+  };
+
+  const handleCaseCommit = (card: CardItem, ofIndex: number, idx: number, val: number) => {
+    const newOfs = card.ofs.map((o, i) => (i === ofIndex ? appliquerCase(o, idx, val) : o));
+    commitOfs(card, newOfs);
+  };
+
+  const handleTypeCommit = (card: CardItem, ofIndex: number, t: OFType) => {
+    const newOfs = card.ofs.map((o, i) =>
+      i === ofIndex ? { ...o, type: t, nomExecutant: OF_TYPES[t].label } : o
+    );
+    commitOfs(card, newOfs);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
+      {/* Bandeau haut : titre, date/heure, sélecteur de vue */}
+      <div className="bg-white border-b border-slate-200 relative z-20 shadow-xs">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-emerald-600 flex items-center justify-center text-white">
+              <Table2 className="w-5 h-5" />
+            </div>
+            <div>
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                Tableaux des OFs
+              </h1>
+              <div className="flex flex-wrap items-center gap-2.5 text-xs sm:text-sm text-slate-500 mt-0.5">
+                <span className="flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                  {fullFrenchDate}
+                </span>
+                <span className="text-slate-300">•</span>
+                <span className="flex items-center gap-1 font-semibold text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/60">
+                  <Clock className="w-3.5 h-3.5 text-emerald-600" />
+                  {parisTime}
+                  <span className="text-[10px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <div className="flex md:justify-center">
+            <ViewSwitcher currentPage="tableaux-ofs" onChangePage={onChangePage} />
+          </div>
+
+          <div aria-hidden="true" />
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+        {parClient.length === 0 ? (
+          <div className="bg-white rounded-xl border border-slate-200 p-12 text-center shadow-xs">
+            <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
+              <Table2 className="w-6 h-6" />
+            </div>
+            <h3 className="text-base font-semibold text-slate-900 mb-1">Aucun OF à afficher</h3>
+            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+              Ajoutez des OFs depuis une carte pour les retrouver ici, regroupés par client et par
+              modèle.
+            </p>
+          </div>
+        ) : (
+          parClient.map(([client, cartesClient]) => (
+            <section
+            key={client}
+            className="min-w-0 bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden"
+          >
+              <div className="px-4 py-3 bg-slate-900 text-white flex items-center justify-between">
+                <h2 className="text-sm font-bold tracking-tight">{client}</h2>
+                <span className="text-[11px] font-semibold text-slate-300">
+                  {cartesClient.length} carte{cartesClient.length > 1 ? 's' : ''}
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 text-left text-[11px] uppercase tracking-wider text-slate-500">
+                      <th className="px-4 py-2 font-bold w-56">Modèle</th>
+                      <th className="px-4 py-2 font-bold">Ordres de fabrication</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cartesClient.map((card) => (
+                      <tr key={card.id} className="border-t border-slate-100 align-top">
+                        <td className="px-4 py-3">
+                          {onOpenCardModal ? (
+                            <button
+                              type="button"
+                              onClick={() => onOpenCardModal(card)}
+                              title="Ouvrir la carte"
+                              className="text-left cursor-pointer group"
+                            >
+                              <span className="font-bold text-sm text-slate-900 group-hover:text-emerald-700">
+                                {card.modele}
+                              </span>
+                              <span className="block text-[11px] text-slate-400">
+                                {card.batch}
+                              </span>
+                            </button>
+                          ) : (
+                            <>
+                              <span className="font-bold text-sm text-slate-900">
+                                {card.modele}
+                              </span>
+                              <span className="block text-[11px] text-slate-400">
+                                {card.batch}
+                              </span>
+                            </>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="space-y-1.5">
+                            {card.ofs.map((of, i) => (
+                              <OFRowEditable
+                                key={of.id}
+                                of={of}
+                                numero={i + 1}
+                                onCommitCase={(idx, val) => handleCaseCommit(card, i, idx, val)}
+                                onCommitType={(t) => handleTypeCommit(card, i, t)}
+                              />
+                            ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ))
+        )}
+      </div>
+    </div>
+  );
+};

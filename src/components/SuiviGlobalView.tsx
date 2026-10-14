@@ -1,17 +1,4 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import {
-  DndContext,
-  DragOverlay,
-  KeyboardSensor,
-  PointerSensor,
-  pointerWithin,
-  useSensor,
-  useSensors,
-  type DragCancelEvent,
-  type DragEndEvent,
-  type DragStartEvent,
-  type DropAnimation,
-} from '@dnd-kit/core';
 import { CardFormData, CardItem } from '../types/card.ts';
 import {
   ChaineRow,
@@ -19,31 +6,34 @@ import {
   CategorieConfig,
   InspectionBloc,
   InspectionValeur,
+  InspectionEvenement,
+  ExpeditionOF,
   AlerteChamp,
   TEINTE_ALERTE_DEFAUT,
   normaliserTeinteAlerte,
 } from '../types/suiviGlobal.ts';
-import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS } from '../data/mockSuiviGlobal.ts';
+import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS, nouvelleChaineVide } from '../data/mockSuiviGlobal.ts';
 import { CardPickerModal } from './CardPickerModal.tsx';
-import { SlotActionModal } from './SlotActionModal.tsx';
+import { ExpeditionModal } from './ExpeditionModal.tsx';
+import { NouvelleChaineModal } from './NouvelleChaineModal.tsx';
 import { InspectionEtatMenu } from './InspectionEtatMenu.tsx';
 import { OfPopover } from './OfPopover.tsx';
 import { AlertePopover } from './AlertePopover.tsx';
 import { useAlertesManuelles } from '../utils/alertesManuelles.ts';
 import { getJalonsCard, type JalonInfo } from '../utils/jalons.ts';
 import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { demarrerGlisser } from '../utils/glisserCarte.ts';
 import {
   blocInspectionVide,
   dateDuJourISO,
   normaliserBloc,
 } from '../utils/inspections.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
-import { ViewSwitcher } from './ViewSwitcher.tsx';
+import { ViewSwitcher, AppPage } from './ViewSwitcher.tsx';
 import { suiviGlobalApi, type SuiviGlobalLayoutRow } from '../services/api.ts';
 import {
   LigneTableSuivi,
   NOMBRE_LANCEMENTS,
-  PastilleJalon,
   type AlerteOuverteGlobal,
   type ApercuBanniere,
   type MenuEtatInspection,
@@ -53,15 +43,18 @@ import {
 import {
   Sparkles,
   Truck,
-  ClipboardList,
+  TableProperties,
   Calendar,
   Clock,
+  Plus,
 } from 'lucide-react';
 
 
 interface SuiviGlobalViewProps {
-  onBackToPointJournalier: () => void;
+  onChangePage: (page: AppPage) => void;
   cards: CardItem[];
+  /** Persiste des modifications partielles d'une carte (juron validé…). */
+  onUpdateCard?: (id: string, updates: Partial<CardItem>) => Promise<void>;
   onOpenCardModal?: (card: CardItem) => void;
   onOpenCreateCard?: (
     prefillData: Partial<CardFormData> | null,
@@ -75,15 +68,6 @@ interface ActiveSlotPicker {
   /** Colonne « Prochain Lancement » (0..4). */
   lancementIndex?: number;
   /** Rang dans la pile de 2 cartes de la case (0 = haut, 1 = bas). */
-  slotIndex?: number;
-  slotTitle: string;
-}
-
-/** Pour SlotActionModal : case en attente de choix (nouvelle carte ou existante). */
-interface ActiveSlotAction {
-  rowId: string;
-  slotType: 'modeleEnCours' | 'lancement' | 'expedition';
-  lancementIndex?: number;
   slotIndex?: number;
   slotTitle: string;
 }
@@ -105,7 +89,7 @@ function lireCarteEnCase(lignes: SuiviRow[], c: CoordCase): ChaineSlotCard | nul
   const ligne = lignes.find((r) => r.id === c.rowId);
   if (!ligne) return null;
   if (c.slotType === 'modeleEnCours') return ligne.modeleEnCoursCards[c.slotIndex ?? 0] ?? null;
-  if (c.slotType === 'expedition') return ligne.expeditionCard ?? null;
+  if (c.slotType === 'expedition') return ligne.expeditionCards[c.slotIndex ?? 0] ?? null;
   return ligne.prochainsLancementsCards[c.lancementIndex ?? 0]?.[c.slotIndex ?? 0] ?? null;
 }
 
@@ -119,7 +103,9 @@ function ecrireCarteEnCase(lignes: SuiviRow[], c: CoordCase, carte: ChaineSlotCa
       return { ...r, modeleEnCoursCards: pile };
     }
     if (c.slotType === 'expedition') {
-      return { ...r, expeditionCard: carte ?? null };
+      const pile = [...r.expeditionCards] as PileDeCartes;
+      pile[c.slotIndex ?? 0] = carte;
+      return { ...r, expeditionCards: pile };
     }
     const lancements = [...r.prochainsLancementsCards] as ChaineRow['prochainsLancementsCards'];
     const pile = [...(lancements[c.lancementIndex ?? 0] ?? [null, null])] as PileDeCartes;
@@ -129,9 +115,34 @@ function ecrireCarteEnCase(lignes: SuiviRow[], c: CoordCase, carte: ChaineSlotCa
   });
 }
 
-/** Retire cette carte de toutes les cases où elle apparaît (une carte = une case). */
-function retirerCarteDePartout(lignes: SuiviRow[], cardId: string): SuiviRow[] {
+/** Groupe de colonnes : le « planning » (modèle en cours + prochains
+ *  lancements) et l'« expédition » sont indépendants. Une carte peut donc être
+ *  à la fois en production (planning) et en expédition, mais reste unique à
+ *  l'intérieur de chaque groupe. */
+type GroupeSlot = 'planning' | 'expedition';
+
+function groupeDe(slotType: TypeSlotGlobal): GroupeSlot {
+  return slotType === 'expedition' ? 'expedition' : 'planning';
+}
+
+/** Suivi d'expédition initial d'une carte : un OF par OF, à expédier. La date
+ *  d'envoi est choisie par l'utilisateur dans la fenêtre Expédition. */
+function expeditionOfsDepuisCarte(carte: CardItem | undefined): ExpeditionOF[] {
+  return (carte?.ofs ?? []).map((_, i) => ({
+    ofIndex: i,
+    statutExpedition: 'A_EXPEDIER' as const,
+  }));
+}
+
+/** Retire cette carte des cases de ce groupe uniquement. */
+function retirerCarteDuGroupe(lignes: SuiviRow[], cardId: string, groupe: GroupeSlot): SuiviRow[] {
   return lignes.map((r) => {
+    if (groupe === 'expedition') {
+      const pile = (r.expeditionCards as PileDeCartes).map((s) =>
+        s?.cardId === cardId ? null : s
+      ) as PileDeCartes;
+      return { ...r, expeditionCards: pile };
+    }
     const modelePile = (r.modeleEnCoursCards as PileDeCartes).map((s) =>
       s?.cardId === cardId ? null : s
     ) as PileDeCartes;
@@ -142,14 +153,23 @@ function retirerCarteDePartout(lignes: SuiviRow[], cardId: string): SuiviRow[] {
       ...r,
       modeleEnCoursCards: modelePile,
       prochainsLancementsCards: lancementsPiles,
-      expeditionCard: r.expeditionCard?.cardId === cardId ? null : r.expeditionCard,
     };
   });
 }
 
-/** Localise l'unique case où est posée cette carte, si elle est dans le tableau. */
-function localiserCarte(lignes: SuiviRow[], cardId: string): CoordCase | null {
+/** Localise l'unique case de ce groupe où est posée cette carte, si elle y est. */
+function localiserCarteDansGroupe(
+  lignes: SuiviRow[],
+  cardId: string,
+  groupe: GroupeSlot
+): CoordCase | null {
   for (const r of lignes) {
+    if (groupe === 'expedition') {
+      for (const [i, s] of (r.expeditionCards as PileDeCartes).entries()) {
+        if (s?.cardId === cardId) return { rowId: r.id, slotType: 'expedition', slotIndex: i };
+      }
+      continue;
+    }
     for (const [i, s] of r.modeleEnCoursCards.entries()) {
       if (s?.cardId === cardId) return { rowId: r.id, slotType: 'modeleEnCours', slotIndex: i };
     }
@@ -161,7 +181,6 @@ function localiserCarte(lignes: SuiviRow[], cardId: string): CoordCase | null {
         }
       }
     }
-    if (r.expeditionCard?.cardId === cardId) return { rowId: r.id, slotType: 'expedition' };
   }
   return null;
 }
@@ -235,26 +254,16 @@ function normaliserLignes(brut: unknown): SuiviRow[] {
           { length: NOMBRE_LANCEMENTS },
           (_, i) => enPile(lancements[i])
         ) as unknown as ChaineRow['prochainsLancementsCards'],
-        expeditionCard: (reste.expeditionCard as ChaineSlotCard | null | undefined) ?? null,
+        // Migration : l'ancienne carte unique « expeditionCard » devient une pile.
+        expeditionCards: reste.expeditionCards
+          ? enPile(reste.expeditionCards)
+          : enPile(reste.expeditionCard),
         alertes,
       } satisfies SuiviRow;
     });
-  // Chaînes renommées / ajoutées / retirées après la mise en place initiale : on
-  // les applique aussi au cache local, sinon une session déjà ouverte garde
-  // l'ancien jeu (INITIAL_CHAINE_ROWS n'est lu qu'au tout premier lancement).
-  const renommages: Record<string, string> = { 'conf-tan': 'TANA', 'conf-mar': 'MARGUERITE' };
-  const supprimes = new Set(['conf-bleu']);
-  const ajouts = ['conf-pose-cuir', 'conf-sst'];
-  const migrees: SuiviRow[] = lignes
-    .filter((l) => !supprimes.has(l.id))
-    .map((l) => (renommages[l.id] ? { ...l, nom: renommages[l.id] } : l));
-  for (const id of ajouts) {
-    if (!migrees.some((l) => l.id === id)) {
-      const seed = INITIAL_CHAINE_ROWS.find((r) => r.id === id);
-      if (seed) migrees.push(seed);
-    }
-  }
-  return migrees.length > 0 ? migrees : INITIAL_CHAINE_ROWS;
+  // Les chaînes créées / renommées / supprimées par l'utilisateur sont respectées
+  // telles quelles : plus aucune migration codée en dur ne vient les écraser.
+  return lignes.length > 0 ? lignes : INITIAL_CHAINE_ROWS;
 }
 
 const BANNER_LINE_RATIO = 1.06;
@@ -311,8 +320,9 @@ function buildBanner(
 }
 
 export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
-  onBackToPointJournalier,
+  onChangePage,
   cards,
+  onUpdateCard,
   onOpenCardModal,
   onOpenCreateCard,
 }) => {
@@ -329,17 +339,36 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   // Layout partagé via API (DB SQLite) avec polling + localStorage fallback
   const [rows, setRows] = useState<SuiviRow[]>(() => INITIAL_CHAINE_ROWS);
 
+  // Synchronisation concurrente : le tableau est partagé entre postes, mais une
+  // action locale (créer/renommer/supprimer une chaîne) ne doit JAMAIS être
+  // annulée par une réponse serveur arrivée en retard.
+  // - `sauvegardeEnAttenteRef` : des modifs locales ne sont pas encore écrites,
+  //   le polling ne doit donc pas appliquer l'état (ancien) du serveur.
+  // - `derniereEcritureRef` : horodatage de notre dernier envoi réussi ; toute
+  //   requête GET démarrée AVANT est ignorée (sa réponse est forcément périmée).
+  const sauvegardeEnAttenteRef = useRef(false);
+  const derniereEcritureRef = useRef(0);
+  // Vrai quand le dernier setRows provient du serveur : inutile de le renvoyer.
+  const applicationServeurRef = useRef(false);
+
   const loadLayout = useCallback(async (isInitial = false) => {
+    const debutRequete = Date.now();
     try {
       if (isInitial) console.log('[SuiviGlobal] Chargement layout via API...');
       const data = await suiviGlobalApi.getLayout();
       if (isInitial) console.log('[SuiviGlobal] Layout reçu:', data.length, 'lignes');
+      // Réponse périmée (une écriture locale a eu lieu depuis) ou modifs locales
+      // en attente : on ne touche pas à l'état local.
+      if (sauvegardeEnAttenteRef.current || debutRequete < derniereEcritureRef.current) {
+        return;
+      }
       if (data.length > 0) {
         const normalized = normaliserLignes(data);
         setRows((prev) => {
           const prevStr = JSON.stringify(prev);
           const nextStr = JSON.stringify(normalized);
           if (prevStr !== nextStr) {
+            applicationServeurRef.current = true;
             if (!isInitial) console.log('[SuiviGlobal] Layout mis à jour depuis le serveur');
             return normalized;
           }
@@ -374,6 +403,12 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   }, [loadLayout]);
 
   const [activePicker, setActivePicker] = useState<ActiveSlotPicker | null>(null);
+
+  // Fenêtre d'expédition OF par OF : ligne dont la case Expédition est ouverte.
+  const [expeditionOuverte, setExpeditionOuverte] = useState<{
+    rowId: string;
+    slotIndex: number;
+  } | null>(null);
 
   // Alertes saisies à la main dans le popover : source partagée (localStorage),
   // écrites par le popover, lues ici pour allumer la bande de la ligne.
@@ -490,9 +525,22 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     try {
       localStorage.setItem('suivi_global_rows_v3', JSON.stringify(rows));
     } catch {}
-    // Sauvegarde serveur (partagée) - debounced via timeout
+    // L'état vient du serveur : pas de renvoi inutile.
+    if (applicationServeurRef.current) {
+      applicationServeurRef.current = false;
+      return;
+    }
+    // Modifs locales : on ouvre la fenêtre pendant laquelle le polling ne doit
+    // pas écraser l'état local, puis on écrit (debounced) côté serveur.
+    sauvegardeEnAttenteRef.current = true;
     const timeout = setTimeout(() => {
-      suiviGlobalApi.setLayout(rows).catch(console.warn);
+      suiviGlobalApi
+        .setLayout(rows)
+        .catch(console.warn)
+        .finally(() => {
+          derniereEcritureRef.current = Date.now();
+          sauvegardeEnAttenteRef.current = false;
+        });
     }, 500);
     return () => clearTimeout(timeout);
   }, [rows, layoutLoading]);
@@ -510,9 +558,6 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [rows]);
 
-  // État pour SlotActionModal (choix nouvelle carte / carte existante)
-  const [selectedSlotAction, setSelectedSlotAction] = useState<ActiveSlotAction | null>(null);
-
   const handleAssignSlotCard = useCallback(
     (
       rowId: string,
@@ -522,20 +567,82 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       slotIndex = 0
     ) => {
       // Affectation purement manuelle : OK Prod ne déplace jamais une carte ici.
-      // Une même carte ne peut occuper qu'une seule case du tableau : si elle est
-      // déjà posée ailleurs, elle en est retirée avant d'être placée à la demande.
+      // Une carte reste unique par groupe (planning / expédition) : si elle est
+      // déjà posée ailleurs dans le MÊME groupe, elle en est retirée avant
+      // d'être placée. Elle peut en revanche figurer aussi dans l'autre groupe
+      // (ex. produite en « Modèle en cours » et suivie en « Expédition »).
       const cardId = slotCard?.cardId;
+      const groupe = groupeDe(slotType);
 
       setRows((prev) => {
-        const retrait = cardId ? retirerCarteDePartout(prev, cardId) : prev;
+        // Conserve l'expédition OF par OF si la carte était déjà en expédition.
+        let aEcrire = slotCard;
+        if (cardId && groupe === 'expedition') {
+          const existant = localiserCarteDansGroupe(prev, cardId, 'expedition');
+          const slotExistant = existant ? lireCarteEnCase(prev, existant) : null;
+          if (slotExistant) {
+            aEcrire = { ...slotExistant };
+          } else if (aEcrire && !aEcrire.expeditionOfs) {
+            // Première mise en expédition : pré-remplit les OF (état + date).
+            aEcrire = {
+              ...aEcrire,
+              expeditionOfs: expeditionOfsDepuisCarte(cardsParId.get(cardId)),
+            };
+          }
+        }
+        const retrait = cardId ? retirerCarteDuGroupe(prev, cardId, groupe) : prev;
         return ecrireCarteEnCase(
           retrait,
           { rowId, slotType, lancementIndex, slotIndex },
-          slotCard
+          aEcrire
         );
       });
     },
+    [cardsParId]
+  );
+
+  // Met à jour l'expédition OF par OF de la carte posée dans la case Expédition.
+  const majExpeditionOfs = useCallback(
+    (rowId: string, slotIndex: number, expeditionOfs: ExpeditionOF[]) => {
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.id !== rowId) return r;
+          const slot = r.expeditionCards[slotIndex];
+          if (!slot) return r;
+          const pile = [...r.expeditionCards] as PileDeCartes;
+          pile[slotIndex] = { ...slot, expeditionOfs };
+          return { ...r, expeditionCards: pile };
+        })
+      );
+    },
     []
+  );
+
+  // Envoie le modèle d'un bloc d'inspection vers la colonne Expédition, puis
+  // ouvre le suivi OF par OF. Le modèle reste aussi dans « Modèle en cours ».
+  const handleEnvoyerExpedition = useCallback(
+    (rowId: string, blocIndex: number) => {
+      const ligne = rows.find((r) => r.id === rowId);
+      const slot = ligne?.modeleEnCoursCards[blocIndex];
+      const cardId = slot?.cardId;
+      if (!ligne || !cardId) return;
+      const pile = ligne.expeditionCards as PileDeCartes;
+      const existant = pile.findIndex((s) => s?.cardId === cardId);
+      const cibleIndex =
+        existant >= 0 ? existant : Math.max(0, pile.findIndex((s) => !s));
+      if (existant < 0) {
+        const carte = cardsParId.get(cardId);
+        handleAssignSlotCard(
+          rowId,
+          'expedition',
+          { cardId, customLabel: carte?.modele ?? slot?.customLabel },
+          undefined,
+          cibleIndex
+        );
+      }
+      setExpeditionOuverte({ rowId, slotIndex: cibleIndex });
+    },
+    [rows, cardsParId, handleAssignSlotCard]
   );
 
   // Glisser-déposer d'une carte déjà posée vers une autre case : la carte de la
@@ -552,10 +659,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       const carte = cardsParId.get(cardId);
       if (!carte) return;
       const cible: CoordCase = { rowId, slotType, lancementIndex, slotIndex };
-      const carteDeposee: ChaineSlotCard = { cardId: carte.id, customLabel: carte.modele };
 
       setRows((prev) => {
-        const source = localiserCarte(prev, carte.id);
+        const groupe = groupeDe(cible.slotType);
+        const source = localiserCarteDansGroupe(prev, carte.id, groupe);
         const memeCase =
           source &&
           source.rowId === cible.rowId &&
@@ -564,8 +671,18 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           (source.slotIndex ?? 0) === (cible.slotIndex ?? 0);
         if (memeCase) return prev;
 
+        // Réutilise les données du slot source (préserve l'expédition OF par OF).
+        const slotSource = source ? lireCarteEnCase(prev, source) : null;
+        let carteDeposee: ChaineSlotCard =
+          slotSource ?? { cardId: carte.id, customLabel: carte.modele };
+        if (groupe === 'expedition' && !carteDeposee.expeditionOfs) {
+          carteDeposee = {
+            ...carteDeposee,
+            expeditionOfs: expeditionOfsDepuisCarte(carte),
+          };
+        }
         const carteEnCible = lireCarteEnCase(prev, cible);
-        let prochain = retirerCarteDePartout(prev, carte.id);
+        let prochain = retirerCarteDuGroupe(prev, carte.id, groupe);
         prochain = ecrireCarteEnCase(prochain, cible, carteDeposee);
         if (carteEnCible && source) prochain = ecrireCarteEnCase(prochain, source, carteEnCible);
         return prochain;
@@ -574,136 +691,32 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     [cardsParId]
   );
 
-  // --- Glisser-déposer (géré par @dnd-kit) -----------------------
-  // Les cartes ont une « vraie » présence pendant le glisser : le DragOverlay
-  // affiche la carte soulevée et la fait suivre le curseur, puis l'anime vers
-  // sa case de dépôt (drop animation) avant que l'état des lignes ne change.
-  const [cardIdEnVol, setCardIdEnVol] = useState<string | null>(null);
-  // Case d'arrivée capturée au lâcher : la drop animation y fait voler la carte
-  // soulevée, et c'est seulement une fois posée (sideEffects) que l'état des
-  // lignes est échangé — on ne démonte pas la case source pendant le vol, sinon
-  // dnd-kit abandonnerait l'animation.
-  const cibleVolRef = useRef<{
-    cardId: string;
-    rowId: string;
-    slotType: TypeSlotGlobal;
-    lancementIndex?: number;
-    slotIndex?: number;
-    rect: { left: number; top: number; width: number; height: number } | null;
-  } | null>(null);
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
-    useSensor(KeyboardSensor)
-  );
-
-  const onDragStart = useCallback((event: DragStartEvent) => {
-    cibleVolRef.current = null;
-    setCardIdEnVol(String(event.active.id));
-  }, []);
-
-  const onDragCancel = useCallback((_event: DragCancelEvent) => {
-    cibleVolRef.current = null;
-    setCardIdEnVol(null);
-  }, []);
-
-  const onDragEnd = useCallback((event: DragEndEvent) => {
-    const { active, over } = event;
-    if (!over) {
-      cibleVolRef.current = null;
-      setCardIdEnVol(null);
-      return;
-    }
-    const cible = over.data.current as
-      | { rowId: string; slotType: TypeSlotGlobal; lancementIndex?: number; slotIndex?: number }
-      | undefined;
-    const carteSource = active.data.current as { cardId?: string } | undefined;
-    const rect = over.rect;
-    if (
-      !cible ||
-      !carteSource?.cardId ||
-      !rect
-    ) {
-      cibleVolRef.current = null;
-      setCardIdEnVol(null);
-      return;
-    }
-    // On ne modifie PAS encore les lignes : l'échange sera appliqué par
-    // sideEffects de la drop animation, une fois la carte arrivée à destination.
-    cibleVolRef.current = {
-      cardId: carteSource.cardId,
-      rowId: cible.rowId,
-      slotType: cible.slotType,
-      lancementIndex: cible.lancementIndex,
-      slotIndex: cible.slotIndex,
-      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-    };
-  }, []);
-
-  const dropAnimation = useMemo<DropAnimation>(
-    () => ({
-      duration: 220,
-      easing: 'cubic-bezier(0.25, 0.9, 0.3, 1.05)',
-      keyframes: (params) => {
-        const cible = cibleVolRef.current;
-        const cur = params.dragOverlay.rect;
-        const startX = cur.left;
-        const startY = cur.top;
-        let destX = startX;
-        let destY = startY;
-        if (cible?.rect) {
-          destX = cible.rect.left + (cible.rect.width - cur.width) / 2;
-          destY = cible.rect.top + 4;
-        }
-        return [
-          { transform: `translate3d(${startX}px, ${startY}px, 0) scale(1.02)`, opacity: 1 },
-          { transform: `translate3d(${destX}px, ${destY}px, 0) scale(0.97)`, opacity: 0.2 },
-        ];
-      },
-      sideEffects: () => {
-        const vol = cibleVolRef.current;
-        cibleVolRef.current = null;
-        setCardIdEnVol(null);
-        if (vol) {
-          handleDropCarte(vol.rowId, vol.slotType, vol.cardId, vol.lancementIndex, vol.slotIndex);
-        }
-      },
-    }),
+  // --- Glisser-déposer d'une carte « tenue en main » ---------------------
+  // Pointer Events : le contrôleur (utils/glisserCarte.ts) clone la carte, la
+  // fait décoller et suivre le curseur (transform composé GPU, aucun re-render
+  // React pendant le geste), puis appelle handleDropCarte sur la case visée.
+  // `event.currentTarget` est lu de façon synchrone, ici dans le onPointerDown.
+  const onGlisserCarte = useCallback(
+    (card: CardItem, event: React.PointerEvent<HTMLElement>) => {
+      const source = event.currentTarget as HTMLElement;
+      demarrerGlisser({
+        cardId: card.id,
+        source,
+        clientX: event.clientX,
+        clientY: event.clientY,
+        scrollContainer: tableScrollRef.current,
+        onDeposer: (cardId, coords) =>
+          handleDropCarte(
+            coords.rowId,
+            coords.slotType as TypeSlotGlobal,
+            cardId,
+            coords.lancementIndex,
+            coords.slotIndex
+          ),
+      });
+    },
     [handleDropCarte]
   );
-
-  const carteSoulevee = useMemo(() => {
-    const card = cardIdEnVol ? cardsParId.get(cardIdEnVol) : undefined;
-    const jalons = card ? (jalonInfosParCarte.get(card.id) ?? []) : [];
-    return { card, jalons };
-  }, [cardIdEnVol, cardsParId, jalonInfosParCarte]);
-
-  // Ouvre SlotActionModal au lieu de CardPickerModal direct
-  const handleSlotActionChooseNew = () => {
-    if (!selectedSlotAction || !onOpenCreateCard) return;
-    const { rowId, slotType, lancementIndex, slotIndex } = selectedSlotAction;
-    const isModeleEnCours = slotType === 'modeleEnCours';
-    const prefill: Partial<CardFormData> = {
-      ...(isModeleEnCours ? { okProd: true, statut: 'EN_COURS' } : { okProd: false, statut: 'EN_ATTENTE' }),
-    };
-    onOpenCreateCard(prefill, (createdCard) => {
-      handleAssignSlotCard(rowId, slotType, { cardId: createdCard.id, customLabel: createdCard.modele }, lancementIndex, slotIndex);
-      setSelectedSlotAction(null);
-    });
-  };
-
-  const handleSlotActionChooseExisting = () => {
-    if (!selectedSlotAction) return;
-    // Ouvre CardPickerModal pour choisir une carte existante
-    const { rowId, slotType, lancementIndex, slotIndex } = selectedSlotAction;
-    setActivePicker({
-      rowId,
-      slotType,
-      lancementIndex,
-      slotIndex,
-      slotTitle: selectedSlotAction.slotTitle,
-    });
-    setSelectedSlotAction(null);
-  };
 
   // --- Inspections (un bloc par modèle en cours) -------------------------
   const majBlocInspection = (
@@ -721,6 +734,44 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       })
     );
   };
+
+  /** Journalise une modification d'état dans l'historique du bloc d'inspection. */
+  const consignerEvenement = (
+    rowId: string,
+    blocIndex: number,
+    evt: InspectionEvenement
+  ) => {
+    majBlocInspection(rowId, blocIndex, (bloc) => ({
+      ...bloc,
+      historique: [...(bloc.historique ?? []), evt],
+    }));
+  };
+
+  // --- Renommage d'une chaîne --------------------------------------------
+  const renommerChaine = (rowId: string, nouveauNom: string) => {
+    setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, nom: nouveauNom } : r)));
+  };
+
+  // --- Création d'une chaîne ---------------------------------------------
+  const [nouvelleChaineOuverte, setNouvelleChaineOuverte] = useState(false);
+  const creerChaine = useCallback(
+    (categorieId: 'BRODERIE_MAIN' | 'CONFECTION', nom: string) => {
+      const ligne = nouvelleChaineVide(categorieId, nom);
+      setRows((prev) => [...prev, ligne]);
+    },
+    []
+  );
+
+  // --- Suppression d'une chaîne ------------------------------------------
+  const supprimerChaine = useCallback(
+    (rowId: string) => {
+      const ligne = rows.find((r) => r.id === rowId);
+      if (!ligne) return;
+      if (!window.confirm(`Confirmez-vous la suppression de la chaîne "${ligne.nom}" ?`)) return;
+      setRows((prev) => prev.filter((r) => r.id !== rowId));
+    },
+    [rows]
+  );
 
   const majValeur = useCallback(
     (
@@ -740,8 +791,9 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     (
       rowId: string,
       blocIndex: number,
-      type: 'I' | 'OF',
-      pct?: 50 | 100
+      type: 'I' | 'OF' | 'CC',
+      pct?: 50 | 100,
+      ofIndex?: number
     ) =>
       majBlocInspection(rowId, blocIndex, (bloc) => ({
         ...bloc,
@@ -750,7 +802,11 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           {
             id: `val-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
             type,
-            ...(type === 'I' ? { pct: pct ?? 50 } : {}),
+            ...(type === 'I'
+              ? { pct: pct ?? 50, ofIndex }
+              : type === 'CC'
+              ? { ofIndex }
+              : {}),
             date: dateDuJourISO(),
             resultat: null,
           },
@@ -779,21 +835,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     return out;
   }, [categoriesList, bannerSizes]);
 
-  /** Ouvre le menu d'action (nouvelle carte / carte existante) pour une case. */
-  const onOuvrirActionSlot = useCallback(
-    (
-      rowId: string,
-      titreSlot: string,
-      slotType: TypeSlotGlobal,
-      lancementIndex?: number,
-      slotIndex?: number
-    ) => {
-      setSelectedSlotAction({ rowId, slotType, lancementIndex, slotIndex, slotTitle: titreSlot });
-    },
-    []
-  );
-
-  /** Ouvre le sélecteur de carte existante pour une case. */
+  /** Ouvre le sélecteur de carte (recherche) pour une case vide ou à réassigner. */
   const onOuvrirPicker = useCallback(
     (
       rowId: string,
@@ -815,6 +857,26 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     [onOpenCardModal]
   );
 
+  /** Depuis le sélecteur : crée une carte qui occupera la case en attente. */
+  const handlePickerCreateNew = useCallback(() => {
+    if (!activePicker || !onOpenCreateCard) return;
+    const { rowId, slotType, lancementIndex, slotIndex } = activePicker;
+    const isModeleEnCours = slotType === 'modeleEnCours';
+    const prefill: Partial<CardFormData> = {
+      ...(isModeleEnCours ? { okProd: true, statut: 'EN_COURS' } : { okProd: false, statut: 'EN_ATTENTE' }),
+    };
+    setActivePicker(null);
+    onOpenCreateCard(prefill, (createdCard) => {
+      handleAssignSlotCard(
+        rowId,
+        slotType,
+        { cardId: createdCard.id, customLabel: createdCard.modele },
+        lancementIndex,
+        slotIndex
+      );
+    });
+  }, [activePicker, onOpenCreateCard, handleAssignSlotCard]);
+
   // Currently selected slot for CardPickerModal
   const currentSlotForPicker = (() => {
     if (!activePicker) return null;
@@ -825,7 +887,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       return row.modeleEnCoursCards[slotIndex] ?? null;
     }
     if (activePicker.slotType === 'expedition') {
-      return row.expeditionCard ?? null;
+      return row.expeditionCards[slotIndex] ?? null;
     }
     return row.prochainsLancementsCards[activePicker.lancementIndex ?? 0]?.[slotIndex] ?? null;
   })();
@@ -837,8 +899,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
           {/* Gauche : titre + date & heure, comme le Point Commande Journalière */}
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
-              <ClipboardList className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
+              <TableProperties className="w-5 h-5" />
             </div>
             <div>
               <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
@@ -863,12 +925,20 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           <div className="flex md:justify-center">
             <ViewSwitcher
               currentPage="suivi-global"
-              onChangePage={(page) => page === 'point-journalier' && onBackToPointJournalier()}
+              onChangePage={onChangePage}
             />
           </div>
 
-          {/* Droite : vide, pour équilibrer et garder le sélecteur centré */}
-          <div aria-hidden="true" />
+          {/* Droite : création d'une nouvelle chaîne */}
+          <div className="flex items-center justify-end">
+            <button
+              onClick={() => setNouvelleChaineOuverte(true)}
+              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded-lg shadow-sm hover:shadow transition-all cursor-pointer"
+            >
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>Nouvelle Chaîne</span>
+            </button>
+          </div>
         </div>
       </div>
 
@@ -905,7 +975,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                 </th>
 
                 {/* Inspection (OF / I du jour, un bloc par modèle en cours) */}
-                <th className="w-[260px] min-w-[230px]">
+                <th className="w-[360px] min-w-[340px]">
                   <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 ">
                     Inspection
                   </div>
@@ -937,14 +1007,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
 {/* Table Body with Categorized Rows */}
             <tbody>
-              <DndContext
-                sensors={sensors}
-                collisionDetection={pointerWithin}
-                onDragStart={onDragStart}
-                onDragEnd={onDragEnd}
-                onDragCancel={onDragCancel}
-              >
-                {categoriesList.map((catKey) => {
+              {categoriesList.map((catKey) => {
                   const catConfig = CATEGORIES_CONFIG[catKey];
                   const catRows = filteredRows.filter((r) => r.categorieId === catKey);
 
@@ -966,27 +1029,25 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                       cartesAlerteRetard={cartesAlerteRetard}
                       alertesManuelles={alertesManuelles}
                       onCarteClick={onCarteClick}
-                      onOuvrirActionSlot={onOuvrirActionSlot}
+                      onOuvrirActionSlot={onOuvrirPicker}
                       onOuvrirPicker={onOuvrirPicker}
+                      onOuvrirExpedition={(rowId, slotIndex) =>
+                        setExpeditionOuverte({ rowId, slotIndex })
+                      }
+                      onEnvoyerExpedition={handleEnvoyerExpedition}
                       onAssignerSlot={handleAssignSlotCard}
+                      onGlisserCarte={onGlisserCarte}
                       onMajBloc={majBlocInspection}
                       onAjouterValeur={ajouterValeur}
                       onMajValeur={majValeur}
+                      onRenommerChaine={renommerChaine}
+                      onSupprimerChaine={supprimerChaine}
                       setAlerteOuverte={setAlerteOuverte}
                       setOfOuvert={setOfOuvert}
                       setMenuEtat={setMenuEtat}
                     />
                   ));
                 })}
-
-                {/* Carte soulevée : suit le curseur, puis « vole » vers sa case
-                    au lâcher (drop animation gérée par @dnd-kit). */}
-                <DragOverlay dropAnimation={dropAnimation}>
-                  {carteSoulevee.card ? (
-                    <CarteSoulevee card={carteSoulevee.card} jalons={carteSoulevee.jalons} />
-                  ) : null}
-                </DragOverlay>
-              </DndContext>
             </tbody>
           </table>
         </div>
@@ -1026,17 +1087,13 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         </div>
       </div>
 
-      {/* SlotActionModal : choix Nouvelle Carte / Carte Existante */}
-      {selectedSlotAction && (
-        <SlotActionModal
-          isOpen={true}
-          onClose={() => setSelectedSlotAction(null)}
-          slotTitle={selectedSlotAction.slotTitle}
-          slotType={selectedSlotAction.slotType}
-          onChooseNewCard={handleSlotActionChooseNew}
-          onChooseExistingCard={handleSlotActionChooseExisting}
-        />
-      )}
+      {/* Nouvelle Chaîne : type + nom */}
+      <NouvelleChaineModal
+        isOpen={nouvelleChaineOuverte}
+        onClose={() => setNouvelleChaineOuverte(false)}
+        onCreate={creerChaine}
+        nomsExistants={rows.map((r) => r.nom)}
+      />
 
       {/* Card Picker Modal */}
       {activePicker && (
@@ -1046,7 +1103,6 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           cards={cards}
           currentSlot={currentSlotForPicker}
           slotTitle={activePicker.slotTitle}
-          isExpeditionSlot={activePicker.slotType === 'expedition'}
           onSelectCard={(slotCard) => {
             handleAssignSlotCard(
               activePicker.rowId,
@@ -1056,8 +1112,29 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               activePicker.slotIndex
             );
           }}
+          onCreateNewCard={onOpenCreateCard ? handlePickerCreateNew : undefined}
         />
       )}
+
+      {/* Fenêtre d'expédition OF par OF d'une case Expédition */}
+      {(() => {
+        if (!expeditionOuverte) return null;
+        const ligne = rows.find((r) => r.id === expeditionOuverte.rowId);
+        const slot = ligne?.expeditionCards[expeditionOuverte.slotIndex];
+        const carte = slot?.cardId ? cardsParId.get(slot.cardId) : undefined;
+        if (!slot || !carte) return null;
+        return (
+          <ExpeditionModal
+            isOpen={true}
+            onClose={() => setExpeditionOuverte(null)}
+            card={carte}
+            slotCard={slot}
+            onChange={(ofs) =>
+              majExpeditionOfs(expeditionOuverte.rowId, expeditionOuverte.slotIndex, ofs)
+            }
+          />
+        );
+      })()}
 
       {/* Menu Pass/Fail d'un contrôle d'inspection */}
       {menuEtat && (
@@ -1065,10 +1142,59 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           anchor={menuEtat.anchor}
           actuel={menuEtat.actuel}
           onChoisir={(etat) => {
+            const ligne = rows.find((r) => r.id === menuEtat.rowId);
+            const bloc = ligne?.inspections[menuEtat.blocIndex];
+            const valeur = bloc?.valeurs.find((v) => v.id === menuEtat.valeurId);
             majValeur(menuEtat.rowId, menuEtat.blocIndex, menuEtat.valeurId, (v) => ({
               ...v,
               resultat: etat,
+              dateResultat: etat ? dateDuJourISO() : undefined,
             }));
+            // Journalisation : on garde trace de chaque modification d'état,
+            // même si le contrôle change ensuite de Pass à Fail (ou est remis
+            // à « non défini »). Rien à consigner si l'état est inchangé.
+            if (bloc && valeur && valeur.resultat !== etat) {
+              const ofIndex = valeur.ofIndex ?? 0;
+              const estCC = valeur.type === 'CC';
+              const rang = estCC
+                ? 0
+                : bloc.valeurs
+                    .filter((v) => v.type === 'I' && (v.ofIndex ?? 0) === ofIndex)
+                    .findIndex((v) => v.id === valeur.id) + 1;
+              consignerEvenement(menuEtat.rowId, menuEtat.blocIndex, {
+                id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                date: dateDuJourISO(),
+                ofIndex,
+                rang,
+                pct: valeur.pct ?? 50,
+                estCC,
+                resultat: etat,
+              });
+            }
+            // Échec sur le dernier contrôle de l'OF : on enchaîne automatiquement
+            // le contrôle suivant (I 50 %) de ce même OF, date du jour.
+            if (etat === 'F') {
+              const defaillant = bloc?.valeurs.find(
+                (v) => v.id === menuEtat.valeurId
+              );
+              if (bloc && defaillant?.type === 'I') {
+                const groupe = bloc.valeurs.filter(
+                  (v) =>
+                    v.type === 'I' &&
+                    (v.ofIndex ?? 0) === (defaillant.ofIndex ?? 0)
+                );
+                const dernier = groupe[groupe.length - 1];
+                if (dernier?.id === menuEtat.valeurId) {
+                  ajouterValeur(
+                    menuEtat.rowId,
+                    menuEtat.blocIndex,
+                    'I',
+                    50,
+                    defaillant.ofIndex ?? 0
+                  );
+                }
+              }
+            }
             setMenuEtat(null);
           }}
           onClose={() => setMenuEtat(null)}
@@ -1089,85 +1215,16 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
       {alerteOuverte && (
         <AlertePopover
-          card={alerteOuverte.card}
+          card={cardsParId.get(alerteOuverte.card.id) ?? alerteOuverte.card}
           slotTitle={alerteOuverte.slotTitle}
           anchor={alerteOuverte.anchor}
+          onUpdateCard={onUpdateCard}
           onClose={() => setAlerteOuverte(null)}
         />
       )}
     </div>
   );
 };
- 
-/** Aperçu de la carte soulevée, affiché dans le DragOverlay du Suivi Global :
- *  elle suit le curseur puis « vole » vers sa case d'arrivée à lâcher. */
-function CarteSoulevee({ card, jalons }: { card: CardItem; jalons: JalonInfo[] }) {
-  const progress =
-    card.quantiteDemandee > 0
-      ? Math.min(100, Math.round((card.quantiteFinie / card.quantiteDemandee) * 100))
-      : null;
-  const jalonsNomenclatures = jalons.filter((j) => j.categorie === 'NOMENCLATURE');
-  const jalonsStatuts = jalons.filter((j) => j.categorie === 'STATUT');
-
-  return (
-    <div
-      className="w-[300px] select-none rounded-xl border border-blue-300 bg-slate-50 px-2 py-1.5 shadow-[0_18px_36px_rgba(15,23,42,.28),0_4px_8px_rgba(15,23,42,.15)]"
-      style={{ transform: 'rotate(-1deg) scale(1.03)' }}
-    >
-      <div className="flex items-center justify-between gap-2">
-        <span className="font-bold text-[11px] sm:text-xs leading-snug text-slate-900 truncate">
-          {card.modele}
-        </span>
-        {progress !== null && (
-          <div className="flex items-center gap-1.5 ml-2 shrink-0">
-            <div className="w-14 h-1.5 bg-slate-200 rounded-full overflow-hidden">
-              <div
-                className={`h-full ${progress === 100 ? 'bg-emerald-500' : 'bg-blue-600'}`}
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-            <span className="text-[10px] font-bold font-mono text-slate-600 w-[28px] text-right">
-              {progress}%
-            </span>
-          </div>
-        )}
-      </div>
-
-      <div className="flex flex-col gap-2 mt-1">
-        {jalonsNomenclatures.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1">
-            {jalonsNomenclatures.map((j, i) => (
-              <PastilleJalon key={`${j.code}-${i}`} jalon={j} />
-            ))}
-          </div>
-        )}
-        {jalonsStatuts.length > 0 ? (
-          <div className="flex flex-wrap items-center gap-1">
-            {jalonsStatuts.map((j, i) => (
-              <PastilleJalon key={`${j.code}-${i}`} jalon={j} />
-            ))}
-          </div>
-        ) : (
-          <div className="flex flex-wrap items-center gap-1">
-            <div className="inline-flex items-center justify-center px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-500 text-[10px] font-medium w-fit">
-              {card.statut === 'TERMINE'
-                ? 'Terminé'
-                : card.statut === 'EN_COURS'
-                ? 'En cours'
-                : card.statut === 'BLOQUE'
-                ? 'Bloqué'
-                : 'À démarrer'}
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="relative z-10 text-[10px] text-slate-500 font-mono truncate mt-0.5">
-        {card.reference} • {card.client}
-      </div>
-    </div>
-  );
-}
 
 export default SuiviGlobalView;
 

@@ -48,6 +48,13 @@ export function formatTimeParis(date = new Date()) {
   }).format(date);
 }
 
+/** Horodatage français « JJ/MM/AAAA à HH:MM » restitué en bref « JJ/MM à HH:MM »
+ *  (historiques). Toute autre forme est renvoyée telle quelle. */
+export function horodatageBref(valeur: string | null | undefined): string {
+  const m = String(valeur ?? '').match(/^(\d{2})\/(\d{2})\/\d{4}\s*à\s*(\d{2}:\d{2})/);
+  return m ? `${m[1]}/${m[2]} à ${m[3]}` : String(valeur ?? '').trim();
+}
+
 /**
  * Numéro de semaine ISO (1 à 53) de la date, calculé sur le fuseau du site (GMT+3).
  * ex: lundi 05/10/2026 -> semaine 41.

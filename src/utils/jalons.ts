@@ -18,6 +18,12 @@ import { CATALOGUE_INITIAL, CODE_TDS_PPS, categorieParCode } from '../data/mockJ
  */
 export type JalonEtat = 'VALIDE' | 'SEMAINE' | 'DATE' | 'TBC' | 'EN_ATTENTE';
 
+/**
+ * Code de la nomenclature qui porte la marge : elle seule accepte une semaine de
+ * fin et s'affiche en orange dans la plage, puis en rouge au-delà.
+ */
+export const CODE_NOMENCLATURE_R: JalonCode = 'R';
+
 export interface JalonInfo {
   code: JalonCode;
   /** Intitulé long du catalogue, pour les infobulles : « Dossier Technique ». */
@@ -32,10 +38,17 @@ export interface JalonInfo {
   etatLibelle: string;
   /** Semaine cible, uniquement renseignée quand l'état est SEMAINE. */
   semaine: number | null;
+  /** Semaine de fin de la marge (nomenclature R) ; `null` hors de ce cas. */
+  semaineFin: number | null;
   /** Date cible (ISO `AAAA-MM-JJ`), uniquement renseignée quand l'état est DATE. */
   date: string | null;
   /** Vrai si l'échéance (semaine ou date) est déjà dépassée et le jalon non validé. */
   enRetard: boolean;
+  /**
+   * Nomenclature R : la semaine courante est dans la plage [semaine, semaineFin]
+   * — la pastille passe en orange.
+   */
+  enMarge: boolean;
 }
 
 export { CATALOGUE_INITIAL };
@@ -193,7 +206,13 @@ export function appliquerReglePpsRdl(
 export function getJalonInfo(
   catalogue: JalonCatalogue,
   etat:
-    | { valide?: boolean; semaine?: number | null; date?: string | null; tbc?: boolean }
+    | {
+        valide?: boolean;
+        semaine?: number | null;
+        semaineFin?: number | null;
+        date?: string | null;
+        tbc?: boolean;
+      }
     | undefined,
   semaineActuelle: number
 ): JalonInfo {
@@ -201,8 +220,18 @@ export function getJalonInfo(
   const tbc = !valide && Boolean(etat?.tbc);
   const s = valide || tbc ? null : normaliserSemaine(etat?.semaine);
   const d = valide || tbc ? null : normaliserDateJalon(etat?.date);
+  // Marge de la nomenclature R : la semaine de fin borne la plage orange. Sans
+  // fin saisie, le jalon se comporte comme les autres (rouge dès la semaine passée).
+  const estR = catalogue.code === CODE_NOMENCLATURE_R;
+  const fin = estR && !valide && !tbc ? normaliserSemaine(etat?.semaineFin) : null;
+  const enMarge =
+    fin != null && s != null && s <= semaineActuelle && semaineActuelle <= fin;
   const enRetard =
-    s != null ? jalonEnRetard(valide, s, semaineActuelle) : jalonDateEnRetard(valide, d);
+    s != null
+      ? fin != null
+        ? fin < semaineActuelle
+        : jalonEnRetard(valide, s, semaineActuelle)
+      : jalonDateEnRetard(valide, d);
   const etatFinal: JalonEtat = valide
     ? 'VALIDE'
     : tbc
@@ -221,8 +250,10 @@ export function getJalonInfo(
     etat: etatFinal,
     etatLibelle,
     semaine: s,
+    semaineFin: fin,
     date: d,
     enRetard,
+    enMarge,
   };
 }
 
@@ -327,7 +358,8 @@ export function getJalonsEnRetard(
 /** Marque courte d'un jalon, Stable en largeur : « ✓ », « S40 », « 12/06 », « TBC » ou « — ». */
 export function marqueJalon(j: JalonInfo): string {
   if (j.etat === 'VALIDE') return '✓';
-  if (j.etat === 'SEMAINE') return `S${j.semaine}`;
+  if (j.etat === 'SEMAINE')
+    return j.semaineFin != null ? `S${j.semaine} - S${j.semaineFin}` : `S${j.semaine}`;
   if (j.etat === 'DATE' && j.date) return dateCourteJalon(j.date);
   if (j.etat === 'TBC') return 'TBC';
   return '—';
@@ -339,7 +371,9 @@ export function detailJalon(j: JalonInfo): string {
     j.etat === 'VALIDE'
       ? 'Validé'
       : j.etat === 'SEMAINE'
-      ? `Semaine S${j.semaine}${j.enRetard ? ' — en retard' : ''}`
+      ? `Semaine S${j.semaine}${j.semaineFin != null ? ` → S${j.semaineFin}` : ''}${
+          j.enRetard ? ' — en retard' : j.enMarge ? ' — dans la marge' : ''
+        }`
       : j.etat === 'DATE' && j.date
       ? `Échéance ${dateCourteJalon(j.date)}${j.enRetard ? ' — en retard' : ''}`
       : j.etat === 'TBC'
@@ -426,6 +460,14 @@ const RETARD: Teinte = {
   controle: 'text-rose-800',
 };
 
+/** L'orange de la marge R : semaine cible atteinte mais pas encore dépassée. */
+const MARGE: Teinte = {
+  fond: 'bg-amber-500',
+  texte: 'text-white',
+  bordure: 'border-amber-600',
+  controle: 'text-amber-800',
+};
+
 export interface JalonTheme extends Teinte {
   /** Fond, texte et bordure réunis : à poser tel quel sur la pastille. */
   pastille: string;
@@ -436,6 +478,8 @@ export function themeJalon(j: JalonInfo): JalonTheme {
   const teintes = TEINTES[j.categorie] ?? TEINTES.STATUT;
   const base = j.enRetard
     ? RETARD
+    : j.enMarge
+    ? MARGE
     : j.etat === 'VALIDE'
     ? teintes.valide
     : j.etat === 'SEMAINE' || j.etat === 'DATE'

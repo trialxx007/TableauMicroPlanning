@@ -25,22 +25,23 @@ export const CATALOGUE_INITIAL: JalonCatalogue[] = [
 /**
  * Nomenclatures propres à chaque nature de matière. Un code listé ici est une
  * nomenclature verte ; les statuts de `CATALOGUE_INITIAL` complètent la carte.
- * L'ordre est celui d'affichage demandé : R, AC, AF, AI, C pour le Raphia ;
- * AI, AF, AC pour les Tissus.
+ * Ordre d'affichage demandé : R, AC, AI, AF pour le Raphia (C reste en fin de
+ * liste) ; le même ordre pour les Tissus, avec T en premier : T, AC, AI, AF.
+ * Les statuts, eux, ne changent pas d'ordre.
  */
 export const NOMENCLATURES_PAR_TYPE: Record<TypeCarte, { code: string; libelle: string }[]> = {
   R: [
     { code: 'R', libelle: 'Relevé de mesures' },
     { code: 'AC', libelle: 'Article Coupe' },
-    { code: 'AF', libelle: 'Article Fini' },
     { code: 'AI', libelle: 'Articles Inclus' },
+    { code: 'AF', libelle: 'Article Fini' },
     { code: 'C', libelle: 'Cuir' },
   ],
   T: [
     { code: 'T', libelle: 'Tissus' },
+    { code: 'AC', libelle: 'Article Coupe' },
     { code: 'AI', libelle: 'Articles Inclus' },
     { code: 'AF', libelle: 'Article Fini' },
-    { code: 'AC', libelle: 'Article Coupe' },
   ],
 };
 

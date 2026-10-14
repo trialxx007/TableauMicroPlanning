@@ -154,8 +154,7 @@ apiRouter.get('/cards', (req: Request, res: Response) => {
     results = results.filter(
       (c) =>
         c.client.toLowerCase().includes(q) ||
-        c.nom.toLowerCase().includes(q) ||
-        c.reference.toLowerCase().includes(q) ||
+        c.batch.toLowerCase().includes(q) ||
         c.modele.toLowerCase().includes(q)
     );
   }
@@ -203,13 +202,19 @@ function parseJalons(value: unknown): CardJalon[] | undefined {
     codes.add(code);
     if (!connus.has(code)) createJalon(code, code, (brut as CardJalon).categorie);
     const semaine = Number((brut as CardJalon).semaine);
+    const semaineFin = Number((brut as CardJalon).semaineFin);
     const date = normaliserDateJalon((brut as CardJalon).date);
+    const valideLe = (brut as CardJalon).valideLe;
     nettoyes.push({
       code,
       valide: Boolean((brut as CardJalon).valide),
       ...(Number.isFinite(semaine) && semaine >= 1 && semaine <= 53 ? { semaine } : {}),
+      ...(Number.isFinite(semaineFin) && semaineFin >= 1 && semaineFin <= 53
+        ? { semaineFin }
+        : {}),
       ...(date != null ? { date } : {}),
       ...((brut as CardJalon).tbc ? { tbc: true } : {}),
+      ...(typeof valideLe === 'string' && valideLe.trim() ? { valideLe } : {}),
     });
   }
   return nettoyes;
@@ -219,10 +224,10 @@ function parseJalons(value: unknown): CardJalon[] | undefined {
 apiRouter.post('/cards', (req: Request, res: Response) => {
   const body = req.body;
 
-  if (!body.client || !body.nom || !body.reference || !body.modele) {
+  if (!body.client || !body.batch || !body.modele) {
     return res.status(400).json({
       success: false,
-      error: 'Les champs client, nom, référence et modèle sont obligatoires',
+      error: 'Les champs client, batch et nom sont obligatoires',
     });
   }
 
@@ -241,8 +246,7 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
   const newCard: CardItem = {
     id: prochainIdCarte(),
     client: String(body.client).trim(),
-    nom: String(body.nom).trim(),
-    reference: String(body.reference).trim(),
+    batch: String(body.batch).trim(),
     modele: String(body.modele).trim(),
     ...(body.typeCarte === 'R' || body.typeCarte === 'T'
       ? { typeCarte: body.typeCarte }
@@ -291,8 +295,7 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
 
   const updated = updateCardData(req.params.id, {
     client: body.client ?? existant.client,
-    nom: body.nom ?? existant.nom,
-    reference: body.reference ?? existant.reference,
+    batch: body.batch ?? existant.batch,
     modele: body.modele ?? existant.modele,
     ...(body.typeCarte === 'R' || body.typeCarte === 'T'
       ? { typeCarte: body.typeCarte }
@@ -330,8 +333,7 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
  */
 const CHAMPS_MODIFIABLES = [
   'client',
-  'nom',
-  'reference',
+  'batch',
   'modele',
   'typeCarte',
   'okProd',

@@ -1,8 +1,26 @@
+export type StatutExpedition = 'A_EXPEDIER' | 'EN_TRANSIT' | 'LIVRE';
+
+export const STATUTS_EXPEDITION: { code: StatutExpedition; label: string }[] = [
+  { code: 'A_EXPEDIER', label: 'À expédier' },
+  { code: 'EN_TRANSIT', label: 'En transit' },
+  { code: 'LIVRE', label: 'Livré au client' },
+];
+
+/** Expédition d'un OF d'un modèle, suivie petit à petit (OF1, OF2…). */
+export interface ExpeditionOF {
+  /** Position de l'OF dans la carte (0 = OF1). */
+  ofIndex: number;
+  dateExpedition?: string;
+  statutExpedition?: StatutExpedition;
+}
+
 export interface ChaineSlotCard {
   cardId?: string; // ID de la carte liée (ex: 'CRD-001')
   customLabel?: string; // Si saisie manuelle libre
   dateExpedition?: string; // Utile pour la colonne Expédition
   statutExpedition?: 'A_EXPEDIER' | 'EN_TRANSIT' | 'LIVRE';
+  /** Expédition OF par OF de la carte liée (colonne Expédition). */
+  expeditionOfs?: ExpeditionOF[];
   /** Alertes spécifiques à cette carte dans ce slot. */
   alertes?: AlerteChamp[];
 }
@@ -34,12 +52,29 @@ export function normaliserTeinteAlerte(valeur: unknown): TeinteAlerte {
     : TEINTE_ALERTE_DEFAUT;
 }
 
-/** Une valeur ajoutée dans la colonne Inspection : `I 50% : 06/10 Pass` ou `OF1 : 06/10 Fail`. */
+/** Une valeur ajoutée dans la colonne Inspection : `I 50% : 06/10 Pass`, `OF1 : 06/10 Fail` ou `CC : Carton Check`. */
 export interface InspectionValeur {
   id: string;
-  type: 'I' | 'OF';
+  type: 'I' | 'OF' | 'CC';
   pct?: 50 | 100;
   date: string;
+  resultat: 'P' | 'F' | null;
+  /** Date (ISO) à laquelle Pass/Fail a été choisi ; absente tant qu'aucun état. */
+  dateResultat?: string;
+  /** OF auquel ce contrôle d'inspection appartient (0 = OF1, 1 = OF2…). */
+  ofIndex?: number;
+}
+
+/** Une modification journalisée dans l'historique d'inspection : état choisi sur un contrôle. */
+export interface InspectionEvenement {
+  id: string;
+  /** Date (ISO) de la modification. */
+  date: string;
+  ofIndex: number;
+  /** Rang du I dans son OF (1, 2…) ; 0 pour un CC. */
+  rang: number;
+  pct?: 50 | 100;
+  estCC: boolean;
   resultat: 'P' | 'F' | null;
 }
 
@@ -47,6 +82,8 @@ export interface InspectionValeur {
 export interface InspectionBloc {
   valeurs: InspectionValeur[];
   commentaire: string;
+  /** Journal des états choisis (Pass/Fail/Non défini), du plus ancien au plus récent. */
+  historique?: InspectionEvenement[];
 }
 
 export interface ChaineRow {
@@ -70,8 +107,8 @@ export interface ChaineRow {
     [ChaineSlotCard | null, ChaineSlotCard | null],
     [ChaineSlotCard | null, ChaineSlotCard | null]
   ];
-  // Nouvelle colonne Expédition après Prochains Lancements (carte liée)
-  expeditionCard?: ChaineSlotCard | null;
+  // Nouvelle colonne Expédition après Prochains Lancements (pile de 2 cartes)
+  expeditionCards: [ChaineSlotCard | null, ChaineSlotCard | null];
 }
 
 export interface CategorieConfig {

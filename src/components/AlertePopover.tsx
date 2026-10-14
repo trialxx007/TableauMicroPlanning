@@ -10,7 +10,7 @@ import {
   ORDRE_CATEGORIES,
   type JalonInfo,
 } from '../utils/jalons.ts';
-import { getNowParis, getSemaineISO } from '../utils/dateFrance.ts';
+import { getNowParis, getSemaineISO, horodatageBref } from '../utils/dateFrance.ts';
 import {
   useAlertesManuelles,
   ecrireAlertesManuelles,
@@ -41,6 +41,8 @@ interface AlertePopoverProps {
   slotTitle?: string;
   /** Élément déclencheur : le popover s'ancre dessus et le suit au défilement. */
   anchor: HTMLElement;
+  /** Persiste la validation d'un jalon directement sur la carte. */
+  onUpdateCard?: (id: string, updates: Partial<CardItem>) => Promise<void>;
   onClose: () => void;
 }
 
@@ -59,6 +61,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
   card,
   slotTitle,
   anchor,
+  onUpdateCard,
   onClose,
 }) => {
   const catalogue = useJalonCatalogue();
@@ -74,6 +77,9 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
   const [couleur, setCouleur] = useState<AlerteCouleur>(ALERTES_COULEUR_DEFAUT);
   const [visibilite, setVisibilite] = useState<VisibiliteAlerte>(VISIBILITE_ALERTE_DEFAUT);
   const [onglet, setOnglet] = useState<'en-cours' | 'resolues'>('en-cours');
+  const [ongletJalons, setOngletJalons] = useState<'en-retard' | 'valides'>(
+    'en-retard'
+  );
 
   // Position : à droite de la bande, aligné sur son sommet — le panneau se
   // superpose temporairement aux colonnes voisines (Inspection) plutôt que de
@@ -154,17 +160,21 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
   const semaineCourante = getSemaineISO();
   const jalons = getJalonsCard(card, catalogue, semaineCourante);
   const enRetard = jalons.filter((j) => j.enRetard);
+  // Jalons passés à l'état validé : ils alimentent l'historique. Un jalon
+  // validé n'est plus jamais « en retard », donc il quitte la liste à traiter.
+  const jalonsValides = jalons.filter((j) => j.etat === 'VALIDE');
+  const enRetardATraiter = enRetard.filter((j) => j.etat !== 'VALIDE');
   // Regroupement par grandeur, dans l'ordre d'affichage partagé par tout
   // l'application : les nomenclatures d'abord, les statuts ensuite.
   const groupesAlertes: { categorie: JalonInfo['categorie']; jalons: JalonInfo[] }[] =
     ORDRE_CATEGORIES.map((categorie) => ({
       categorie,
-      jalons: enRetard.filter((j) => j.categorie === categorie),
+      jalons: enRetardATraiter.filter((j) => j.categorie === categorie),
     })).filter((g) => g.jalons.length > 0);
   const alertesManuelles = alertesCarte(manuelles, card.id);
   const alertesEnCours = alertesManuelles.filter((a) => alerteActive(a));
   const alertesHistorique = alertesManuelles.filter((a) => alerteResolue(a));
-  const totalAlertes = enRetard.length + alertesEnCours.length;
+  const totalAlertes = enRetardATraiter.length + alertesEnCours.length;
 
   const ajouterAlerte = () => {
     const texte = saisie.trim();
@@ -222,6 +232,27 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
     });
   };
 
+  // Passe un jalon en validé (= réglé) : la carte est mise à jour (état validé
+  // + horodatage), il quitte les retards et entre dans l'historique.
+  const validerJalon = (j: JalonInfo) => {
+    if (!onUpdateCard) return;
+    const now = getNowParis();
+    onUpdateCard(card.id, {
+      jalons: (card.jalons ?? []).map((x) =>
+        x.code === j.code
+          ? {
+              ...x,
+              valide: true,
+              semaine: undefined,
+              date: undefined,
+              tbc: false,
+              valideLe: `${now.dateStr} à ${now.timeStr}`,
+            }
+          : x
+      ),
+    });
+  };
+
   return (
     <div
       ref={panelRef}
@@ -264,76 +295,136 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
 
       {/* Corps défilant : les détails des alertes, rien d'autre */}
       <div className="flex-1 overflow-y-auto p-3.5 space-y-3.5">
-        {/* Jalons en retard */}
-        <section>
-          <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
-            Jalons en retard ({enRetard.length})
-          </h4>
-          {enRetard.length === 0 ? (
-            <p className="text-xs text-slate-500 bg-slate-50 border border-slate-200 rounded-lg p-3">
-              Aucun jalon en retard sur cette carte.
+        {/* Jalons : onglets « En retard » (à valider) / « Validés » (historique) */}
+        <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-2.5">
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+              Jalons
+            </h4>
+          </div>
+          <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-lg p-1 mb-2">
+            <button
+              type="button"
+              onClick={() => setOngletJalons('en-retard')}
+              className={`flex-1 px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors cursor-pointer ${
+                ongletJalons === 'en-retard'
+                  ? 'bg-white text-slate-800 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              En retard ({enRetardATraiter.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setOngletJalons('valides')}
+              className={`flex-1 px-2 py-1 rounded-md text-[10px] font-bold uppercase tracking-wide transition-colors cursor-pointer ${
+                ongletJalons === 'valides'
+                  ? 'bg-white text-slate-800 shadow-sm'
+                  : 'text-slate-500 hover:text-slate-700'
+              }`}
+            >
+              Validés ({jalonsValides.length})
+            </button>
+          </div>
+
+          {ongletJalons === 'en-retard' ? (
+            enRetardATraiter.length === 0 ? (
+              <p className="text-xs text-slate-500 bg-white border border-slate-200 rounded-lg p-3">
+                Aucun jalon en retard sur cette carte.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {groupesAlertes.map((groupe) => (
+                  <div key={groupe.categorie}>
+                    <ul className="space-y-2">
+                      {groupe.jalons.map((j) => {
+                        const retard = semaineCourante - (j.semaine ?? semaineCourante);
+                        const echeance =
+                          j.etat === 'DATE' && j.date
+                            ? `Attendu le ${dateCourteJalon(j.date)} • échéance dépassée`
+                            : `Attendu S${j.semaine} • ${
+                                retard > 0
+                                  ? `${retard} semaine${retard > 1 ? 's' : ''} de retard`
+                                  : 'semaine dépassée'
+                              }`;
+                        return (
+                          <li
+                            key={j.code}
+                            className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 flex items-start gap-2.5"
+                          >
+                            <span
+                              className={`shrink-0 inline-grid grid-cols-[1.55rem_1.75rem] items-stretch overflow-hidden rounded border text-[10px] font-bold ${themeJalon(
+                                j
+                              ).pastille}`}
+                            >
+                              <span className="flex items-center justify-center py-0.5 tracking-wide">
+                                {j.code}
+                              </span>
+                              <span className="flex items-center justify-center py-0.5 border-l border-black/10">
+                                {marqueJalon(j)}
+                              </span>
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <div className="text-xs font-semibold text-slate-800">
+                                {j.titre}
+                              </div>
+                              <div className="text-[11px] text-rose-700 font-medium">
+                                {echeance}
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => validerJalon(j)}
+                              title="Marquer comme validé (réglé)"
+                              className="shrink-0 p-1 text-slate-400 hover:text-emerald-600 hover:bg-emerald-100 rounded cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            </button>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )
+          ) : jalonsValides.length === 0 ? (
+            <p className="text-xs text-slate-400 bg-white border border-dashed border-slate-200 rounded-lg p-2.5">
+              Aucun jalon validé pour l'instant.
             </p>
           ) : (
-            <div className="space-y-3">
-              {groupesAlertes.map((groupe) => (
-                <div key={groupe.categorie}>
-                  <ul className="space-y-2">
-                    {groupe.jalons.map((j) => {
-                      const retard = semaineCourante - (j.semaine ?? semaineCourante);
-                      const echeance =
-                        j.etat === 'DATE' && j.date
-                          ? `Attendu le ${dateCourteJalon(j.date)} • échéance dépassée`
-                          : `Attendu S${j.semaine} • ${
-                              retard > 0
-                                ? `${retard} semaine${retard > 1 ? 's' : ''} de retard`
-                                : 'semaine dépassée'
-                            }`;
-                      return (
-                        <li
-                          key={j.code}
-                          className="bg-rose-50 border border-rose-200 rounded-xl p-2.5 flex items-start gap-2.5"
-                        >
-                          <span
-                            className={`shrink-0 inline-grid grid-cols-[1.55rem_1.75rem] items-stretch overflow-hidden rounded border text-[10px] font-bold ${themeJalon(
-                              j
-                            ).pastille}`}
-                          >
-                            <span className="flex items-center justify-center py-0.5 tracking-wide">
-                              {j.code}
-                            </span>
-                            <span className="flex items-center justify-center py-0.5 border-l border-black/10">
-                              {marqueJalon(j)}
-                            </span>
-                          </span>
-                          <div className="min-w-0">
-                            <div className="text-xs font-semibold text-slate-800">
-                              {j.titre}
-                            </div>
-                            <div className="text-[11px] text-rose-700 font-medium">
-                              {echeance}
-                            </div>
-                          </div>
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              ))}
-            </div>
+            <ul className="space-y-1.5">
+              {jalonsValides.map((j) => {
+                const valideLe = card.jalons?.find((x) => x.code === j.code)?.valideLe;
+                return (
+                  <li
+                    key={j.code}
+                    className="bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 flex items-start gap-2"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5 text-emerald-500" />
+                    <div className="min-w-0 flex-1">
+                      <div title={j.titre} className="text-[11px] font-semibold text-slate-500 line-through truncate">
+                        {j.titre}
+                      </div>
+                      <div className="text-[10px] font-bold text-slate-400 tabular-nums mt-0.5">
+                        {valideLe ? horodatageBref(valideLe) : 'Sans date (validé)'}
+                      </div>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </section>
 
         {/* Alertes écrites à la main : onglets « En cours » / « Résolues » */}
-        <section>
+        <section className="rounded-xl border border-slate-200 bg-slate-50/60 p-2.5">
+          <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
+            Alertes ajoutées{alertesManuelles.length > 0 ? ` (${alertesManuelles.length})` : ''}
+          </h4>
           {alertesManuelles.length === 0 ? (
-            <>
-              <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-2">
-                Alertes ajoutées (0)
-              </h4>
-              <p className="text-xs text-slate-400 bg-slate-50 border border-dashed border-slate-200 rounded-lg p-2.5">
-                Aucune alerte ajoutée pour l'instant.
-              </p>
-            </>
+            <p className="text-xs text-slate-400 bg-white border border-dashed border-slate-200 rounded-lg p-2.5">
+              Aucune alerte ajoutée pour l'instant.
+            </p>
           ) : (
             <>
               <div className="flex items-center gap-1 bg-slate-100 border border-slate-200 rounded-lg p-1 mb-2">
@@ -423,35 +514,35 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
                   Aucune alerte résolue.
                 </p>
               ) : (
-                <ul className="space-y-2">
+                <ul className="space-y-1.5">
                   {alertesHistorique.map((a) => (
                     <li
                       key={a.id}
-                      className="bg-slate-50 border border-slate-200 rounded-xl p-2.5 flex items-start gap-2.5"
+                      className="bg-slate-50 border border-slate-200 rounded-lg px-2 py-1.5 flex items-center gap-2"
                     >
-                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 mt-0.5 text-emerald-500" />
-                      <div className="min-w-0 flex-1">
-                        <div className="text-xs font-semibold text-slate-500 line-through whitespace-pre-wrap break-words">
+                      <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-500" />
+                      <div className="min-w-0 flex-1" title={a.texte}>
+                        <div className="text-[11px] font-semibold text-slate-500 line-through whitespace-pre-wrap break-words truncate">
                           {a.texte}
                         </div>
-                        <div className="text-[10px] text-slate-400 mt-0.5">
-                          Réglée le {a.resolueLe}
-                        </div>
                       </div>
-                      <div className="flex flex-col gap-1 shrink-0">
+                      <span className="shrink-0 text-[10px] font-bold text-slate-400 tabular-nums">
+                        {horodatageBref(a.resolueLe) || 'Réglée'}
+                      </span>
+                      <div className="flex shrink-0 gap-0.5">
                         <button
                           onClick={() => rouvrirAlerte(a)}
                           title="Rouvrir cette alerte"
-                          className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded cursor-pointer"
+                          className="p-0.5 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded cursor-pointer"
                         >
-                          <RotateCcw className="w-3.5 h-3.5" />
+                          <RotateCcw className="w-3 h-3" />
                         </button>
                         <button
                           onClick={() => supprimerAlerte(a.id)}
                           title="Supprimer définitivement"
-                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded cursor-pointer"
+                          className="p-0.5 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded cursor-pointer"
                         >
-                          <Trash2 className="w-3.5 h-3.5" />
+                          <Trash2 className="w-3 h-3" />
                         </button>
                       </div>
                     </li>

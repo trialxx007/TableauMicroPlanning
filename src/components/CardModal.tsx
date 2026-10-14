@@ -30,6 +30,7 @@ import {
   titreCategorie,
   okProdAuto,
   CODES_OK_PROD,
+  CODE_NOMENCLATURE_R,
   type JalonEtat,
 } from '../utils/jalons.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
@@ -72,7 +73,23 @@ interface CardModalProps {
   onJalonAjoute?: () => void | Promise<void>;
 }
 
-type JalonState = { valide: boolean; semaine: number | null; date: string | null; tbc: boolean };
+type JalonState = {
+  valide: boolean;
+  semaine: number | null;
+  semaineFin: number | null;
+  date: string | null;
+  tbc: boolean;
+  valideLe: string | null;
+};
+
+const JALON_INITIAL: JalonState = {
+  valide: false,
+  semaine: null,
+  semaineFin: null,
+  date: null,
+  tbc: false,
+  valideLe: null,
+};
 
 /** Une carte porte ses propres jalons : seuls ceux qu'elle a lui sont affichables. */
 function jalonsInitiaux(card: CardItem | null | undefined): Record<JalonCode, JalonState> {
@@ -81,8 +98,10 @@ function jalonsInitiaux(card: CardItem | null | undefined): Record<JalonCode, Ja
     base[j.code] = {
       valide: Boolean(j.valide),
       semaine: j.semaine ?? null,
+      semaineFin: j.semaineFin ?? null,
       date: j.date ?? null,
       tbc: Boolean(j.tbc),
+      valideLe: j.valideLe ?? null,
     };
   }
   return base;
@@ -92,7 +111,7 @@ function jalonsInitiaux(card: CardItem | null | undefined): Record<JalonCode, Ja
  *  pré-remplissage d'une carte neuve avec les nomenclatures de son type. */
 function preremplirJalons(entrees: { code: string }[]): Record<JalonCode, JalonState> {
   const base: Record<JalonCode, JalonState> = {};
-  for (const j of entrees) base[j.code] = { valide: false, semaine: null, date: null, tbc: false };
+  for (const j of entrees) base[j.code] = { ...JALON_INITIAL };
   return base;
 }
 
@@ -117,8 +136,7 @@ function basculerType(
   }
   // Les nomenclatures propres au nouveau type, elles, arrivent en attente.
   for (const j of attendues) {
-    if (!(j.code in suivant))
-      suivant[j.code] = { valide: false, semaine: null, date: null, tbc: false };
+    if (!(j.code in suivant)) suivant[j.code] = { ...JALON_INITIAL };
   }
   return suivant;
 }
@@ -133,8 +151,7 @@ export const CardModal: React.FC<CardModalProps> = ({
 }) => {
   const catalogue = useJalonCatalogue();
   const [client, setClient] = useState('');
-  const [nom, setNom] = useState('');
-  const [reference, setReference] = useState('');
+  const [batch, setBatch] = useState('');
   const [modele, setModele] = useState('');
   // Nature de matière de la carte. Elle commande le jeu de nomenclatures proposé :
   // R (Raphia) porte R, AC, AF et AI ; T (Tissus) porte AI, AF et AC. Les cartes
@@ -183,16 +200,10 @@ export const CardModal: React.FC<CardModalProps> = ({
   // pourrait plus retaper une semaine. Le brouillon vit le temps de la saisie, la
   // semaine enregistrée ne change qu'à la validation du champ (blur) ou à l'enregistrement.
   const [brouillonSemaine, setBrouillonSemaine] = useState<Record<string, string | undefined>>({});
-  // Sens d'élargissement des pastilles en bord de rangée : près du bord droit,
-  // le panneau s'ouvre vers la gauche pour ne pas sortir de la carte ni faire
-  // rabattre la pastille sur la ligne suivante (elle « retractait » au survol).
-  const [expansionGauche, setExpansionGauche] = useState<Record<string, boolean>>({});
-
   useEffect(() => {
     if (initialData) {
       setClient(initialData.client);
-      setNom(initialData.nom);
-      setReference(initialData.reference);
+      setBatch(initialData.batch);
       setModele(initialData.modele);
       setTypeCarte((initialData.typeCarte as TypeCarte) ?? 'R');
       setJalons(jalonsInitiaux(initialData));
@@ -215,8 +226,7 @@ export const CardModal: React.FC<CardModalProps> = ({
       setChaineCategorie(initialData.chaineCategorie);
     } else {
       setClient('');
-      setNom('');
-      setReference(`OF-2026-${Math.floor(1000 + Math.random() * 9000)}`);
+      setBatch(`OF-2026-${Math.floor(1000 + Math.random() * 9000)}`);
       setModele('');
       setTypeCarte('R');
       setJalons(preremplirJalons(cataloguePourType('R')));
@@ -237,8 +247,7 @@ export const CardModal: React.FC<CardModalProps> = ({
         if (createPrefill.quantiteDemandee) setQuantiteDemandee(createPrefill.quantiteDemandee);
         if (createPrefill.modele) setModele(createPrefill.modele);
         if (createPrefill.client) setClient(createPrefill.client);
-        if (createPrefill.nom) setNom(createPrefill.nom);
-        if (createPrefill.reference) setReference(createPrefill.reference);
+        if (createPrefill.batch) setBatch(createPrefill.batch);
         if (createPrefill.typeCarte) setTypeCarte(createPrefill.typeCarte as TypeCarte);
         if (createPrefill.ofs && createPrefill.ofs.length > 0) setOfs(createPrefill.ofs);
       }
@@ -299,8 +308,8 @@ export const CardModal: React.FC<CardModalProps> = ({
 
   const handleCopyReference = (e: React.MouseEvent) => {
     e.preventDefault();
-    if (reference) {
-      navigator.clipboard.writeText(reference);
+    if (batch) {
+      navigator.clipboard.writeText(batch);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     }
@@ -312,8 +321,10 @@ export const CardModal: React.FC<CardModalProps> = ({
       [code]: {
         valide: prev[code]?.valide ?? false,
         semaine: prev[code]?.semaine ?? null,
+        semaineFin: prev[code]?.semaineFin ?? null,
         date: prev[code]?.date ?? null,
         tbc: prev[code]?.tbc ?? false,
+        valideLe: prev[code]?.valideLe ?? null,
         ...patch,
       },
     }));
@@ -325,21 +336,34 @@ export const CardModal: React.FC<CardModalProps> = ({
    * jour courants) si le jalon n'en a pas encore, pour ne pas retomber en attente.
    */
   const setJalonEtat = (code: JalonCode, etat: JalonEtat) => {
-    if (etat === 'VALIDE') setJalon(code, { valide: true, semaine: null, date: null, tbc: false });
+    if (etat === 'VALIDE')
+      setJalon(code, {
+        valide: true,
+        semaine: null,
+        semaineFin: null,
+        date: null,
+        tbc: false,
+        // On conserve l'horodatage de la validation initiale, on ne le réécrit
+        // pas à chaque aller-retour dans la listbox.
+        valideLe: jalons[code]?.valideLe ?? `${getNowParis().dateStr} à ${getNowParis().timeStr}`,
+      });
     else if (etat === 'EN_ATTENTE')
-      setJalon(code, { valide: false, semaine: null, date: null, tbc: false });
+      setJalon(code, { valide: false, valideLe: null, semaine: null, semaineFin: null, date: null, tbc: false });
     else if (etat === 'TBC')
-      setJalon(code, { valide: false, semaine: null, date: null, tbc: true });
+      setJalon(code, { valide: false, valideLe: null, semaine: null, semaineFin: null, date: null, tbc: true });
     else if (etat === 'DATE')
       setJalon(code, {
         valide: false,
+        valideLe: null,
         tbc: false,
         semaine: null,
+        semaineFin: null,
         date: jalons[code]?.date ?? dateDuJourJalon(),
       });
     else
       setJalon(code, {
         valide: false,
+        valideLe: null,
         tbc: false,
         date: null,
         semaine: jalons[code]?.semaine ?? getSemaineISO(),
@@ -363,20 +387,6 @@ export const CardModal: React.FC<CardModalProps> = ({
     setBrouillonSemaine((prev) => ({ ...prev, [code]: undefined }));
     if (brut.trim() === '') setJalon(code, { semaine: null });
     else setJalon(code, { semaine: normaliserSemaine(brut) });
-  };
-
-  /** Au survol d'une pastille, mesure si son panneau étendu (7rem → 15.5rem)
-   *  sortirait de la rangée : si oui, il s'ouvre vers la gauche pour rester
-   *  dans la carte, sans faire bouger la pastille ni rabattre la ligne. */
-  const adapterExpansion = (code: JalonCode, element: HTMLElement) => {
-    const rangee = element.parentElement;
-    if (!rangee) return;
-    const pastille = element.getBoundingClientRect();
-    const bord = rangee.getBoundingClientRect();
-    const gauche = pastille.right + 136 > bord.right - 8;
-    setExpansionGauche((prev) =>
-      prev[code] === gauche ? prev : { ...prev, [code]: gauche }
-    );
   };
 
   /**
@@ -418,7 +428,7 @@ export const CardModal: React.FC<CardModalProps> = ({
       }
       setNouveauCode('');
       setNouvelleCategorie('STATUT');
-      setJalon(code, { valide: false, semaine: null });
+      setJalon(code, { valide: false, valideLe: null, semaine: null });
     } catch (err) {
       setErreurJalon((err as Error).message || "Impossible d'ajouter le jalon");
     } finally {
@@ -460,7 +470,7 @@ export const CardModal: React.FC<CardModalProps> = ({
     setJalons((prev) => {
       const base = t === typeCarte ? prev : basculerType(typeCarte, t, prev);
       if (!(code in base))
-        return { ...base, [code]: { valide: false, semaine: null, date: null, tbc: false } };
+        return { ...base, [code]: { ...JALON_INITIAL } };
       const suivant = { ...base };
       delete suivant[code];
       return suivant;
@@ -478,8 +488,8 @@ export const CardModal: React.FC<CardModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!client.trim() || !nom.trim() || !reference.trim() || !modele.trim()) {
-      setError('Veuillez renseigner le client, le nom, la référence et le modèle.');
+    if (!client.trim() || !batch.trim() || !modele.trim()) {
+      setError('Veuillez renseigner le client, le batch et le nom.');
       return;
     }
 
@@ -494,8 +504,7 @@ export const CardModal: React.FC<CardModalProps> = ({
     try {
       await onSubmit({
         client: client.trim(),
-        nom: nom.trim(),
-        reference: reference.trim(),
+        batch: batch.trim(),
         modele: modele.trim(),
         typeCarte,
         // Seuls les jalons portés par la carte sont envoyés : rien d'autre n'est créé pour elle.
@@ -512,10 +521,12 @@ export const CardModal: React.FC<CardModalProps> = ({
             code,
             valide: Boolean(etat?.valide),
             ...(semaine != null ? { semaine } : {}),
+            ...(code === 'R' && etat?.semaineFin != null ? { semaineFin: etat.semaineFin } : {}),
             ...(etat?.date != null && normaliserDateJalon(etat.date) != null
               ? { date: normaliserDateJalon(etat.date) as string }
               : {}),
             ...(etat?.tbc ? { tbc: true } : {}),
+            ...(etat?.valide && etat?.valideLe ? { valideLe: etat.valideLe } : {}),
             ...(categoriesEnAttente[code] ? { categorie: categoriesEnAttente[code] } : {}),
           };
         }),
@@ -559,6 +570,7 @@ export const CardModal: React.FC<CardModalProps> = ({
         {
           valide: Boolean(etat?.valide),
           semaine: etat?.semaine ?? null,
+          semaineFin: etat?.semaineFin ?? null,
           date: etat?.date ?? null,
           tbc: etat?.tbc,
         },
@@ -633,7 +645,7 @@ export const CardModal: React.FC<CardModalProps> = ({
                 {initialData && (
                   <div className="mb-1.5 text-[11px] text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-0.5">
                     <span className="font-semibold text-slate-900">{client || 'Client'}</span>
-                    <span className="font-medium text-slate-700">{modele || 'Modèle'}</span>
+                    <span className="font-medium text-slate-700">{modele || 'Nom'}</span>
                   </div>
                 )}
 
@@ -747,13 +759,13 @@ export const CardModal: React.FC<CardModalProps> = ({
                 />
               </div>
 
-              {/* Référence */}
+              {/* Batch */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs font-semibold text-slate-700">
-                    Référence <span className="text-rose-500">*</span>
+                    Batch <span className="text-rose-500">*</span>
                   </label>
-                  {reference && (
+                  {batch && (
                     <button
                       type="button"
                       onClick={handleCopyReference}
@@ -777,8 +789,8 @@ export const CardModal: React.FC<CardModalProps> = ({
                   type="text"
                   required
                   placeholder="ex: OF-2026-001"
-                  value={reference}
-                  onChange={(e) => setReference(e.target.value)}
+                  value={batch}
+                  onChange={(e) => setBatch(e.target.value)}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                 />
               </div>
@@ -851,21 +863,6 @@ export const CardModal: React.FC<CardModalProps> = ({
                 </div>
               </div>
 
-              {/* Modèle */}
-              <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Modèle <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  placeholder="ex: Robe Soirée"
-                  value={modele}
-                  onChange={(e) => setModele(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
-                />
-              </div>
-
               {/* Nom */}
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -874,9 +871,25 @@ export const CardModal: React.FC<CardModalProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder="ex: Robe Soie Plissée"
-                  value={nom}
-                  onChange={(e) => setNom(e.target.value)}
+                  placeholder="ex: Robe Soirée Haute Couture"
+                  value={modele}
+                  onChange={(e) => setModele(e.target.value)}
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                />
+              </div>
+
+              {/* Quantité demandée */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Quantité demandée <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="number"
+                  required
+                  min={1}
+                  placeholder="ex: 200"
+                  value={quantiteDemandee}
+                  onChange={(e) => setQuantiteDemandee(Math.max(0, Number(e.target.value)))}
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
                 />
               </div>
@@ -974,11 +987,11 @@ export const CardModal: React.FC<CardModalProps> = ({
                         </button>
                       )}
                     </div>
-                    {/* Les pastilles se rabattent sur la ligne suivante quand la place manque :
-                        elles gardent la largeur de leur contenu au lieu de se
-                        partager la ligne, sinon une carte avec dix jalons prenait
-                        deux rangées de cases surdimensionnées. */}
-                    <div className="flex flex-wrap items-stretch gap-1.5">
+                    {/* Les pastilles gardent une largeur fixe et se rabattent sur la
+                        ligne suivante quand la place manque. À l'édition elles
+                        grandissent vers le bas (jamais latéralement), sans recouvrir
+                        leurs voisines ni casser l'alignement de la rangée. */}
+                    <div className="flex flex-wrap items-start gap-1.5">
                       {groupe.jalons.map((jalon) => {
                 const planifie = jalon.etat === 'SEMAINE';
                 const datePrevue = jalon.etat === 'DATE';
@@ -988,106 +1001,123 @@ export const CardModal: React.FC<CardModalProps> = ({
                 const theme = themeJalon(jalon);
 
                 return (
-                  // La pastille s'élargit au survol/focus pour révéler les contrôles
-                  // (état + semaine/date). La largeur compacte (7rem) reste figée dans
-                  // le flux : seuls les contrôles, en surimpression, s'étirent — aucun
-                  // rabattement de ligne, même en bord de rangée.
+                  // La pastille grandit vers le BAS au survol/focus pour révéler les
+                  // contrôles (état + semaine/date) : largeur fixe (7rem), hauteur
+                  // animée. Aucun chevauchement latéral, la rangée ne se casse pas.
                   <div
                     key={jalon.code}
-                    onPointerEnter={(e) => adapterExpansion(jalon.code, e.currentTarget)}
-                    onFocus={(e) => adapterExpansion(jalon.code, e.currentTarget)}
-                    className="group/j relative shrink-0 w-[7rem]"
+                    className="group/j relative min-w-[7rem] shrink-0 self-start"
                   >
-                    <div
-                      className={`relative overflow-hidden rounded-md border px-1 py-0.5 w-[7rem] ${theme.fond}`}
-                    >
-                      {/* Couche 1 : code et marque courte (✓, S40, 12/06, TBC, —).
-                          Elle fixe la hauteur et s'efface pendant l'édition. */}
-                      <span
-                        className={`flex items-center justify-center gap-1 whitespace-nowrap text-[11px] leading-4 transition-opacity duration-150 group-hover/j:opacity-0 group-focus-within/j:opacity-0 ${theme.texte}`}
-                      >
-                        {jalon.enRetard ? (
-                          <AlertTriangle className="w-3 h-3 shrink-0" />
-                        ) : jalon.etat === 'VALIDE' ? (
-                          <Check className="w-3 h-3 shrink-0" />
-                        ) : planifie || datePrevue ? (
-                          <Calendar className="w-3 h-3 shrink-0" />
-                        ) : (
-                          <Clock className="w-3 h-3 shrink-0" />
-                        )}
-                        <span className="font-bold">{jalon.code}:</span>
-                        {/* Marque courte, identique au tableau et au suivi : sa largeur
-                            ne dépend plus du libellé complet. */}
-                        <span className="inline-block min-w-[2rem] text-center font-bold">
-                          {marqueJalon(jalon)}
+                    <div className={`rounded-md border ${theme.fond}`}>
+                      {/* En-tête compact : code et marque courte (✓, S40, 12/06, TBC, —).
+                          Il reste visible pendant l'édition et fixe la largeur. Le
+                          bouton de retrait occupe d'emblée sa place (spacer + bouton)
+                          pour que l'en-tête ne se décale jamais au survol. */}
+                      <div className="flex items-center gap-1 px-1 py-0.5">
+                        <span className="w-4 shrink-0" aria-hidden="true" />
+                        <span
+                          className={`flex flex-1 min-w-[max-content] items-center justify-center gap-1 whitespace-nowrap text-[11px] leading-4 ${theme.texte}`}
+                        >
+                          {jalon.enRetard ? (
+                            <AlertTriangle className="w-3 h-3 shrink-0" />
+                          ) : jalon.etat === 'VALIDE' ? (
+                            <Check className="w-3 h-3 shrink-0" />
+                          ) : planifie || datePrevue ? (
+                            <Calendar className="w-3 h-3 shrink-0" />
+                          ) : (
+                            <Clock className="w-3 h-3 shrink-0" />
+                          )}
+                          <span className="font-bold">{jalon.code}:</span>
+                          {/* Marque courte, identique au tableau et au suivi : sa largeur
+                              ne dépend plus du libellé complet. */}
+                          <span className="inline-block min-w-[2rem] text-center font-bold">
+                            {marqueJalon(jalon)}
+                          </span>
                         </span>
-                      </span>
+                        {/* Retrait du jalon de CETTE carte. Le catalogue partagé et les
+                            autres cartes sont intacts : le code reste disponible ailleurs. */}
+                        <button
+                          type="button"
+                          onClick={() => handleSupprimerJalon(jalon.code)}
+                          title={`Retirer le jalon ${jalon.code} de cette carte`}
+                          aria-label={`Retirer le jalon ${jalon.code} de cette carte`}
+                          className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border border-black/10 bg-white/90 text-slate-500 opacity-0 transition-opacity hover:border-rose-300 hover:bg-white hover:text-rose-600 group-hover/j:opacity-100 group-focus-within/j:opacity-100"
+                        >
+                          <X className="w-2.5 h-2.5" />
+                        </button>
+                      </div>
+
+                      {/* Contrôles révélés vers le BAS, dans le flux : la pastille grandit
+                          en hauteur (grid-rows 0fr→1fr) et pousse le contenu suivant au
+                          lieu de s'étaler latéralement sur ses voisines. */}
+                      <div className="grid grid-rows-[0fr] transition-[grid-template-rows] duration-200 ease-out group-hover/j:grid-rows-[1fr] group-focus-within/j:grid-rows-[1fr]">
+                        <div className="overflow-hidden">
+                          <div className="flex flex-col items-center gap-1 border-t border-black/5 px-1 pb-1 pt-1">
+                            <select
+                              value={jalon.etat}
+                              onChange={(e) => setJalonEtat(jalon.code, e.target.value as JalonEtat)}
+                              aria-label={`État du jalon ${jalon.code}`}
+                              className={`w-[6.5rem] px-1 py-0.5 text-[11px] font-semibold leading-4 rounded border bg-white cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${theme.controle} ${theme.bordure}`}
+                            >
+                              <option value="EN_ATTENTE">En attente</option>
+                              <option value="SEMAINE">Semaine</option>
+                              <option value="DATE">Date</option>
+                              <option value="TBC">TBC</option>
+                              <option value="VALIDE">Validé</option>
+                            </select>
+
+                            {/* Le champ semaine n'existe que pour l'état « Semaine ». */}
+                            {planifie && (
+                              <input
+                                type="number"
+                                min={SEMAINE_MIN}
+                                max={SEMAINE_MAX}
+                                placeholder="S--"
+                                value={brouillonSemaine[jalon.code] ?? (jalon.semaine ?? '')}
+                                onChange={(e) => saisirSemaine(jalon.code, e.target.value)}
+                                onBlur={() => validerSemaine(jalon.code)}
+                                aria-label={`Semaine cible du jalon ${jalon.code}`}
+                                className={`w-16 px-1 py-0.5 text-[11px] font-bold text-center leading-4 rounded border bg-white focus:outline-hidden focus:ring-1 focus:ring-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${theme.controle} ${theme.bordure}`}
+                              />
+                            )}
+
+                            {/* Nomenclature R : semaine de fin de la plage (marge).
+                                Orange de la semaine cible à cette fin, rouge au-delà. */}
+                            {planifie && jalon.code === CODE_NOMENCLATURE_R && (
+                              <input
+                                type="number"
+                                min={SEMAINE_MIN}
+                                max={SEMAINE_MAX}
+                                placeholder="fin"
+                                value={jalon.semaineFin ?? ''}
+                                onChange={(e) =>
+                                  setJalon(jalon.code, {
+                                    semaineFin:
+                                      e.target.value.trim() === ''
+                                        ? null
+                                        : normaliserSemaine(e.target.value),
+                                  })
+                                }
+                                aria-label={`Semaine de fin du jalon ${jalon.code}`}
+                                title="Semaine de fin de la marge (orange jusqu'ici, rouge au-delà)"
+                                className={`w-16 px-1 py-0.5 text-[11px] font-bold text-center leading-4 rounded border bg-white focus:outline-hidden focus:ring-1 focus:ring-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${theme.controle} ${theme.bordure}`}
+                              />
+                            )}
+
+                            {/* Le calendrier n'existe que pour l'état « Date ». */}
+                            {datePrevue && (
+                              <input
+                                type="date"
+                                value={jalon.date ?? ''}
+                                onChange={(e) => setJalon(jalon.code, { date: e.target.value || null })}
+                                aria-label={`Date cible du jalon ${jalon.code}`}
+                                className={`w-[6.5rem] px-1 py-0.5 text-[11px] font-semibold leading-4 rounded border bg-white cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${theme.controle} ${theme.bordure}`}
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </div>
                     </div>
-
-                    {/* Couche 2 : les vrais contrôles, révélés par l'élargissement. En
-                        surimpression (absolute), leur largeur ne déplace plus la pastille
-                        ni les voisines : au survol, la piste s'étire vers la droite, ou
-                        vers la gauche en fin de rangée quand la place manque. */}
-                    <div
-                      className={`absolute top-0 z-10 flex h-full items-center justify-center gap-1 whitespace-nowrap overflow-hidden rounded-md border px-1 py-0.5 transition-[width] duration-200 ease-out w-[7rem] group-hover/j:w-[15.5rem] group-focus-within/j:w-[15.5rem] opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto group-focus-within/j:opacity-100 group-focus-within/j:pointer-events-auto ${
-                        expansionGauche[jalon.code] ? 'right-0' : 'left-0'
-                      } ${theme.fond}`}
-                    >
-                      <span className={`text-[11px] font-bold leading-4 ${theme.texte}`}>
-                        {jalon.code}:
-                      </span>
-
-                      <select
-                        value={jalon.etat}
-                        onChange={(e) => setJalonEtat(jalon.code, e.target.value as JalonEtat)}
-                        aria-label={`État du jalon ${jalon.code}`}
-                        className={`w-[60px] shrink-0 px-1 py-0.5 text-[11px] font-semibold leading-4 rounded border bg-white cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${theme.controle} ${theme.bordure}`}
-                      >
-                        <option value="EN_ATTENTE">En attente</option>
-                        <option value="SEMAINE">Semaine</option>
-                        <option value="DATE">Date</option>
-                        <option value="TBC">TBC</option>
-                        <option value="VALIDE">Validé</option>
-                      </select>
-
-                      {/* Le champ semaine n'existe que pour l'état « Semaine ». */}
-                      {planifie && (
-                        <input
-                          type="number"
-                          min={SEMAINE_MIN}
-                          max={SEMAINE_MAX}
-                          placeholder="S--"
-                          value={brouillonSemaine[jalon.code] ?? (jalon.semaine ?? '')}
-                          onChange={(e) => saisirSemaine(jalon.code, e.target.value)}
-                          onBlur={() => validerSemaine(jalon.code)}
-                          aria-label={`Semaine cible du jalon ${jalon.code}`}
-                          className={`w-8 shrink-0 px-0.5 py-0.5 text-[11px] font-bold text-center leading-4 rounded border bg-white focus:outline-hidden focus:ring-1 focus:ring-blue-400 [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none [&::-webkit-outer-spin-button]:appearance-none ${theme.controle} ${theme.bordure}`}
-                        />
-                      )}
-
-                      {/* Le calendrier n'existe que pour l'état « Date ». */}
-                      {datePrevue && (
-                        <input
-                          type="date"
-                          value={jalon.date ?? ''}
-                          onChange={(e) => setJalon(jalon.code, { date: e.target.value || null })}
-                          aria-label={`Date cible du jalon ${jalon.code}`}
-                          className={`w-[104px] shrink-0 px-1 py-0.5 text-[11px] font-semibold leading-4 rounded border bg-white cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${theme.controle} ${theme.bordure}`}
-                        />
-                      )}
-                    </div>
-
-                    {/* Retrait du jalon de CETTE carte. Le catalogue partagé et les autres
-                        cartes sont intacts : le code reste disponible pour une autre carte. */}
-                    <button
-                      type="button"
-                      onClick={() => handleSupprimerJalon(jalon.code)}
-                      title={`Retirer le jalon ${jalon.code} de cette carte`}
-                      aria-label={`Retirer le jalon ${jalon.code} de cette carte`}
-                      className="absolute -top-1.5 -right-1.5 z-20 hidden group-hover/j:flex items-center justify-center w-4 h-4 rounded-full bg-white border border-slate-300 text-slate-400 hover:text-rose-600 hover:border-rose-300 shadow-xs"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
                   </div>
                 );
               })}
@@ -1174,7 +1204,7 @@ export const CardModal: React.FC<CardModalProps> = ({
               </span>
               {!isAddingOF && <button type="button" onClick={() => setIsAddingOF(true)} className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold text-slate-900 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg shadow-2xs transition-colors cursor-pointer"><Plus className="w-3 h-3" /><span>Ajouter un OF</span></button>}
             </div>
-            <OFSubTable cardId={initialData?.id || 'NOUVELLE-CARTE'} totalDemandee={quantiteDemandee} ofs={ofs} isAddingOF={isAddingOF} onCloseAddOF={() => setIsAddingOF(false)} onUpdateOFs={(newOfs) => { setOfs(newOfs); const totalFinie = newOfs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0); if (newOfs.length > 0) { setQuantiteFinie(totalFinie); } }} />
+            <OFSubTable cardId={initialData?.id || 'NOUVELLE-CARTE'} totalDemandee={quantiteDemandee} onChangeTotalDemandee={setQuantiteDemandee} ofs={ofs} isAddingOF={isAddingOF} onCloseAddOF={() => setIsAddingOF(false)} onUpdateOFs={(newOfs) => { setOfs(newOfs); const totalFinie = newOfs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0); if (newOfs.length > 0) { setQuantiteFinie(totalFinie); } }} />
           </div>
 
           {/* Section 3: Remarques */}

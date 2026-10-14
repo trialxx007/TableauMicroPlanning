@@ -88,8 +88,7 @@ export const cardApi = {
     const newCard: CardItem = {
       id: `CRD-L${Date.now().toString(36).toUpperCase()}`,
       client: data.client,
-      nom: data.nom,
-      reference: data.reference,
+      batch: data.batch,
       modele: data.modele,
       ...(data.typeCarte ? { typeCarte: data.typeCarte } : {}),
       jalons: Array.isArray(data.jalons)
@@ -356,7 +355,7 @@ export interface SuiviGlobalLayoutRow {
   modeleEnCoursCards: (unknown | null)[];
   inspections: unknown[];
   prochainsLancementsCards: unknown[];
-  expeditionCard?: unknown | null;
+  expeditionCards?: unknown[];
   alertes?: unknown[];
 }
 

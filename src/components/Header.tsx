@@ -37,8 +37,8 @@ export const Header: React.FC<HeaderProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
           {/* Left Title & Status */}
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-500/20">
-              <ClipboardList className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center text-white">
+              <ClipboardList className="w-5 h-5" />
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">

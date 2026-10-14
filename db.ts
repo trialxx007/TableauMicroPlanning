@@ -33,6 +33,9 @@ function dbPath(): string {
 
 let db: DatabaseSync | null = null;
 
+/** La migration des champs de carte (reference→batch, retrait de nom) ne tourne qu'une fois. */
+let migrationChampsCarteFaite = false;
+
 function openDb(): DatabaseSync {
   if (db) return db;
 
@@ -112,6 +115,15 @@ function initSchema(conn: DatabaseSync): void {
   if (!colonnesJalons.some((c) => c.name === 'tbc')) {
     conn.exec('ALTER TABLE card_jalons ADD COLUMN tbc INTEGER NOT NULL DEFAULT 0');
   }
+  // Horodatage du passage à l'état validé (historique des jalons) : une base
+  // antérieure n'a pas la colonne. Idempotent.
+  if (!colonnesJalons.some((c) => c.name === 'valide_le')) {
+    conn.exec('ALTER TABLE card_jalons ADD COLUMN valide_le TEXT');
+  }
+  // Semaine de fin (nomenclature R) : borne haute de la plage orange. Idempotent.
+  if (!colonnesJalons.some((c) => c.name === 'semaine_fin')) {
+    conn.exec('ALTER TABLE card_jalons ADD COLUMN semaine_fin INTEGER');
+  }
 
   // Les nomenclatures sont désormais celles des deux natures de matière (R et T) :
   // le code A devient AI, et le statut SMS disparaît du catalogue. Ses états sont
@@ -170,6 +182,25 @@ function initSchema(conn: DatabaseSync): void {
     }
   }
 
+  // Ordre d'affichage des nomenclatures, aligné sur toutes les bases : Raphia en
+  // R, AC, AI, AF (C en fin) ; Tissus en T, AC, AI, AF. Une base existante garde
+  // l'ordre qu'elle avait en base, on le recalibre donc explicitement ici. Les
+  // statuts, eux, ne bougent pas.
+  const ordreNomenclatures: [string, number][] = [
+    ['R', 100],
+    ['T', 105],
+    ['AC', 110],
+    ['AI', 115],
+    ['AF', 120],
+    ['AR', 130],
+    ['ATR', 140],
+    ['C', 150],
+  ];
+  const recalibrerOrdre = conn.prepare(
+    "UPDATE jalons SET ordre = ? WHERE code = ? AND categorie = 'NOMENCLATURE'"
+  );
+  for (const [code, ordre] of ordreNomenclatures) recalibrerOrdre.run(ordre, code);
+
   // Le statut TDS/PPS rejoint toutes les cartes existantes, une seule fois, au
   // moment où il apparaît dans le catalogue. Sur une base neuve il n'y a pas
   // encore de carte : seedIfEmpty les créera avec le jalon via cataloguePourType.
@@ -193,6 +224,36 @@ function initSchema(conn: DatabaseSync): void {
         maj_le      TEXT NOT NULL
       );
     `);
+  }
+
+  // Renommage du champ `reference` en `batch` et abandon du champ `nom` (le nom de
+  // la carte est désormais porté par `modele`). Les cartes déjà stockées en JSON sont
+  // migrées une seule fois par processus : l'opération est idempotente.
+  if (!migrationChampsCarteFaite) {
+    const lignes = conn.prepare('SELECT id, data FROM cards').all() as {
+      id: string;
+      data: string;
+    }[];
+    const ecrire = conn.prepare('UPDATE cards SET data = ? WHERE id = ?');
+    for (const ligne of lignes) {
+      try {
+        const data = JSON.parse(ligne.data) as Record<string, unknown>;
+        let change = false;
+        if ('reference' in data) {
+          data.batch = data.reference;
+          delete data.reference;
+          change = true;
+        }
+        if ('nom' in data) {
+          delete data.nom;
+          change = true;
+        }
+        if (change) ecrire.run(JSON.stringify(data), ligne.id);
+      } catch {
+        // Ligne illisible : on l'ignore sans interrompre le démarrage.
+      }
+    }
+    migrationChampsCarteFaite = true;
   }
 }
 
@@ -449,20 +510,26 @@ export function deleteJalon(code: string): void {
 
 function etatsForCard(cardId: string): CardJalon[] {
   const rows = getDb()
-    .prepare('SELECT code, valide, semaine, date, tbc FROM card_jalons WHERE card_id = ?')
+    .prepare(
+      'SELECT code, valide, semaine, semaine_fin, date, tbc, valide_le FROM card_jalons WHERE card_id = ?'
+    )
     .all(cardId) as {
     code: string;
     valide: number;
     semaine: number | null;
+    semaine_fin: number | null;
     date: string | null;
     tbc: number | null;
+    valide_le: string | null;
   }[];
   return rows.map((r) => ({
     code: r.code,
     valide: Boolean(r.valide),
     ...(r.semaine != null ? { semaine: r.semaine } : {}),
+    ...(r.semaine_fin != null ? { semaineFin: r.semaine_fin } : {}),
     ...(r.date != null ? { date: r.date } : {}),
     ...(r.tbc ? { tbc: true } : {}),
+    ...(r.valide_le != null ? { valideLe: r.valide_le } : {}),
   }));
 }
 
@@ -507,12 +574,14 @@ function writeJalons(cardId: string, etats: CardJalon[] | undefined): void {
   if (etats === undefined) return;
 
   const insert = conn.prepare(`
-    INSERT INTO card_jalons (card_id, code, valide, semaine, date, tbc) VALUES (?, ?, ?, ?, ?, ?)
+    INSERT INTO card_jalons (card_id, code, valide, semaine, semaine_fin, date, tbc, valide_le) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(card_id, code) DO UPDATE SET
       valide = excluded.valide,
       semaine = excluded.semaine,
+      semaine_fin = excluded.semaine_fin,
       date = excluded.date,
-      tbc = excluded.tbc
+      tbc = excluded.tbc,
+      valide_le = excluded.valide_le
   `);
   const connus = new Set(
     (conn.prepare('SELECT code FROM jalons').all() as { code: string }[]).map((r) => r.code)
@@ -520,7 +589,16 @@ function writeJalons(cardId: string, etats: CardJalon[] | undefined): void {
 
   for (const e of etats) {
     if (!connus.has(e.code)) continue;
-    insert.run(cardId, e.code, e.valide ? 1 : 0, e.semaine ?? null, e.date ?? null, e.tbc ? 1 : 0);
+    insert.run(
+      cardId,
+      e.code,
+      e.valide ? 1 : 0,
+      e.semaine ?? null,
+      e.semaineFin ?? null,
+      e.date ?? null,
+      e.tbc ? 1 : 0,
+      e.valideLe ?? null
+    );
   }
 }
 

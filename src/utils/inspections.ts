@@ -1,4 +1,4 @@
-import { InspectionBloc, InspectionValeur } from '../types/suiviGlobal.ts';
+import { InspectionBloc, InspectionValeur, InspectionEvenement } from '../types/suiviGlobal.ts';
 import { getNowParis } from './dateFrance.ts';
 
 /** Date du jour au format ISO (AAAA-MM-JJ), calée sur le fuseau du site :
@@ -19,15 +19,17 @@ export function indiceOF(valeurs: InspectionValeur[], index: number): number {
   return valeurs.slice(0, index + 1).filter((v) => v.type === 'OF').length;
 }
 
-/** Indice affiché d'une valeur : le préfixe I ou OF est toujours là, suivi
- *  de l'indice (`50%` / `100%` pour un I, 1, 2, 3… pour un OF). */
+/** Libellé affiché d'une valeur. Pour un I, l'indice est son rang parmi les
+ *  contrôles (1, 2, 3…) et `pct` le taux (50 %, 100 %) : « I1 50 % ». Pour un
+ *  OF, l'indice est sa position dans la liste des OF (1, 2, 3…). */
 export function libelleValeur(
   valeurs: InspectionValeur[],
   index: number
-): { prefixe: string; indice: string } {
+): { prefixe: string; indice: string; pct?: string } {
   const valeur = valeurs[index];
   if (valeur?.type === 'I') {
-    return { prefixe: 'I', indice: `${valeur.pct ?? 50}%` };
+    const rang = valeurs.slice(0, index + 1).filter((v) => v.type === 'I').length;
+    return { prefixe: 'I', indice: String(rang), pct: `${valeur.pct ?? 50}%` };
   }
   return { prefixe: 'OF', indice: String(indiceOF(valeurs, index)) };
 }
@@ -39,7 +41,7 @@ export function aControle50(bloc: InspectionBloc): boolean {
 
 /** Bloc d'inspection vierge : aucune valeur, commentaire facultatif. */
 export function blocInspectionVide(commentaire = ''): InspectionBloc {
-  return { valeurs: [], commentaire };
+  return { valeurs: [], commentaire, historique: [] };
 }
 
 /** Recompose un bloc écrit par une version antérieure (cache partiel). */
@@ -52,8 +54,13 @@ export function normaliserBloc(brut: unknown): InspectionBloc {
   // Format courant.
   if (Array.isArray(b.valeurs) || typeof b.commentaire === 'string') {
     return {
-      valeurs: completerPct(Array.isArray(b.valeurs) ? b.valeurs : []),
+      valeurs: affecterOfIndex(
+        completerPct(Array.isArray(b.valeurs) ? b.valeurs : [])
+      ),
       commentaire: typeof b.commentaire === 'string' ? b.commentaire : '',
+      historique: Array.isArray((b as Partial<InspectionBloc>).historique)
+        ? ((b as Partial<InspectionBloc>).historique as InspectionEvenement[])
+        : [],
     };
   }
   // Bloc intermédiaire « référence + éléments + lignes » : les éléments
@@ -84,6 +91,23 @@ function completerPct(valeurs: InspectionValeur[]): InspectionValeur[] {
   });
 }
 
+/** Rattache chaque contrôle I à l'OF courant (0 = OF1, 1 = OF2…) d'après les
+ *  valeurs OF qui le précèdent dans la liste. Les I déjà rattachés (ofIndex
+ *  présent) ne sont pas modifiés. */
+export function affecterOfIndex(
+  valeurs: InspectionValeur[]
+): InspectionValeur[] {
+  let nbOf = 0;
+  return valeurs.map((v) => {
+    if (v.type === 'OF') {
+      nbOf += 1;
+      return v;
+    }
+    if (typeof v.ofIndex === 'number') return v;
+    return { ...v, ofIndex: nbOf };
+  });
+}
+
 /** Migration des plus anciens caches : le champ texte et les libellés des
  *  contrôles deviennent le commentaire, leurs états les valeurs I. */
 export function migrerVersBloc(
@@ -110,14 +134,14 @@ export function migrerVersBloc(
 }
 
 /** Représentation textuelle d'un bloc pour l'export CSV :
- *  `I50% : 06/10 Pass | OF1 : 06/10`, puis le commentaire. Pass/Fail n'est
+ *  `I1 50% : 06/10 Pass | OF1 : 06/10`, puis le commentaire. Pass/Fail n'est
  *  écrit que s'il a été choisi. */
 export function blocEnTexte(bloc: InspectionBloc): string {
   const valeurs = bloc.valeurs.map((v, i) => {
-    const { prefixe, indice } = libelleValeur(bloc.valeurs, i);
+    const { prefixe, indice, pct } = libelleValeur(bloc.valeurs, i);
     const etat =
       v.resultat === 'P' ? ' Pass' : v.resultat === 'F' ? ' Fail' : '';
-    return `${prefixe}${indice} : ${dateCourte(v.date)}${etat}`;
+    return `${prefixe}${indice}${pct ? ` ${pct}` : ''} : ${dateCourte(v.date)}${etat}`;
   });
   return [...valeurs, bloc.commentaire].filter(Boolean).join(' | ');
 }

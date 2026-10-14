@@ -20,8 +20,7 @@ export const INITIAL_CARDS: LegacyCard[] = [
   {
     id: 'CRD-001',
     client: 'Christian Dior',
-    nom: 'Robe Soie Plissée Soleil',
-    reference: 'CD-2026-H08',
+    batch: 'CD-2026-H08',
     modele: 'Robe Soirée Haute Couture',
     dt: true,
     tc: true,
@@ -82,8 +81,7 @@ export const INITIAL_CARDS: LegacyCard[] = [
   {
     id: 'CRD-002',
     client: 'Hermès Paris',
-    nom: 'Manteau Cachemire Double-Face',
-    reference: 'HER-2026-M42',
+    batch: 'HER-2026-M42',
     modele: 'Manteau Drap de Cachemire',
     dt: true,
     tc: true,
@@ -120,8 +118,7 @@ export const INITIAL_CARDS: LegacyCard[] = [
   {
     id: 'CRD-003',
     client: 'Chanel',
-    nom: 'Veste Tailleur Tweed Brodé',
-    reference: 'CH-2026-V21',
+    batch: 'CH-2026-V21',
     modele: 'Veste Iconique 4 Poches',
     dt: true,
     tc: true,
@@ -170,8 +167,7 @@ export const INITIAL_CARDS: LegacyCard[] = [
   {
     id: 'CRD-004',
     client: 'Saint Laurent',
-    nom: 'Smoking Grain de Poudre Noir',
-    reference: 'SLP-2026-S31',
+    batch: 'SLP-2026-S31',
     modele: 'Veste Smoking Col Satin',
     dt: false,
     tc: false,
@@ -193,8 +189,7 @@ export const INITIAL_CARDS: LegacyCard[] = [
   {
     id: 'CRD-005',
     client: 'Celine',
-    nom: 'Trench Gabardine Coton Impérial',
-    reference: 'CEL-2026-T49',
+    batch: 'CEL-2026-T49',
     modele: 'Trench Croisé Ceinturé',
     dt: true,
     tc: true,
@@ -243,8 +238,7 @@ export const INITIAL_CARDS: LegacyCard[] = [
   {
     id: 'CRD-006',
     client: 'Balenciaga',
-    nom: 'Blouson Cuir Velours & Flanelle',
-    reference: 'BAL-2026-B01',
+    batch: 'BAL-2026-B01',
     modele: 'Blouson Oversize Couture',
     dt: true,
     tc: false,

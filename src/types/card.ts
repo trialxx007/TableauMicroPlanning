@@ -74,18 +74,25 @@ export interface CardJalon {
   code: JalonCode;
   valide: boolean;
   semaine?: number;
+  /**
+   * Semaine de fin (nomenclature R uniquement) : la plage [semaine, semaineFin]
+   * borne la marge. La pastille passe en orange dans cette plage, au rouge
+   * au-delà. Sans elle, la semaine n'a pas de marge.
+   */
+  semaineFin?: number;
   /** Échéance calendaire (ISO `AAAA-MM-JJ`), alternative à `semaine`. */
   date?: string;
   /** Échéance non encore confirmée (« to be confirmed »). */
   tbc?: boolean;
   categorie?: JalonCategorie;
+  /** Date/heure à laquelle ce jalon est passé à l'état validé (historique). */
+  valideLe?: string;
 }
 
 export interface CardItem {
   id: string;
   client: string;
-  nom: string;
-  reference: string;
+  batch: string;
   modele: string;
   typeCarte?: TypeCarte;
   jalons: CardJalon[];

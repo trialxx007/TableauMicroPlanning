@@ -1,5 +1,4 @@
-import React, { useState } from 'react';
-import { useDraggable, useDroppable } from '@dnd-kit/core';
+import React, { useState, useRef } from 'react';
 import { CardItem } from '../types/card.ts';
 import {
   ChaineRow,
@@ -28,10 +27,10 @@ import {
   themeJalon,
   type JalonInfo,
 } from '../utils/jalons.ts';
-import { blocInspectionVide } from '../utils/inspections.ts';
+import { blocInspectionVide, dateCourte } from '../utils/inspections.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 import { InspectionCell } from './InspectionCell.tsx';
-import { AlertTriangle, ArrowLeftRight, Columns, Plus, Truck, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, Columns, Pencil, Plus, Trash2, Truck, X } from 'lucide-react';
 
 /** Ligne du tableau du Suivi Global, mémorisée : en éditant une ligne (inspection,
  *  cartes…), seules les lignes réellement modifiées se re-rendent, pas les autres. */
@@ -50,10 +49,15 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
     onCarteClick,
     onOuvrirActionSlot,
     onOuvrirPicker,
+    onOuvrirExpedition,
+    onEnvoyerExpedition,
     onAssignerSlot,
+    onGlisserCarte,
     onMajBloc,
     onAjouterValeur,
     onMajValeur,
+    onRenommerChaine,
+    onSupprimerChaine,
     setAlerteOuverte,
     setOfOuvert,
     setMenuEtat,
@@ -68,8 +72,25 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
     onCarteClick,
     onOuvrirActionSlot,
     onOuvrirPicker,
+    onOuvrirExpedition,
     onAssignerSlot,
+    onGlisserCarte,
     setAlerteOuverte,
+  };
+
+  // --- Renommage subtil de la chaîne ------------------------------------
+  const [chaineEdition, setChaineEdition] = useState(false);
+  const annulerChaineRef = useRef(false);
+
+  const validerChaineNom = (raw: string) => {
+    const enEdition = chaineEdition;
+    setChaineEdition(false);
+    const nom = raw.trim();
+    if (!enEdition) return;
+    if (!annulerChaineRef.current && nom && onRenommerChaine && nom !== row.nom) {
+      onRenommerChaine(row.id, nom);
+    }
+    annulerChaineRef.current = false;
   };
 
   return (
@@ -104,12 +125,53 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
         </td>
       )}
 
-      {/* Column 2: Chaîne (Name) */}
-      <td className="h-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 align-middle">
+      {/* Column 2: Chaîne (Name) — renommage subtil au survol */}
+      <td className="h-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl px-3 py-3 align-middle group/chaine">
         <div className="h-full min-h-[72px] flex items-center justify-center">
-          <span className="w-full text-center font-bold text-xs sm:text-sm text-slate-800 truncate">
-            {row.nom}
-          </span>
+          {chaineEdition ? (
+            <input
+              key={row.id}
+              autoFocus
+              defaultValue={row.nom}
+              placeholder={row.nom}
+              onBlur={(e) => validerChaineNom(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === 'Escape') {
+                  e.preventDefault();
+                  if (e.key === 'Escape') annulerChaineRef.current = true;
+                  (e.target as HTMLInputElement).blur();
+                }
+              }}
+              title="Entrée : valider · Échap : annuler"
+              className="w-full min-w-0 max-w-[240px] text-center font-bold text-xs sm:text-sm text-slate-800 bg-white border border-slate-300 rounded-md px-1.5 py-0.5 focus:outline-none focus:border-blue-400 focus:ring-1 focus:ring-blue-200"
+            />
+          ) : (
+            <div className="group/ren inline-flex items-center gap-1 max-w-full min-w-0">
+              <button
+                type="button"
+                onClick={() => {
+                  annulerChaineRef.current = false;
+                  setChaineEdition(true);
+                }}
+                title="Renommer la chaîne"
+                className="inline-flex items-center gap-1.5 cursor-pointer px-1.5 py-0.5 rounded-lg hover:bg-slate-100/80 transition-colors max-w-full min-w-0"
+              >
+                <span className="font-bold text-xs sm:text-sm text-slate-800 truncate">{row.nom}</span>
+                <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover/ren:opacity-100 group-hover/chaine:opacity-100 transition-opacity shrink-0" />
+              </button>
+              {onSupprimerChaine && (
+                <button
+                  type="button"
+                  onClick={() => onSupprimerChaine(row.id)}
+                  title="Supprimer la chaîne"
+                  aria-label={`Supprimer la chaîne ${row.nom}`}
+                  className="p-1 text-slate-300 hover:text-rose-600 hover:bg-rose-50 rounded-md opacity-0 group-hover/chaine:opacity-100 focus:opacity-100 transition-opacity cursor-pointer shrink-0"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
         </div>
       </td>
 
@@ -129,20 +191,29 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
       </td>
 
       {/* Column 4: Inspection (un bloc par modèle en cours) */}
-      <td className="h-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 align-middle">
-        <div className="h-full min-h-[84px] flex flex-col gap-1">
+      <td className="h-[170px] relative overflow-hidden bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1.5 align-middle">
+        <div className="absolute inset-1.5 flex flex-col gap-1">
           {blocsInspectionAffiches(row, cardsParId).map(
             ({ blocIndex, bloc, libelle }) => (
               <div
                 key={blocIndex}
-                className="flex-1 min-w-0 flex flex-col border border-slate-200/70 bg-slate-50/30 rounded-lg px-1 py-1"
+                className="flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col border border-slate-200/70 bg-slate-50/30 rounded-lg px-1 py-1"
               >
                 <span className="mb-1 text-[9px] font-bold uppercase tracking-wider text-slate-400 truncate">
                   {libelle}
                 </span>
                 <InspectionCell
                   bloc={bloc}
-                  onAjouterValeur={(type, pct) => onAjouterValeur(row.id, blocIndex, type, pct)}
+                  nbOfs={
+                    (() => {
+                      const slot = row.modeleEnCoursCards[blocIndex];
+                      const card = slot?.cardId ? cardsParId.get(slot.cardId) : undefined;
+                      return card?.ofs?.length ?? 0;
+                    })()
+                  }
+                  onAjouterValeur={(type, pct, ofIndex) =>
+                    onAjouterValeur(row.id, blocIndex, type, pct, ofIndex)
+                  }
                   onSupprimerValeur={(valeurId) =>
                     onMajBloc(row.id, blocIndex, (b) => ({
                       ...b,
@@ -162,6 +233,17 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
                       setOfOuvert({ card, numero, slotTitle: libelle, anchor });
                     }
                   }}
+                  onEnvoyerExpedition={
+                    row.modeleEnCoursCards[blocIndex]?.cardId
+                      ? () => onEnvoyerExpedition(row.id, blocIndex)
+                      : undefined
+                  }
+                  expeditionActive={
+                    !!row.modeleEnCoursCards[blocIndex]?.cardId &&
+                    row.expeditionCards.some(
+                      (s) => s?.cardId === row.modeleEnCoursCards[blocIndex]?.cardId
+                    )
+                  }
                   onBadgeClick={(valeurId, anchor) =>
                     setMenuEtat({
                       rowId: row.id,
@@ -228,14 +310,18 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
         );
       })}
 
-      {/* Column 12: EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
-      <td className="h-[170px] min-w-[145px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 align-middle">
-        <div className="h-full min-h-[88px] flex flex-col justify-center items-center">
-          <SlotCase
-            {...slotProps}
-            slotCard={row.expeditionCard}
-            slotType="expedition"
-          />
+      {/* Column 12: EXPÉDITION (pile de 2 cartes) */}
+      <td className="h-[170px] min-w-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 align-middle">
+        <div className="h-full min-h-[84px] flex flex-col gap-1">
+          {row.expeditionCards.map((slot, pileIdx) => (
+            <SlotCase
+              key={pileIdx}
+              {...slotProps}
+              slotCard={slot}
+              slotType="expedition"
+              slotIndex={pileIdx}
+            />
+          ))}
         </div>
       </td>
     </tr>
@@ -244,17 +330,6 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
 
 /** Colonne Préparée visée par une action de case. */
 export type TypeSlotGlobal = 'modeleEnCours' | 'lancement' | 'expedition';
-
-/** Identifiant unique (pour le DnD) d'une case du tableau : il contient
- *  l'identifiant de la ligne, unique dans tout le DndContext. */
-function idCase(
-  rowId: string,
-  slotType: TypeSlotGlobal,
-  lancementIndex?: number,
-  slotIndex?: number
-) {
-  return `case:${rowId}:${slotType}:${lancementIndex ?? 0}:${slotIndex ?? 0}`;
-}
 
 export interface SlotCaseProps {
   row: ChaineRow;
@@ -281,6 +356,8 @@ export interface SlotCaseProps {
     lancementIndex?: number,
     slotIndex?: number
   ) => void;
+  /** Ouvre la fenêtre d'expédition OF par OF d'une case Expédition remplie. */
+  onOuvrirExpedition: (rowId: string, slotIndex: number) => void;
   onAssignerSlot: (
     rowId: string,
     slotType: TypeSlotGlobal,
@@ -288,15 +365,16 @@ export interface SlotCaseProps {
     lancementIndex?: number,
     slotIndex?: number
   ) => void;
+  onGlisserCarte: (card: CardItem, event: React.PointerEvent<HTMLElement>) => void;
   setAlerteOuverte: React.Dispatch<React.SetStateAction<AlerteOuverteGlobal | null>>;
 }
 
 /**
- * Une case du tableau : carte liée, ses jalons, sa bande d'alerte. C'est à la
- * fois une cible de dépôt (toute la case, bande d'alerte incluse) et, quand
- * elle est remplie, la source d'un glisser-déposer géré par @dnd-kit : l'aperçu
- * « carte qui suit le curseur » et l'animation de pose sont portés par le
- * DragOverlay du parent, pas par cette case.
+ * Une case du tableau : carte liée, ses jalons, sa bande d'alerte. Chaque case
+ * est une cible de dépôt (`data-depot` : lue par le contrôleur de glisser) et,
+ * quand elle est remplie, la carte est saisissable à la souris/au doigt : elle
+ * « décolle » et suit le curseur (voir `utils/glisserCarte.ts`). La pose est
+ * animée en CSS3 (classe `animate-carte-posee`, voir index.css).
  */
 function SlotCase({
   row,
@@ -311,7 +389,9 @@ function SlotCase({
   onCarteClick,
   onOuvrirActionSlot,
   onOuvrirPicker,
+  onOuvrirExpedition,
   onAssignerSlot,
+  onGlisserCarte,
   setAlerteOuverte,
 }: SlotCaseProps) {
   const rangSuffixe = slotIndex === 1 ? ' — 2ᵉ carte' : '';
@@ -319,11 +399,11 @@ function SlotCase({
     slotType === 'modeleEnCours'
       ? `Modèle en cours${rangSuffixe} (${row.nom})`
       : slotType === 'expedition'
-      ? `Expédition (${row.nom})`
+      ? `Expédition${rangSuffixe} (${row.nom})`
       : `Prochain Lancement #${(lancementIndex || 0) + 1}${rangSuffixe} (${row.nom})`;
   const linkedCard = slotCard?.cardId ? cardsParId.get(slotCard.cardId) : undefined;
   const label = linkedCard ? linkedCard.modele : slotCard?.customLabel;
-  const subLabel = linkedCard ? `${linkedCard.reference} • ${linkedCard.client}` : null;
+  const subLabel = linkedCard ? `${linkedCard.batch} • ${linkedCard.client}` : null;
   const jalonsCarte = linkedCard ? (jalonInfosParCarte.get(linkedCard.id) ?? []) : [];
   const jalonsNomenclatures = jalonsCarte.filter((j) => j.categorie === 'NOMENCLATURE');
   const jalonsStatuts = jalonsCarte.filter((j) => j.categorie === 'STATUT');
@@ -339,20 +419,24 @@ function SlotCase({
   const autreSlotRempli =
     slotIndex != null ? Boolean(pileCourante[1 - slotIndex]) : false;
 
-  const dropId = idCase(row.id, slotType, lancementIndex, slotIndex);
-  const { setNodeRef: setDropRef, isOver } = useDroppable({
-    id: dropId,
-    data: { rowId: row.id, slotType, lancementIndex, slotIndex },
-  });
-  const { attributes, listeners, setNodeRef: setDragRef, isDragging } = useDraggable({
-    id: `carte:${dropId}`,
-    data: { cardId: linkedCard?.id ?? '' },
-    disabled: !linkedCard,
-  });
+  // Attributs lus par le contrôleur de glisser (utils/glisserCarte.ts) pour
+  // identifier la case visée sous le curseur. Le surlignage de la cible est
+  // ajouté/retiré en DOM (classe `case-survol-depot`), sans re-render React.
+  const dataDepot: Record<string, string> = {
+    'data-depot': '',
+    'data-row-id': row.id,
+    'data-slot-type': slotType,
+    'data-lancement-index': lancementIndex != null ? String(lancementIndex) : '',
+    'data-slot-index': slotIndex != null ? String(slotIndex) : '',
+  };
 
   const handleSlotClick = () => {
     if (linkedCard) {
-      onCarteClick(linkedCard);
+      if (slotType === 'expedition') {
+        onOuvrirExpedition(row.id, slotIndex ?? 0);
+      } else {
+        onCarteClick(linkedCard);
+      }
     } else {
       onOuvrirActionSlot(row.id, titreSlot, slotType, lancementIndex, slotIndex);
     }
@@ -361,26 +445,16 @@ function SlotCase({
   if (!label) {
     return (
       <button
-        ref={setDropRef}
+        {...dataDepot}
         onClick={() => onOuvrirActionSlot(row.id, titreSlot, slotType, lancementIndex, slotIndex)}
-        className={`w-full min-h-[50px] flex items-center justify-center text-[11px] font-medium rounded-xl transition-all border border-dashed p-1 ${
-          isOver
-            ? 'text-blue-600 bg-blue-50/70 border-blue-400 ring-2 ring-blue-400/50'
-            : 'text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 border-slate-200 hover:border-blue-300 cursor-pointer'
-        } ${autreSlotRempli ? 'flex-none' : 'flex-1'}`}
-        title="Cliquez pour assigner une carte, ou déposez une carte ici"
+        className={`w-full min-h-[50px] flex items-center justify-center text-[11px] font-medium rounded-xl transition-all border border-dashed p-1 text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 border-slate-200 hover:border-blue-300 cursor-pointer ${
+          autreSlotRempli ? 'flex-none' : 'flex-1'
+        }`}
+        title="Cliquez pour assigner une carte, ou glissez une carte ici"
       >
         <span className="flex items-center gap-1">
           <Plus className="w-3 h-3" />
-          <span>
-            {slotType === 'expedition'
-              ? 'Expédition'
-              : slotIndex === 1
-              ? 'Carte 2'
-              : slotType === 'lancement'
-              ? `# ${(lancementIndex || 0) + 1}`
-              : 'Carte'}
-          </span>
+          <span>Nouvelle Carte</span>
         </span>
       </button>
     );
@@ -392,6 +466,9 @@ function SlotCase({
     ? cartesAlerteRetard.has(linkedCard.id) ||
       (alertesManuelles[linkedCard.id] ?? []).some((a) => alerteActive(a))
     : false;
+  // Nomenclature R dans sa plage : la carte est mise en évidence en orange, comme
+  // le rouge d'alerte, mais sans prime sur ce dernier.
+  const enMarge = !enAlerte && jalonsCarte.some((j) => j.enMarge);
 
   return (
     <div className="flex flex-col gap-1 flex-1 min-h-0 w-full">
@@ -399,12 +476,12 @@ function SlotCase({
           aussi de cible de dépôt, toute la case (bande incluse) accepte une
           carte déposée. */}
       <div
-        ref={setDropRef}
+        {...dataDepot}
         className={`relative w-full flex flex-col flex-1 min-h-0 ${
           enAlerte
             ? 'ring-2 ring-rose-300/60 shadow-[0_0_0_1px_rgba(251,113,133,0.5)] rounded-xl'
-            : isOver
-            ? 'ring-2 ring-blue-400/70 shadow-[0_0_0_1px_rgba(59,130,246,0.35)] rounded-xl'
+            : enMarge
+            ? 'ring-2 ring-amber-300/70 shadow-[0_0_0_1px_rgba(251,191,36,0.6)] rounded-xl'
             : 'rounded-xl'
         }`}
       >
@@ -427,28 +504,42 @@ function SlotCase({
             Alerte
           </button>
         )}
+        {/* Bande de marge : la nomenclature R est dans sa plage — pas une alerte,
+            juste un état à surveiller. */}
+        {enMarge && linkedCard && (
+          <div
+            className="shrink-0 w-full flex items-center justify-center gap-1 px-2 py-1 rounded-t-xl bg-amber-500 text-white text-[10px] font-extrabold uppercase tracking-wider relative z-20"
+            title="Jalon R dans la marge"
+          >
+            <AlertTriangle className="w-3 h-3 shrink-0" />
+            En marge
+          </div>
+        )}
         <div
           className={`group relative w-full min-h-[52px] flex flex-col justify-start px-2 py-1.5 overflow-hidden bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left flex-1 ${
-            enAlerte ? 'rounded-b-xl border-t-0' : 'rounded-b-xl'
+            enAlerte || enMarge ? 'rounded-b-xl border-t-0' : 'rounded-b-xl'
           }`}
         >
           <div
-            ref={setDragRef}
-            {...attributes}
-            {...listeners}
+            key={linkedCard?.id ?? 'carte-vide'}
+            onPointerDown={(e) => {
+              if (!linkedCard) return;
+              if (e.pointerType === 'mouse' && e.button !== 0) return;
+              onGlisserCarte(linkedCard, e);
+            }}
             onClick={handleSlotClick}
-            className={`flex-1 min-h-0 w-full flex flex-col justify-start items-start select-none touch-none ${
-              isDragging ? 'cursor-grabbing opacity-40' : 'cursor-grab active:cursor-grabbing'
-            }`}
+            className="animate-carte-posee flex-1 min-h-0 w-full flex flex-col justify-start items-start select-none touch-none cursor-grab active:cursor-grabbing"
             title={
               linkedCard
-                ? `Afficher la fiche identitaire : ${linkedCard.modele} (${linkedCard.reference}). Glissez pour déplacer dans une autre case.`
+                ? `Afficher la fiche identitaire : ${linkedCard.modele} (${linkedCard.batch}). Glissez pour déplacer dans une autre case.`
                 : 'Cliquer pour modifier ou assigner une carte'
             }
           >
             <div className="flex items-center justify-between gap-2">
               <span
-                className={`font-bold text-[11px] sm:text-xs leading-snug line-clamp-1 ${
+                className={`font-bold leading-snug line-clamp-1 ${
+                  slotType === 'expedition' ? 'text-[12px]' : 'text-[11px] sm:text-xs'
+                } ${
                   isMergedModele ? 'text-slate-900' : 'text-slate-900'
                 } truncate`}
               >
@@ -506,13 +597,46 @@ function SlotCase({
 
             <span />
 
-            {/* Expedition Specific Tags */}
-            {slotType === 'expedition' && slotCard?.dateExpedition && (
+            {/* Expedition Specific Tags — état de chaque OF + date d'envoi */}
+            {slotType === 'expedition' && linkedCard && (linkedCard.ofs?.length ?? 0) > 0 ? (
+              <div className="relative z-10 flex flex-col gap-1 mt-1 w-full">
+                {linkedCard.ofs.map((of, i) => {
+                  const ligne = slotCard?.expeditionOfs?.find((e) => e.ofIndex === i);
+                  const statut = ligne?.statutExpedition ?? 'A_EXPEDIER';
+                  const date = ligne?.dateExpedition;
+                  const livre = statut === 'LIVRE';
+                  const libelleStatut = livre
+                    ? 'Livré'
+                    : statut === 'EN_TRANSIT'
+                    ? 'En transit'
+                    : 'À envoyer';
+                  return (
+                    <div
+                      key={of.id}
+                      className={`flex items-center gap-1.5 w-full rounded px-1 py-0.5 text-[11px] leading-none ${
+                        livre
+                          ? 'bg-emerald-100 text-emerald-800'
+                          : 'bg-slate-100 text-slate-600'
+                      }`}
+                      title={`OF${i + 1} — ${libelleStatut}${date ? ` — ${dateCourte(date)}` : ''}`}
+                    >
+                      <span className="font-black text-[12px] text-slate-800 shrink-0">
+                        OF{i + 1}
+                      </span>
+                      <span className="font-mono font-bold shrink-0">
+                        {date ? dateCourte(date) : '—'}
+                      </span>
+                      <span className="ml-auto font-bold truncate">{libelleStatut}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : slotType === 'expedition' && slotCard?.dateExpedition ? (
               <div className="flex items-center gap-1 text-[10px] font-semibold text-emerald-800 bg-emerald-100/70 px-1.5 py-0.2 rounded mt-0.5 w-fit">
                 <Truck className="w-2.5 h-2.5" />
                 <span>{slotCard.dateExpedition}</span>
               </div>
-            )}
+            ) : null}
           </div>
 
           {/* Hover Quick Action Buttons */}
@@ -605,6 +729,10 @@ export interface LigneTableSuiviProps {
     lancementIndex?: number,
     slotIndex?: number
   ) => void;
+  /** Ouvre la fenêtre d'expédition OF par OF d'une case Expédition remplie. */
+  onOuvrirExpedition: (rowId: string, slotIndex: number) => void;
+  /** Envoie le modèle du bloc `blocIndex` de cette ligne vers l'expédition. */
+  onEnvoyerExpedition: (rowId: string, blocIndex: number) => void;
   onAssignerSlot: (
     rowId: string,
     slotType: TypeSlotGlobal,
@@ -612,6 +740,7 @@ export interface LigneTableSuiviProps {
     lancementIndex?: number,
     slotIndex?: number
   ) => void;
+  onGlisserCarte: (card: CardItem, event: React.PointerEvent<HTMLElement>) => void;
   onMajBloc: (
     rowId: string,
     blocIndex: number,
@@ -620,8 +749,9 @@ export interface LigneTableSuiviProps {
   onAjouterValeur: (
     rowId: string,
     blocIndex: number,
-    type: 'I' | 'OF',
-    pct?: 50 | 100
+    type: 'I' | 'OF' | 'CC',
+    pct?: 50 | 100,
+    ofIndex?: number
   ) => void;
   onMajValeur: (
     rowId: string,
@@ -629,6 +759,10 @@ export interface LigneTableSuiviProps {
     valeurId: string,
     maj: (valeur: InspectionValeur) => InspectionValeur
   ) => void;
+  /** Renomme une chaîne (subtile : au survol du nom). */
+  onRenommerChaine?: (rowId: string, nouveauNom: string) => void;
+  /** Supprime une chaîne (avec confirmation gérée par l'appelant). */
+  onSupprimerChaine?: (rowId: string) => void;
   setAlerteOuverte: React.Dispatch<React.SetStateAction<AlerteOuverteGlobal | null>>;
   setOfOuvert: React.Dispatch<React.SetStateAction<OfOuvertGlobal | null>>;
   setMenuEtat: React.Dispatch<React.SetStateAction<MenuEtatInspection | null>>;
@@ -699,7 +833,7 @@ export const PastilleJalon = React.memo(function PastilleJalon({
         <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" aria-hidden />
       )}
       <span
-        className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.7rem,auto)_1.9rem] items-stretch overflow-hidden rounded text-[10px] font-bold border ${colors} ${
+        className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.7rem,auto)_minmax(1.9rem,auto)] items-stretch overflow-hidden rounded text-[10px] font-bold border ${colors} ${
           jalon.enRetard ? 'motion-safe:animate-pulse' : ''
         }`}
       >

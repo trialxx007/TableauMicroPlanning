@@ -15,11 +15,12 @@ interface OFSubTableProps {
   totalDemandee: number;
   ofs: OrdreFabrication[];
   onUpdateOFs: (newOfs: OrdreFabrication[]) => void;
+  onChangeTotalDemandee?: (n: number) => void;
   isAddingOF?: boolean;
   onCloseAddOF?: () => void;
 }
 
-function normalizeCases(cases: number[] | undefined, nbCases: number, totalAssigne: number): number[] {
+export function normalizeCases(cases: number[] | undefined, nbCases: number, totalAssigne: number): number[] {
   const src = cases && cases.length ? cases : [];
   const intermediaires = src.slice(0, Math.max(0, src.length - 1));
   const next = intermediaires.slice(0, Math.max(0, nbCases - 1));
@@ -136,10 +137,13 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
   totalDemandee,
   ofs,
   onUpdateOFs,
+  onChangeTotalDemandee,
   isAddingOF = false,
   onCloseAddOF,
 }) => {
   const [newQuantite, setNewQuantite] = useState<number>(50);
+  const [newNbCases, setNewNbCases] = useState<number>(5);
+  const [newCases, setNewCases] = useState<number[]>(() => normalizeCases(undefined, 5, 50));
   const [isCollapsed, setIsCollapsed] = useState(false);
 
   const totalAlloue = ofs.reduce((sum, o) => sum + o.quantiteDemandee, 0);
@@ -151,13 +155,16 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
     if (onCloseAddOF) onCloseAddOF();
   };
 
-  const handleChangeNbCases = (ofId: string, newNbCases: number) => {
-    onUpdateOFs(ofs.map((o) => (o.id === ofId ? { ...o, nbCases: newNbCases } : o)));
+  const handleChangeNbCases = (ofId: string, nb: number) => {
+    onUpdateOFs(ofs.map((o) => (o.id === ofId ? { ...o, nbCases: nb } : o)));
   };
 
   useEffect(() => {
     if (isAddingOF) {
-      setNewQuantite(soldeNonAlloue > 0 ? soldeNonAlloue : 50);
+      const qte = soldeNonAlloue > 0 ? soldeNonAlloue : 50;
+      setNewQuantite(qte);
+      setNewNbCases(5);
+      setNewCases(normalizeCases(undefined, 5, qte));
     }
   }, [isAddingOF, soldeNonAlloue]);
 
@@ -185,8 +192,8 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
       quantiteFinie: 0,
       resteAProduire: Number(newQuantite),
       statut: 'EN_ATTENTE',
-      nbCases: 5,
-      casesEnCours: normalizeCases(undefined, 5, Number(newQuantite)),
+      nbCases: newNbCases,
+      casesEnCours: normalizeCases(newCases, newNbCases, Number(newQuantite)),
       sousOfs: [],
     };
     onUpdateOFs([...ofs, newOF]);
@@ -298,6 +305,56 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
 
   return (
     <div className="bg-slate-50/90 p-2 rounded-xl border border-slate-200 mt-1 space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg border border-slate-200 text-[11px] text-slate-600 shadow-2xs">
+        <label className="font-semibold text-slate-700 whitespace-nowrap">
+          Quantité totale à répartir
+        </label>
+        <input
+          type="number"
+          min={1}
+          value={totalDemandee}
+          onChange={(e) => onChangeTotalDemandee?.(Math.max(0, Number(e.target.value)))}
+          disabled={!onChangeTotalDemandee}
+          title="Quantité totale qui sera divisée entre les OF"
+          className="w-20 text-xs font-semibold px-2 py-0.5 rounded-lg border border-slate-300 bg-white disabled:bg-slate-100 disabled:text-slate-500"
+        />
+        <span className="text-slate-300">•</span>
+        <span>
+          Total alloué : <b className="text-slate-900">{totalAlloue.toLocaleString('fr-FR')}</b> /{' '}
+          {totalDemandee.toLocaleString('fr-FR')}
+        </span>
+        <span>•</span>
+        {ecartAlloue > 0 ? (
+          <span className="text-rose-700 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5 font-bold">
+            Sur-alloué : {ecartAlloue.toLocaleString('fr-FR')}
+          </span>
+        ) : ecartAlloue < 0 ? (
+          <span className="text-slate-600 bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 font-semibold">
+            Reste à allouer : {Math.abs(ecartAlloue).toLocaleString('fr-FR')}
+          </span>
+        ) : (
+          <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 font-bold">
+            Tout alloué
+          </span>
+        )}
+        <span>•</span>
+        <span>
+          Produit fini : <b className="text-slate-900">{totalFinie.toLocaleString('fr-FR')}</b> /{' '}
+          {totalDemandee.toLocaleString('fr-FR')}
+        </span>
+        {ofs.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setIsCollapsed((c) => !c)}
+            className="ml-auto p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
+            aria-label={isCollapsed ? 'Expand OF cards' : 'Collapse OF cards'}
+            title={isCollapsed ? 'Expand OF cards' : 'Collapse OF cards'}
+          >
+            {isCollapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+        )}
+      </div>
+
       {isAddingOF && (
         <div
           onSubmit={handleCreateOF}
@@ -323,20 +380,28 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                 type="number"
                 min={1}
                 value={newQuantite}
-                onChange={(e) => setNewQuantite(Math.max(0, Number(e.target.value)))}
+                onChange={(e) => {
+                  const qte = Math.max(0, Number(e.target.value));
+                  setNewQuantite(qte);
+                  setNewCases((prev) => normalizeCases(prev, newNbCases, qte));
+                }}
                 className="w-full text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
               />
             </div>
 
             <EnCoursGrid
-              nbCases={5}
-              casesEnCours={normalizeCases(undefined, 5, Number(newQuantite))}
+              nbCases={newNbCases}
+              casesEnCours={newCases}
               onChangeCaseValue={(idx, val) => {
-                const newCases = normalizeCases(undefined, 5, Number(newQuantite));
-                newCases[idx] = val;
-                setNewQuantite(newCases[newCases.length - 1]);
+                const next = normalizeCases(newCases, newNbCases, Number(newQuantite));
+                next[idx] = val;
+                setNewCases(next);
+                setNewQuantite(next[next.length - 1]);
               }}
-              onChangeNbCases={() => {}}
+              onChangeNbCases={(n) => {
+                setNewNbCases(n);
+                setNewCases((prev) => normalizeCases(prev, n, Number(newQuantite)));
+              }}
               showSelector={true}
               total={newQuantite}
             />
@@ -358,43 +423,6 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
               Enregistrer l'OF
             </button>
           </div>
-        </div>
-      )}
-
-      {ofs.length > 0 && (
-        <div className="flex items-center gap-2 px-2.5 py-1 bg-white rounded-lg border border-slate-200 text-[11px] text-slate-600 shadow-2xs">
-          <span>
-            Total alloué : <b className="text-slate-900">{totalAlloue.toLocaleString('fr-FR')}</b> /{' '}
-            {totalDemandee.toLocaleString('fr-FR')}
-          </span>
-          <span>•</span>
-          {ecartAlloue > 0 ? (
-            <span className="text-rose-700 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5 font-bold">
-              Sur-alloué : {ecartAlloue.toLocaleString('fr-FR')}
-            </span>
-          ) : ecartAlloue < 0 ? (
-            <span className="text-slate-600 bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 font-semibold">
-              Reste à allouer : {Math.abs(ecartAlloue).toLocaleString('fr-FR')}
-            </span>
-          ) : (
-            <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 font-bold">
-              Tout alloué
-            </span>
-          )}
-          <span>•</span>
-          <span>
-            Produit fini : <b className="text-slate-900">{totalFinie.toLocaleString('fr-FR')}</b> /{' '}
-            {totalDemandee.toLocaleString('fr-FR')}
-          </span>
-          <button
-            type="button"
-            onClick={() => setIsCollapsed((c) => !c)}
-            className="ml-auto p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
-            aria-label={isCollapsed ? 'Expand OF cards' : 'Collapse OF cards'}
-            title={isCollapsed ? 'Expand OF cards' : 'Collapse OF cards'}
-          >
-            {isCollapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-          </button>
         </div>
       )}
 

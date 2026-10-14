@@ -7,6 +7,7 @@ import { FilterBar, SortField, SortOrder } from './components/FilterBar.tsx';
 import { CardTable } from './components/CardTable.tsx';
 import { CardModal } from './components/CardModal.tsx';
 import { SuiviGlobalView } from './components/SuiviGlobalView.tsx';
+import { TableauxOFsView } from './components/TableauxOFsView.tsx';
 import { AppPage } from './components/ViewSwitcher.tsx';
 import { JalonCatalogueProvider } from './context/JalonCatalogueContext.tsx';
 import { getEtatJalon, PREFIXE_JALON_MANQUANT } from './utils/jalons.ts';
@@ -18,7 +19,9 @@ export default function App() {
   // est mémorisée pour cette session (sessionStorage), pas imposée par défaut.
   const [currentPage, setCurrentPage] = useState<AppPage>(() => {
     const sauvegarde = sessionStorage.getItem('aic_vue_actuelle_v1');
-    return sauvegarde === 'suivi-global' || sauvegarde === 'point-journalier'
+    return sauvegarde === 'suivi-global' ||
+      sauvegarde === 'point-journalier' ||
+      sauvegarde === 'tableaux-ofs'
       ? sauvegarde
       : 'point-journalier';
   });
@@ -102,11 +105,11 @@ export default function App() {
       // PATCH recalcule un statut ou un reste à produire côté serveur.
       const updated = await cardApi.replace(editingCard.id, formData);
       setCards((prev) => prev.map((c) => (c.id === editingCard.id ? updated : c)));
-      showNotification(`Carte ${updated.nom} mise à jour en réunion à ${timeStr}`);
+      showNotification(`Carte ${updated.modele} mise à jour en réunion à ${timeStr}`);
     } else {
       const created = await cardApi.create(formData);
       setCards((prev) => [created, ...prev]);
-      showNotification(`Nouvelle carte ${created.nom} ajoutée au point de production`);
+      showNotification(`Nouvelle carte ${created.modele} ajoutée au point de production`);
       // Rappel du Suivi Global : la case vide qui a demandé la création reçoit
       // la carte créée (affectation dans le tableau après enregistrement).
       onCreateCardRef.current?.(created);
@@ -122,14 +125,14 @@ export default function App() {
 
       if (updates.statut !== undefined) {
         showNotification(
-          `Statut "${getStatusLabel(updates.statut)}" validé pour ${updated.nom} à ${timeStr}`
+          `Statut "${getStatusLabel(updates.statut)}" validé pour ${updated.modele} à ${timeStr}`
         );
       } else if (updates.quantiteFinie !== undefined) {
         showNotification(
-          `Point enregistré : ${updated.nom} (${updated.quantiteFinie}/${updated.quantiteDemandee}) à ${timeStr}`
+          `Point enregistré : ${updated.modele} (${updated.quantiteFinie}/${updated.quantiteDemandee}) à ${timeStr}`
         );
       } else if (updates.jalons !== undefined) {
-        showNotification(`Jalons mis à jour pour ${updated.nom}`);
+        showNotification(`Jalons mis à jour pour ${updated.modele}`);
       }
     } catch (e) {
       console.error('Erreur mise à jour', e);
@@ -139,10 +142,10 @@ export default function App() {
   const handleDeleteCard = async (id: string) => {
     const card = cards.find((c) => c.id === id);
     if (!card) return;
-    if (window.confirm(`Confirmez-vous la suppression de la carte "${card.nom}" (${card.reference}) ?`)) {
+    if (window.confirm(`Confirmez-vous la suppression de la carte "${card.modele}" (${card.batch}) ?`)) {
       await cardApi.delete(id);
       setCards((prev) => prev.filter((c) => c.id !== id));
-      showNotification(`Carte ${card.nom} supprimée`);
+      showNotification(`Carte ${card.modele} supprimée`);
     }
   };
 
@@ -157,9 +160,9 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  // Création d'une carte associative déclenchée depuis une case vide du Suivi
-  // Global : la modale s'ouvre en mode création avec le pré-remplissage voulu,
-  // et le rappel stocké recevra la carte créée pour occuper la case.
+  // Création d'une carte associative déclenchée depuis une case du Suivi Global :
+  // la modale s'ouvre en mode création avec le pré-remplissage voulu, et le
+  // rappel stocké recevra la carte créée pour occuper la case.
   const handleOpenCreateCard = (
     prefill: Partial<CardFormData> | null,
     onCreated: (card: CardItem) => void
@@ -211,10 +214,9 @@ export default function App() {
         if (searchQuery.trim() !== '') {
           const q = searchQuery.toLowerCase().trim();
           const matchClient = card.client.toLowerCase().includes(q);
-          const matchNom = card.nom.toLowerCase().includes(q);
-          const matchRef = card.reference.toLowerCase().includes(q);
+          const matchBatch = card.batch.toLowerCase().includes(q);
           const matchModele = card.modele.toLowerCase().includes(q);
-          if (!matchClient && !matchNom && !matchRef && !matchModele) {
+          if (!matchClient && !matchBatch && !matchModele) {
             return false;
           }
         }
@@ -441,16 +443,29 @@ export default function App() {
           </>
         </main>
         )
-      ) : (
+      ) : currentPage === 'suivi-global' ? (
         <main className="flex-1 w-full">
           <SuiviGlobalView
-            onBackToPointJournalier={() => setCurrentPage('point-journalier')}
+            onChangePage={setCurrentPage}
             cards={cards}
+            onUpdateCard={handleUpdateCard}
             onOpenCardModal={(card) => {
               setEditingCard(card);
               setIsModalOpen(true);
             }}
             onOpenCreateCard={handleOpenCreateCard}
+          />
+        </main>
+      ) : (
+        <main className="flex-1 w-full">
+          <TableauxOFsView
+            cards={cards}
+            onUpdateCard={handleUpdateCard}
+            onChangePage={setCurrentPage}
+            onOpenCardModal={(card) => {
+              setEditingCard(card);
+              setIsModalOpen(true);
+            }}
           />
         </main>
       )}

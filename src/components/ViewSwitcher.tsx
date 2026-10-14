@@ -1,7 +1,7 @@
 import React from 'react';
-import { ClipboardList, TableProperties } from 'lucide-react';
+import { ClipboardList, TableProperties, Table2 } from 'lucide-react';
 
-export type AppPage = 'point-journalier' | 'suivi-global';
+export type AppPage = 'point-journalier' | 'suivi-global' | 'tableaux-ofs';
 
 interface ViewSwitcherProps {
   currentPage: AppPage;
@@ -13,7 +13,10 @@ interface TabConfig {
   label: string;
   icon: React.ReactNode;
   title: string;
-  activeClass: string;
+  /** Couleurs du bouton, inspirées des boutons switch du Point Commande. */
+  activeIcon: string;
+  idleIcon: string;
+  activeLabel: string;
 }
 
 const TABS: TabConfig[] = [
@@ -22,14 +25,27 @@ const TABS: TabConfig[] = [
     label: 'Point Commande',
     icon: <ClipboardList className="w-4 h-4" />,
     title: 'Point Commande Journalière : cartes de la réunion, nomenclatures et statuts',
-    activeClass: 'bg-white text-blue-700 shadow-sm ring-1 ring-blue-200',
+    activeIcon: 'bg-blue-600 text-white',
+    idleIcon: 'bg-blue-50 text-blue-500 group-hover:bg-blue-600 group-hover:text-white',
+    activeLabel: 'text-blue-700',
   },
   {
     page: 'suivi-global',
     label: 'Suivi Global',
     icon: <TableProperties className="w-4 h-4" />,
     title: 'Suivi Global des chaînes et prochains lancements',
-    activeClass: 'bg-white text-indigo-700 shadow-sm ring-1 ring-indigo-200',
+    activeIcon: 'bg-indigo-600 text-white',
+    idleIcon: 'bg-indigo-50 text-indigo-500 group-hover:bg-indigo-600 group-hover:text-white',
+    activeLabel: 'text-indigo-700',
+  },
+  {
+    page: 'tableaux-ofs',
+    label: 'Tableaux des OFs',
+    icon: <Table2 className="w-4 h-4" />,
+    title: 'Tableaux des OFs regroupés par client et par modèle de carte',
+    activeIcon: 'bg-emerald-600 text-white',
+    idleIcon: 'bg-emerald-50 text-emerald-500 group-hover:bg-emerald-600 group-hover:text-white',
+    activeLabel: 'text-emerald-700',
   },
 ];
 
@@ -50,14 +66,20 @@ export const ViewSwitcher: React.FC<ViewSwitcherProps> = ({ currentPage, onChang
             aria-selected={isActive}
             onClick={() => onChangePage(tab.page)}
             title={tab.title}
-            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-all cursor-pointer ${
+            className={`group inline-flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-all cursor-pointer ${
               isActive
-                ? tab.activeClass
-                : 'text-slate-500 hover:text-slate-800 hover:bg-slate-200/60'
+                ? 'bg-white shadow-sm ring-1 ring-slate-200'
+                : 'text-slate-500 hover:text-slate-800'
             }`}
           >
-            {tab.icon}
-        <span>{tab.label}</span>
+            <span
+              className={`w-7 h-7 shrink-0 rounded-lg flex items-center justify-center transition-colors ${
+                isActive ? tab.activeIcon : tab.idleIcon
+              }`}
+            >
+              {tab.icon}
+            </span>
+            <span className={isActive ? tab.activeLabel : ''}>{tab.label}</span>
           </button>
         );
       })}
