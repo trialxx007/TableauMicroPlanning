@@ -1,14 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { OrdreFabrication, SousOrdreFabrication, CardStatus, OFType, OF_TYPES, normalizeOFType } from '../types/card.ts';
+import { OrdreFabrication, SousOrdreFabrication, CardStatus, OFType, OF_TYPES, OF_DESTINATIONS, DestinationOF, normalizeOFType } from '../types/card.ts';
 import { EnCoursGrid } from './EnCoursCasesSection.tsx';
 import { EditableItemName } from './EditableItemName.tsx';
+import { useInspectionsParCarte } from '../context/InspectionsParCarteContext.tsx';
 import {
+  Check,
   ChevronDown,
   ChevronUp,
   Plus,
   Trash2,
   X,
 } from 'lucide-react';
+
+// Chevron dessiné en fond du <select> Destination (l'apparence native est retirée).
+const CHEVRON_DESTINATION =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6l6 -6'/%3E%3C/svg%3E\")";
 
 interface OFSubTableProps {
   cardId: string;
@@ -134,6 +140,7 @@ function recalcOFDepuisSousOfs(of: OrdreFabrication): OrdreFabrication {
 }
 
 export const OFSubTable: React.FC<OFSubTableProps> = ({
+  cardId,
   totalDemandee,
   ofs,
   onUpdateOFs,
@@ -141,6 +148,9 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
   isAddingOF = false,
   onCloseAddOF,
 }) => {
+  // Inspection de la carte (colonne Inspection du Suivi Global) : sert de
+  // référence pour afficher l'avancement des contrôles de chaque OF.
+  const { parCarte } = useInspectionsParCarte();
   const [newQuantite, setNewQuantite] = useState<number>(50);
   const [newNbCases, setNewNbCases] = useState<number>(5);
   const [newCases, setNewCases] = useState<number[]>(() => normalizeCases(undefined, 5, 50));
@@ -440,6 +450,37 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
             const ofNbCases = ofItem.nbCases || 5;
             const ofCases = normalizeCases(ofItem.casesEnCours, ofNbCases, ofItem.quantiteDemandee);
 
+            // Référence d'inspection de cet OF (colonne Inspection du Suivi
+            // Global) : 1 ✓ si I 50 % Pass, 2 ✓ si I 100 % Pass. Le CC ne
+            // compte pas comme un 3e ✓ ; tant qu'il n'est pas passé, on
+            // affiche simplement le libellé « CC » à côté.
+            const valeursInspection = parCarte[cardId]?.valeurs ?? [];
+            const controlePasse = (pct: 50 | 100) =>
+              valeursInspection.some(
+                (v) =>
+                  v.type !== 'CC' &&
+                  (v.ofIndex ?? 0) === index &&
+                  (v.pct ?? 50) === pct &&
+                  v.resultat === 'P'
+              );
+            const nbControlesPasses =
+              (controlePasse(50) ? 1 : 0) + (controlePasse(100) ? 1 : 0);
+            // Un contrôle à 100 % doit avoir été saisi (exister) pour que le CC
+            // soit envisageable ; avant cela, on n'affiche jamais « CC ».
+            const i100Existe = valeursInspection.some(
+              (v) =>
+                v.type !== 'CC' &&
+                (v.ofIndex ?? 0) === index &&
+                (v.pct ?? 50) === 100
+            );
+            const ccPasse = valeursInspection.some(
+              (v) =>
+                v.type === 'CC' && (v.ofIndex ?? 0) === index && v.resultat === 'P'
+            );
+            // Le CC ne compte pas comme un 3e ✓ : il reste à 2 contrôles, et
+            // tant qu'il n'est pas passé on affiche « CC » à côté des ✓.
+            const ccEnAttente = i100Existe && !ccPasse;
+
             return (
               <div
                 key={ofItem.id}
@@ -474,6 +515,13 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                         </button>
                       </div>
                     </div>
+                    <EditableItemName
+                      value={ofItem.titre}
+                      defaultValue=""
+                      placeholder="Nom de l'OF..."
+                      onSave={(nom) => handleUpdateSingleOF(ofItem.id, { titre: nom })}
+                      className="text-xs font-bold text-slate-900 bg-white border border-slate-200 rounded"
+                    />
                     {hasSubOfs && (
                       <span className="text-[10px] font-semibold text-slate-500 bg-white px-1.5 py-0.5 rounded border border-slate-200">
                         {sousOfs.length} sous-OF
@@ -641,12 +689,100 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                             title={`Traitant : ${OF_TYPES[normalizeOFType(ofItem.type)].label}`}
                             className={`text-[11px] font-bold rounded-lg px-1.5 py-0.5 border cursor-pointer ${OF_TYPES[normalizeOFType(ofItem.type)].classe}`}
                           >
-                            {(['L', 'O', 'I'] as OFType[]).map((t) => (
+                            {(['L', 'O', 'I', 'BDA'] as OFType[]).map((t) => (
                               <option key={t} value={t} title={OF_TYPES[t].label}>
                                 {t}
                               </option>
                             ))}
                           </select>
+                        </div>
+                        <div className="flex items-center gap-2.5">
+                          <select
+                            value={ofItem.destination ?? ''}
+                            onChange={(e) =>
+                              handleUpdateSingleOF(ofItem.id, {
+                                destination: (e.target.value || undefined) as
+                                  | DestinationOF
+                                  | undefined,
+                              })
+                            }
+                            title={
+                              ofItem.destination
+                                ? `Destination : ${
+                                    OF_DESTINATIONS.find(
+                                      (d) => d.code === ofItem.destination
+                                    )?.label ?? ofItem.destination
+                                  }`
+                                : 'Choisir la destination de cet OF'
+                            }
+                            style={{
+                              backgroundImage: CHEVRON_DESTINATION,
+                              backgroundRepeat: 'no-repeat',
+                              backgroundPosition: 'right 6px center',
+                              backgroundSize: '14px',
+                            }}
+                            className={`appearance-none text-[11px] font-bold rounded-md border pl-2 pr-7 py-0.5 cursor-pointer shadow-2xs ${
+                              ofItem.destination
+                                ? OF_DESTINATIONS.find(
+                                    (d) => d.code === ofItem.destination
+                                  )?.classe ?? 'bg-white text-slate-700'
+                                : 'bg-white text-slate-700'
+                            }`}
+                          >
+                            <option value="">Destination</option>
+                            {OF_DESTINATIONS.map((d) => (
+                              <option key={d.code} value={d.code} title={d.label}>
+                                {d.code}
+                              </option>
+                            ))}
+                          </select>
+                          {(nbControlesPasses > 0 || ccEnAttente) && (
+                            <span
+                              className={`inline-flex items-center gap-1.5 rounded-full pl-2 py-0.5 ${
+                                ccEnAttente ? 'pr-2.5' : 'pr-2'
+                              } ${
+                                nbControlesPasses > 0
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : 'bg-slate-100 text-slate-400'
+                              }`}
+                              title={
+                                `Contrôles passés : ${nbControlesPasses}/2` +
+                                (i100Existe
+                                  ? ccPasse
+                                    ? ' • CC OK'
+                                    : ' • CC en attente'
+                                  : '')
+                              }
+                            >
+                              {nbControlesPasses > 0 && (
+                                <span className="inline-flex items-center">
+                                  {Array.from({ length: nbControlesPasses }).map(
+                                    (_, i) => (
+                                      <Check
+                                        key={i}
+                                        className="-ml-1.5 first:ml-0 w-[15px] h-[15px]"
+                                        strokeWidth={3}
+                                      />
+                                    )
+                                  )}
+                                </span>
+                              )}
+                              {ccEnAttente && (
+                                <>
+                                  <span
+                                    className={`w-px h-3 ${
+                                      nbControlesPasses > 0
+                                        ? 'bg-emerald-300'
+                                        : 'bg-slate-300'
+                                    }`}
+                                  />
+                                  <span className="text-[10px] font-bold tracking-wide leading-none">
+                                    CC
+                                  </span>
+                                </>
+                              )}
+                            </span>
+                          )}
                         </div>
                       </div>
 

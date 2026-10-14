@@ -60,35 +60,32 @@
   animation: carte-posee 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
-/* Carte « tenue en main » pendant le glisser (Pointer Events) : clone en
-   position fixe qui suit le curseur. L'inclinaison et l'ombre sont posées en
-   transform inline par le contrôleur (utils/glisserCarte.ts). */
-.carte-tenue {
-  border-radius: 12px;
-  box-shadow: 0 22px 45px -12px rgba(15, 23, 42, 0.5);
-  background: #fff;
-}
-
-/* Pendant le glisser : poignée fermée partout et sélection désactivée. */
-.glisser-carte-active,
-.glisser-carte-active * {
-  cursor: grabbing !important;
-}
-.glisser-carte-active {
-  user-select: none;
-}
-
-/* Case cible survolée pendant un glisser de carte. */
-.case-survol-depot {
+/* Case survolée par une carte en cours de glisser : cible de dépôt. */
+.case-cible-depot {
   outline: 2px solid rgba(59, 130, 246, 0.7);
   outline-offset: -2px;
   box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
   border-radius: 12px;
 }
-button.case-survol-depot {
-  background-color: rgba(239, 246, 255, 0.7);
-  color: #2563eb;
-  border-color: #60a5fa;
+
+/* Carte d'origine pendant un glisser : estompée, sa copie suit le curseur. */
+.carte-en-glissement {
+  opacity: 0.4;
+}
+
+/* Clone flottant qui suit le curseur (aucune interaction pointeur). */
+.carte-ghost {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.92;
+  transform: rotate(1.5deg);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.28);
+  border-radius: 12px;
+}
+
+.carte-ghost * {
+  pointer-events: none;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -130,10 +130,9 @@ export const OfPopover: React.FC<OfPopoverProps> = ({
               <div className='bg-slate-50 border border-slate-200 rounded-lg overflow-hidden'>
                 {ofs.map((ofItem, idx) => {
                   const ofType = normalizeOFType(ofItem.type);
-                  const typeLetter = ofType === 'L' ? 'L' : ofType === 'O' ? 'O' : 'I';
                   const typeInfo = OF_TYPES[ofType];
                   const source = Array.isArray(ofItem.casesEnCours) ? ofItem.casesEnCours : [];
-                  const nbCases = Math.min(5, Math.max(3, ofItem.nbCases || source.length || 5));
+                  const nbCases = Math.min(5, Math.max(4, ofItem.nbCases || source.length || 5));
                   const casesValues = Array.from({ length: nbCases }, (_, i) => source[i] ?? 0);
 
                   return (
@@ -158,7 +157,7 @@ export const OfPopover: React.FC<OfPopoverProps> = ({
                         title={typeInfo.label}
                         className={`font-bold px-1.5 py-0.5 rounded-md border ${typeInfo.classe}`}
                       >
-                        {typeLetter}
+                        {ofType}
                       </span>
                     </div>
                   );

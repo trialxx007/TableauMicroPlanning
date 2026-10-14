@@ -1196,7 +1196,7 @@ export const CardModal: React.FC<CardModalProps> = ({
             )}
           </div>
 
-          {/* Section: OFs (Initiatives / ONY / LOI) */}
+          {/* Section: OFs (Initiatives / ONY / LOI / BDA) */}
           <div className="space-y-3 p-4 rounded-xl border border-slate-200 bg-slate-50/60">
             <div className="text-xs font-bold text-slate-800 flex items-center justify-between gap-2">
               <span className="flex items-center gap-2">

@@ -67,7 +67,7 @@ export const EditableItemName: React.FC<EditableItemNameProps> = ({
           }}
           onBlur={handleSave}
           placeholder={placeholder || defaultValue}
-          className="text-xs font-bold text-slate-900 bg-white border-2 border-slate-900 rounded px-2 py-1 focus:outline-hidden shadow-xs min-w-[140px] max-w-[220px]"
+          className="text-sm font-bold text-slate-900 bg-white border-2 border-slate-900 rounded px-2 py-1 focus:outline-hidden shadow-xs min-w-[160px] max-w-[260px]"
         />
         <button
           type="button"
@@ -92,7 +92,7 @@ export const EditableItemName: React.FC<EditableItemNameProps> = ({
     >
       {prefix && <span className="text-slate-400 font-mono text-[11px]">{prefix}</span>}
       <span
-        className={`font-bold text-[11px] truncate max-w-[140px] sm:max-w-[200px] ${displayName ? 'text-slate-900' : 'text-slate-400 italic'}`}
+        className={`font-bold text-sm truncate max-w-[160px] sm:max-w-[220px] ${displayName ? 'text-slate-900' : 'text-slate-400 italic'}`}
       >
         {displayName || placeholder}
       </span>

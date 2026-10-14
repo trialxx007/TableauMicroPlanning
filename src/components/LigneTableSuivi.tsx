@@ -30,7 +30,8 @@ import {
 import { blocInspectionVide, dateCourte } from '../utils/inspections.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 import { InspectionCell } from './InspectionCell.tsx';
-import { AlertTriangle, ArrowLeftRight, Columns, Pencil, Plus, Trash2, Truck, X } from 'lucide-react';
+import { idSlotCarte } from '../utils/glisserCarte.ts';
+import { AlertTriangle, ArrowLeftRight, Columns, Pencil, Trash2, Truck, X } from 'lucide-react';
 
 /** Ligne du tableau du Suivi Global, mémorisée : en éditant une ligne (inspection,
  *  cartes…), seules les lignes réellement modifiées se re-rendent, pas les autres. */
@@ -52,7 +53,6 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
     onOuvrirExpedition,
     onEnvoyerExpedition,
     onAssignerSlot,
-    onGlisserCarte,
     onMajBloc,
     onAjouterValeur,
     onMajValeur,
@@ -74,7 +74,6 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
     onOuvrirPicker,
     onOuvrirExpedition,
     onAssignerSlot,
-    onGlisserCarte,
     setAlerteOuverte,
   };
 
@@ -311,7 +310,7 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
       })}
 
       {/* Column 12: EXPÉDITION (pile de 2 cartes) */}
-      <td className="h-[170px] min-w-[170px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 align-middle">
+      <td className="h-[170px] w-60 min-w-[210px] bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 align-middle">
         <div className="h-full min-h-[84px] flex flex-col gap-1">
           {row.expeditionCards.map((slot, pileIdx) => (
             <SlotCase
@@ -365,16 +364,14 @@ export interface SlotCaseProps {
     lancementIndex?: number,
     slotIndex?: number
   ) => void;
-  onGlisserCarte: (card: CardItem, event: React.PointerEvent<HTMLElement>) => void;
   setAlerteOuverte: React.Dispatch<React.SetStateAction<AlerteOuverteGlobal | null>>;
 }
 
 /**
  * Une case du tableau : carte liée, ses jalons, sa bande d'alerte. Chaque case
- * est une cible de dépôt (`data-depot` : lue par le contrôleur de glisser) et,
- * quand elle est remplie, la carte est saisissable à la souris/au doigt : elle
- * « décolle » et suit le curseur (voir `utils/glisserCarte.ts`). La pose est
- * animée en CSS3 (classe `animate-carte-posee`, voir index.css).
+ * expose ses coordonnées via `data-case-id` et, quand elle est remplie, la carte
+ * est saisissable (`data-card-drag`) : `useGlisserCartes` gère le glisser-échanger
+ * entre toutes les cases. La pose reste animée en CSS3 (`animate-carte-posee`).
  */
 function SlotCase({
   row,
@@ -391,7 +388,6 @@ function SlotCase({
   onOuvrirPicker,
   onOuvrirExpedition,
   onAssignerSlot,
-  onGlisserCarte,
   setAlerteOuverte,
 }: SlotCaseProps) {
   const rangSuffixe = slotIndex === 1 ? ' — 2ᵉ carte' : '';
@@ -419,16 +415,9 @@ function SlotCase({
   const autreSlotRempli =
     slotIndex != null ? Boolean(pileCourante[1 - slotIndex]) : false;
 
-  // Attributs lus par le contrôleur de glisser (utils/glisserCarte.ts) pour
-  // identifier la case visée sous le curseur. Le surlignage de la cible est
-  // ajouté/retiré en DOM (classe `case-survol-depot`), sans re-render React.
-  const dataDepot: Record<string, string> = {
-    'data-depot': '',
-    'data-row-id': row.id,
-    'data-slot-type': slotType,
-    'data-lancement-index': lancementIndex != null ? String(lancementIndex) : '',
-    'data-slot-index': slotIndex != null ? String(slotIndex) : '',
-  };
+  // Identifiant de case : encode les coordonnées (ligne + colonne + index) du
+  // slot, relues au dépôt par `parseSlotId`.
+  const slotId = idSlotCarte(row.id, slotType, lancementIndex, slotIndex);
 
   const handleSlotClick = () => {
     if (linkedCard) {
@@ -445,17 +434,15 @@ function SlotCase({
   if (!label) {
     return (
       <button
-        {...dataDepot}
+        type="button"
+        data-case-id={slotId}
         onClick={() => onOuvrirActionSlot(row.id, titreSlot, slotType, lancementIndex, slotIndex)}
-        className={`w-full min-h-[50px] flex items-center justify-center text-[11px] font-medium rounded-xl transition-all border border-dashed p-1 text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 border-slate-200 hover:border-blue-300 cursor-pointer ${
+        className={`w-full min-h-[50px] flex items-center justify-center gap-1 text-[11px] font-medium rounded-xl transition-all border border-dashed p-1 text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 border-slate-200 hover:border-blue-300 cursor-pointer before:content-['+'] before:text-sm before:font-bold before:leading-none ${
           autreSlotRempli ? 'flex-none' : 'flex-1'
         }`}
         title="Cliquez pour assigner une carte, ou glissez une carte ici"
       >
-        <span className="flex items-center gap-1">
-          <Plus className="w-3 h-3" />
-          <span>Nouvelle Carte</span>
-        </span>
+        Nouvelle Carte
       </button>
     );
   }
@@ -471,13 +458,12 @@ function SlotCase({
   const enMarge = !enAlerte && jalonsCarte.some((j) => j.enMarge);
 
   return (
-    <div className="flex flex-col gap-1 flex-1 min-h-0 w-full">
-      {/* Conteneur unifié : la ring relie la bande Alerte + la carte. Il sert
-          aussi de cible de dépôt, toute la case (bande incluse) accepte une
-          carte déposée. */}
+    <div data-case-id={slotId} className="flex flex-col gap-1 flex-1 min-h-0 w-full">
+      {/* Conteneur unifié : la ring relie la bande Alerte + la carte. Toute la
+          carte (bande incluse) est saisissable pour l'échange. */}
       <div
-        {...dataDepot}
-        className={`relative w-full flex flex-col flex-1 min-h-0 ${
+        data-card-drag=""
+        className={`relative w-full flex flex-col flex-1 min-h-0 select-none touch-none cursor-grab active:cursor-grabbing ${
           enAlerte
             ? 'ring-2 ring-rose-300/60 shadow-[0_0_0_1px_rgba(251,113,133,0.5)] rounded-xl'
             : enMarge
@@ -485,36 +471,39 @@ function SlotCase({
             : 'rounded-xl'
         }`}
       >
-        {/* Bande d'alerte de la carte : rien que le mot, le détail est au clic. */}
-        {enAlerte && linkedCard && (
-          <button
-            type="button"
-            onClick={(event) =>
-              setAlerteOuverte({
-                card: linkedCard,
-                slotTitle: titreSlot,
-                anchor: event.currentTarget,
-              })
-            }
-            className="shrink-0 w-full flex items-center justify-center gap-1 px-2 py-1 rounded-t-xl bg-red-600 text-white motion-safe:animate-pulse text-[10px] font-extrabold uppercase tracking-wider cursor-pointer hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-white/80 transition-colors relative z-20"
-            title="Voir le détail de l'alerte"
-            aria-haspopup="dialog"
-          >
-            <AlertTriangle className="w-3 h-3 shrink-0" />
-            Alerte
-          </button>
-        )}
+        {/* Bandes toujours présentes (masquées si inactives) pour garder une
+            structure DOM stable d'une carte à l'autre. */}
+        <button
+          type="button"
+          disabled={!enAlerte || !linkedCard}
+          onClick={(event) => {
+            if (!enAlerte || !linkedCard) return;
+            setAlerteOuverte({
+              card: linkedCard,
+              slotTitle: titreSlot,
+              anchor: event.currentTarget,
+            });
+          }}
+          className={`shrink-0 w-full items-center justify-center gap-1 px-2 py-1 rounded-t-xl bg-red-600 text-white motion-safe:animate-pulse text-[10px] font-extrabold uppercase tracking-wider cursor-pointer hover:bg-red-700 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-white/80 transition-colors relative z-20 ${
+            enAlerte && linkedCard ? 'flex' : 'hidden'
+          }`}
+          title="Voir le détail de l'alerte"
+          aria-haspopup="dialog"
+        >
+          <AlertTriangle className="w-3 h-3 shrink-0" />
+          Alerte
+        </button>
         {/* Bande de marge : la nomenclature R est dans sa plage — pas une alerte,
             juste un état à surveiller. */}
-        {enMarge && linkedCard && (
-          <div
-            className="shrink-0 w-full flex items-center justify-center gap-1 px-2 py-1 rounded-t-xl bg-amber-500 text-white text-[10px] font-extrabold uppercase tracking-wider relative z-20"
-            title="Jalon R dans la marge"
-          >
-            <AlertTriangle className="w-3 h-3 shrink-0" />
-            En marge
-          </div>
-        )}
+        <div
+          className={`shrink-0 w-full items-center justify-center gap-1 px-2 py-1 rounded-t-xl bg-amber-500 text-white text-[10px] font-extrabold uppercase tracking-wider relative z-20 ${
+            enMarge && linkedCard ? 'flex' : 'hidden'
+          }`}
+          title="Jalon R dans la marge"
+        >
+          <AlertTriangle className="w-3 h-3 shrink-0" />
+          En marge
+        </div>
         <div
           className={`group relative w-full min-h-[52px] flex flex-col justify-start px-2 py-1.5 overflow-hidden bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left flex-1 ${
             enAlerte || enMarge ? 'rounded-b-xl border-t-0' : 'rounded-b-xl'
@@ -522,11 +511,6 @@ function SlotCase({
         >
           <div
             key={linkedCard?.id ?? 'carte-vide'}
-            onPointerDown={(e) => {
-              if (!linkedCard) return;
-              if (e.pointerType === 'mouse' && e.button !== 0) return;
-              onGlisserCarte(linkedCard, e);
-            }}
             onClick={handleSlotClick}
             className="animate-carte-posee flex-1 min-h-0 w-full flex flex-col justify-start items-start select-none touch-none cursor-grab active:cursor-grabbing"
             title={
@@ -740,7 +724,6 @@ export interface LigneTableSuiviProps {
     lancementIndex?: number,
     slotIndex?: number
   ) => void;
-  onGlisserCarte: (card: CardItem, event: React.PointerEvent<HTMLElement>) => void;
   onMajBloc: (
     rowId: string,
     blocIndex: number,

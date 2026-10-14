@@ -1,200 +1,284 @@
 /**
- * Glisser-déposer d'une carte par Pointer Events (souris, tactile, stylet).
+ * Glisser-échanger maison des cartes du Suivi Global (Pointer Events, sans
+ * dépendance externe).
  *
- * Une seule carte est « tenue » à la fois : on clone la carte source dans un
- * overlay fixe qui suit le curseur via `transform` (composé GPU), et la case
- * visée est trouvée avec `elementFromPoint` sur les zones `[data-depot]`.
+ * Chaque case de carte porte un `data-case-id` encodant ses coordonnées ; le
+ * conteneur (le tableau) est observé en délégation : un `pointerdown` sur un
+ * élément `[data-card-drag]` arme un glisser, un `pointermove` démarre le geste
+ * au-delà d'un seuil (pour ne pas casser le clic simple), et un `pointerup`
+ * échange les deux cases survolées.
  *
- * Performance : aucun re-render React pendant le geste. Les positions sont
- * envoyées à `requestAnimationFrame` et écrites directement dans le DOM, et
- * l'overlay a `pointer-events: none` pour ne pas gêner la détection de cible.
+ * Pendant le glisser, un défilement automatique (fenêtre et conteneurs
+ * scrollables) permet d'atteindre les colonnes hors écran, et une copie
+ * flottante suit le curseur.
+ *
+ * Les identifiants n'encodent pas le groupe : la position de la case (colonne)
+ * définit le statut, donc `parseSlotId` fournit directement les coordonnées.
  */
 
-export interface CoordonneesCase {
+import { useEffect, useRef } from 'react';
+
+export type TypeSlotCase = 'modeleEnCours' | 'lancement' | 'expedition';
+
+export interface CoordCase {
   rowId: string;
-  slotType: string;
+  slotType: TypeSlotCase;
   lancementIndex?: number;
   slotIndex?: number;
 }
 
-export interface OptionsGlisser {
-  cardId: string;
-  source: HTMLElement;
-  clientX: number;
-  clientY: number;
-  /** Conteneur défilant horizontal : auto-scroll quand le curseur approche un bord. */
-  scrollContainer?: HTMLElement | null;
-  onDeposer: (cardId: string, coords: CoordonneesCase) => void;
+/** Séparateur improbable dans un identifiant de ligne. */
+const SEP = '\u241F';
+
+/** Distance (px) à parcourir avant de considérer qu'un geste est un glisser. */
+const SEUIL_GLISSER = 6;
+/** Marge (px) depuis un bord déclenchant le défilement automatique. */
+const MARGE_SCROLL = 70;
+/** Vitesse (px/image) du défilement automatique. */
+const VITESSE_SCROLL = 22;
+
+/** Classe posée sur la case survolée pendant un glisser. */
+const CLASSE_CIBLE = 'case-cible-depot';
+/** Classe posée sur la carte d'origine pendant un glisser. */
+const CLASSE_EN_GLISSER = 'carte-en-glissement';
+/** Classe du clone flottant qui suit le curseur. */
+const CLASSE_GHOST = 'carte-ghost';
+
+/** Identifiant de case (sert de `data-case-id`). */
+export function idSlotCarte(
+  rowId: string,
+  slotType: TypeSlotCase,
+  lancementIndex?: number,
+  slotIndex?: number
+): string {
+  const t = slotType === 'modeleEnCours' ? 'm' : slotType === 'lancement' ? 'l' : 'e';
+  const parts = ['s', t, rowId];
+  if (slotType === 'lancement') parts.push(String(lancementIndex ?? 0));
+  parts.push(String(slotIndex ?? 0));
+  return parts.join(SEP);
 }
 
-/** Déplacement (px) à dépasser avant de « décoller » la carte. En dessous,
- *  le geste reste un simple clic (ouverture de la fiche). */
-const SEUIL_DEPLACEMENT = 4;
-/** Marge (px) le long des bords qui déclenche l'auto-scroll du tableau. */
-const MARGE_AUTOSCROLL = 64;
-const VITESSE_AUTOSCROLL = 14;
-
-interface EtatGlisser {
-  cardId: string;
-  source: HTMLElement;
-  overlay: HTMLElement | null;
-  offsetX: number;
-  offsetY: number;
-  startX: number;
-  startY: number;
-  x: number;
-  y: number;
-  frame: number | null;
-  bouge: boolean;
-  cible: HTMLElement | null;
-  scrollContainer: HTMLElement | null;
-  onDeposer: (cardId: string, coords: CoordonneesCase) => void;
-}
-
-let etat: EtatGlisser | null = null;
-
-function lireCoordonnees(zone: HTMLElement): CoordonneesCase | null {
-  const { rowId, slotType, lancementIndex, slotIndex } = zone.dataset;
-  if (!rowId || !slotType) return null;
-  return {
-    rowId,
-    slotType,
-    ...(lancementIndex ? { lancementIndex: Number(lancementIndex) } : {}),
-    ...(slotIndex ? { slotIndex: Number(slotIndex) } : {}),
-  };
-}
-
-function creerOverlay(source: HTMLElement, offsetX: number, offsetY: number): HTMLElement {
-  const rect = source.getBoundingClientRect();
-  const clone = source.cloneNode(true) as HTMLElement;
-  clone.classList.remove('animate-carte-posee');
-  clone.classList.add('carte-tenue');
-  clone.style.position = 'fixed';
-  clone.style.top = '0';
-  clone.style.left = '0';
-  clone.style.width = `${rect.width}px`;
-  clone.style.height = `${rect.height}px`;
-  clone.style.margin = '0';
-  clone.style.boxSizing = 'border-box';
-  clone.style.pointerEvents = 'none';
-  clone.style.zIndex = '9999';
-  clone.style.willChange = 'transform';
-  // La rotation pivote autour du point saisi : la carte reste « dans la main ».
-  clone.style.transformOrigin = `${offsetX}px ${offsetY}px`;
-  document.body.appendChild(clone);
-  return clone;
-}
-
-function dessiner() {
-  if (!etat || !etat.overlay) return;
-  etat.overlay.style.transform = `translate3d(${etat.x - etat.offsetX}px, ${
-    etat.y - etat.offsetY
-  }px, 0) rotate(-3deg) scale(1.03)`;
-}
-
-function cibler() {
-  if (!etat) return;
-  const el = document.elementFromPoint(etat.x, etat.y) as HTMLElement | null;
-  const brute = el?.closest<HTMLElement>('[data-depot]') ?? null;
-  // On ne se surligne pas soi-même : une case contenant la carte source est ignorée.
-  const zone = brute && !brute.contains(etat.source) ? brute : null;
-  if (zone !== etat.cible) {
-    etat.cible?.classList.remove('case-survol-depot');
-    etat.cible = zone;
-    zone?.classList.add('case-survol-depot');
+/** Relit les coordonnées encodées dans un identifiant de case. */
+export function parseSlotId(id: string): CoordCase | null {
+  const parts = id.split(SEP);
+  if (parts[0] !== 's' || !parts[2]) return null;
+  const t = parts[1];
+  if (t === 'm') return { rowId: parts[2], slotType: 'modeleEnCours', slotIndex: Number(parts[3] ?? 0) };
+  if (t === 'e') return { rowId: parts[2], slotType: 'expedition', slotIndex: Number(parts[3] ?? 0) };
+  if (t === 'l') {
+    return {
+      rowId: parts[2],
+      slotType: 'lancement',
+      lancementIndex: Number(parts[3] ?? 0),
+      slotIndex: Number(parts[4] ?? 0),
+    };
   }
+  return null;
 }
 
-function autoScroll() {
-  if (!etat?.scrollContainer) return;
-  const cont = etat.scrollContainer;
-  const rect = cont.getBoundingClientRect();
-  if (etat.x < rect.left + MARGE_AUTOSCROLL) cont.scrollLeft -= VITESSE_AUTOSCROLL;
-  else if (etat.x > rect.right - MARGE_AUTOSCROLL) cont.scrollLeft += VITESSE_AUTOSCROLL;
-}
+/**
+ * Active le glisser-échanger sur `container` (le tableau) et rappelle `onSwap`
+ * avec les coordonnées source/cible à chaque échange effectif.
+ */
+export function useGlisserCartes(
+  container: HTMLElement | null,
+  onSwap: (from: CoordCase, to: CoordCase) => void
+): void {
+  const onSwapRef = useRef(onSwap);
+  onSwapRef.current = onSwap;
 
-function planifier() {
-  if (!etat || etat.frame !== null) return;
-  etat.frame = window.requestAnimationFrame(() => {
-    if (!etat) return;
-    etat.frame = null;
-    dessiner();
-    cibler();
-    autoScroll();
-  });
-}
+  useEffect(() => {
+    if (!container) return;
 
-function detacher() {
-  window.removeEventListener('pointermove', onPointerMove);
-  window.removeEventListener('pointerup', onPointerUp);
-  window.removeEventListener('pointercancel', onPointerUp);
-}
+    let sourceId: string | null = null;
+    let sourceEl: HTMLElement | null = null;
+    let ghost: HTMLElement | null = null;
+    let cible: HTMLElement | null = null;
+    let scrollables: HTMLElement[] = [];
+    let startX = 0;
+    let startY = 0;
+    let lastX = 0;
+    let lastY = 0;
+    let dragging = false;
+    let clicIgnore = false;
+    let rafId = 0;
+    let timerClic: ReturnType<typeof setTimeout> | null = null;
 
-function onPointerMove(e: PointerEvent) {
-  if (!etat) return;
-  etat.x = e.clientX;
-  etat.y = e.clientY;
-  if (!etat.bouge) {
-    const dx = e.clientX - etat.startX;
-    const dy = e.clientY - etat.startY;
-    if (Math.hypot(dx, dy) < SEUIL_DEPLACEMENT) return;
-    etat.bouge = true;
-    etat.overlay = creerOverlay(etat.source, etat.offsetX, etat.offsetY);
-    document.body.classList.add('glisser-carte-active');
-  }
-  planifier();
-}
+    const retirerCible = () => {
+      if (cible) cible.classList.remove(CLASSE_CIBLE);
+      cible = null;
+    };
 
-function onPointerUp(e: PointerEvent) {
-  if (!etat) return;
-  const courant = etat;
-  etat = null;
-  detacher();
-  if (courant.frame !== null) window.cancelAnimationFrame(courant.frame);
-  document.body.classList.remove('glisser-carte-active');
-  courant.cible?.classList.remove('case-survol-depot');
-  courant.overlay?.remove();
+    const retirerGhost = () => {
+      if (ghost) {
+        ghost.remove();
+        ghost = null;
+      }
+      if (sourceEl) sourceEl.classList.remove(CLASSE_EN_GLISSER);
+    };
 
-  if (!courant.bouge) return;
+    const reinitialiser = () => {
+      retirerCible();
+      retirerGhost();
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = 0;
+      sourceId = null;
+      sourceEl = null;
+      dragging = false;
+    };
 
-  // Un glisser ne doit jamais être interprété comme un clic (ouverture de fiche).
-  const stopClic = (ev: MouseEvent) => {
-    ev.stopPropagation();
-    ev.preventDefault();
-  };
-  window.addEventListener('click', stopClic, true);
-  window.setTimeout(() => window.removeEventListener('click', stopClic, true), 300);
+    /** Case sous un point de l'écran, à l'intérieur du conteneur. */
+    const caseSous = (x: number, y: number): HTMLElement | null => {
+      const el = document.elementFromPoint(x, y);
+      const c = el?.closest?.('[data-case-id]') as HTMLElement | null;
+      return c && container.contains(c) ? c : null;
+    };
 
-  const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-  const brute = el?.closest<HTMLElement>('[data-depot]') ?? null;
-  const zone = brute && !brute.contains(courant.source) ? brute : null;
-  if (!zone) return;
-  const coords = lireCoordonnees(zone);
-  if (coords) courant.onDeposer(courant.cardId, coords);
-}
+    const majCible = (c: HTMLElement | null) => {
+      if (c === cible) return;
+      retirerCible();
+      if (c && c.getAttribute('data-case-id') !== sourceId) {
+        c.classList.add(CLASSE_CIBLE);
+        cible = c;
+      }
+    };
 
-/** Démarre un glisser. À appeler dans le `onPointerDown` de la carte (le
- *  `source` doit être lu depuis `e.currentTarget` de façon synchrone). */
-export function demarrerGlisser(options: OptionsGlisser) {
-  if (etat) return;
-  const rect = options.source.getBoundingClientRect();
-  etat = {
-    cardId: options.cardId,
-    source: options.source,
-    overlay: null,
-    offsetX: options.clientX - rect.left,
-    offsetY: options.clientY - rect.top,
-    startX: options.clientX,
-    startY: options.clientY,
-    x: options.clientX,
-    y: options.clientY,
-    frame: null,
-    bouge: false,
-    cible: null,
-    scrollContainer: options.scrollContainer ?? null,
-    onDeposer: options.onDeposer,
-  };
-  window.addEventListener('pointermove', onPointerMove);
-  window.addEventListener('pointerup', onPointerUp);
-  window.addEventListener('pointercancel', onPointerUp);
+    /** Conteneurs scrollables entre le tableau et la racine du document. */
+    const collecterScrollables = (): HTMLElement[] => {
+      const liste: HTMLElement[] = [];
+      let el = container.parentElement;
+      while (el) {
+        const s = getComputedStyle(el);
+        if (/(auto|scroll)/.test(s.overflow + s.overflowX + s.overflowY)) liste.push(el);
+        el = el.parentElement;
+      }
+      return liste;
+    };
+
+    /** Défilement automatique tant que le geste est en cours. */
+    const boucleAutoScroll = () => {
+      if (!dragging) return;
+      if (lastX < MARGE_SCROLL) window.scrollBy(-VITESSE_SCROLL, 0);
+      else if (lastX > window.innerWidth - MARGE_SCROLL) window.scrollBy(VITESSE_SCROLL, 0);
+      if (lastY < MARGE_SCROLL) window.scrollBy(0, -VITESSE_SCROLL);
+      else if (lastY > window.innerHeight - MARGE_SCROLL) window.scrollBy(0, VITESSE_SCROLL);
+
+      for (const el of scrollables) {
+        const r = el.getBoundingClientRect();
+        // Le curseur peut légèrement sortir du conteneur : on tolère une marge.
+        const bandeY = lastY > r.top && lastY < r.bottom;
+        const bandeX = lastX > r.left && lastX < r.right;
+        if (bandeY) {
+          if (lastX < r.left + MARGE_SCROLL) el.scrollLeft -= VITESSE_SCROLL;
+          else if (lastX > r.right - MARGE_SCROLL) el.scrollLeft += VITESSE_SCROLL;
+        }
+        if (bandeX) {
+          if (lastY < r.top + MARGE_SCROLL) el.scrollTop -= VITESSE_SCROLL;
+          else if (lastY > r.bottom - MARGE_SCROLL) el.scrollTop += VITESSE_SCROLL;
+        }
+      }
+
+      majCible(caseSous(lastX, lastY));
+      rafId = requestAnimationFrame(boucleAutoScroll);
+    };
+
+    const demarrerGlisser = (e: PointerEvent) => {
+      if (!sourceEl) return;
+      dragging = true;
+      scrollables = collecterScrollables();
+      sourceEl.classList.add(CLASSE_EN_GLISSER);
+      const rect = sourceEl.getBoundingClientRect();
+      ghost = sourceEl.cloneNode(true) as HTMLElement;
+      ghost.classList.add(CLASSE_GHOST);
+      ghost.classList.remove(CLASSE_EN_GLISSER);
+      ghost.style.width = `${rect.width}px`;
+      ghost.style.height = `${rect.height}px`;
+      ghost.style.left = `${e.clientX - rect.width / 2}px`;
+      ghost.style.top = `${e.clientY - rect.height / 2}px`;
+      document.body.appendChild(ghost);
+      rafId = requestAnimationFrame(boucleAutoScroll);
+    };
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (e.button !== 0) return;
+      const target = e.target as Element | null;
+      const carte = target?.closest?.('[data-card-drag]') as HTMLElement | null;
+      if (!carte) return;
+      // Les boutons (actions rapides, bande d'alerte) gardent leur clic.
+      if (target?.closest?.('button')) return;
+      const caseEl = carte.closest('[data-case-id]') as HTMLElement | null;
+      if (!caseEl) return;
+      sourceId = caseEl.getAttribute('data-case-id');
+      sourceEl = carte;
+      startX = e.clientX;
+      startY = e.clientY;
+      lastX = e.clientX;
+      lastY = e.clientY;
+      dragging = false;
+    };
+
+    const onPointerMove = (e: PointerEvent) => {
+      lastX = e.clientX;
+      lastY = e.clientY;
+      if (!sourceEl) return;
+      if (!dragging) {
+        if (Math.hypot(e.clientX - startX, e.clientY - startY) < SEUIL_GLISSER) return;
+        demarrerGlisser(e);
+      }
+      if (ghost) {
+        const rect = ghost.getBoundingClientRect();
+        ghost.style.left = `${e.clientX - rect.width / 2}px`;
+        ghost.style.top = `${e.clientY - rect.height / 2}px`;
+      }
+      majCible(caseSous(e.clientX, e.clientY));
+    };
+
+    const onPointerUp = () => {
+      const etaitEnGlisser = dragging;
+      const cibleId = cible?.getAttribute('data-case-id') ?? null;
+      if (etaitEnGlisser && cibleId && sourceId && cibleId !== sourceId) {
+        const from = parseSlotId(sourceId);
+        const to = parseSlotId(cibleId);
+        if (from && to) onSwapRef.current(from, to);
+      }
+      reinitialiser();
+      if (etaitEnGlisser) {
+        // Le relâchement génère un clic : on l'avale pour ne pas ouvrir la fiche.
+        clicIgnore = true;
+        if (timerClic) clearTimeout(timerClic);
+        timerClic = setTimeout(() => {
+          clicIgnore = false;
+        }, 60);
+      }
+    };
+
+    const onClickCapture = (e: MouseEvent) => {
+      if (!clicIgnore) return;
+      e.stopPropagation();
+      e.preventDefault();
+      clicIgnore = false;
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') reinitialiser();
+    };
+
+    container.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointercancel', reinitialiser);
+    window.addEventListener('keydown', onKeyDown);
+    container.addEventListener('click', onClickCapture, true);
+
+    return () => {
+      container.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', reinitialiser);
+      window.removeEventListener('keydown', onKeyDown);
+      container.removeEventListener('click', onClickCapture, true);
+      if (timerClic) clearTimeout(timerClic);
+      reinitialiser();
+    };
+  }, [container]);
 }

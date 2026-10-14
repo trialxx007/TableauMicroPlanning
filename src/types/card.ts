@@ -1,11 +1,26 @@
 export type CardStatus = 'EN_ATTENTE' | 'EN_COURS' | 'TERMINE' | 'BLOQUE';
 
-export type OFType = 'I' | 'O' | 'L';
+/** Destination d'un OF : pays vers lequel il est expédié. */
+export type DestinationOF = 'FR' | 'US' | 'ES' | 'MX';
+
+export const OF_DESTINATIONS: {
+  code: DestinationOF;
+  label: string;
+  classe: string;
+}[] = [
+  { code: 'FR', label: 'France', classe: 'bg-blue-50 text-blue-800 border-blue-200' },
+  { code: 'US', label: 'États-Unis', classe: 'bg-violet-50 text-violet-800 border-violet-200' },
+  { code: 'ES', label: 'Espagne', classe: 'bg-amber-50 text-amber-800 border-amber-200' },
+  { code: 'MX', label: 'Mexique', classe: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
+];
+
+export type OFType = 'I' | 'O' | 'L' | 'BDA';
 
 export const OF_TYPES: Record<OFType, { label: string; classe: string }> = {
   I: { label: 'Initiatives', classe: 'bg-blue-50 text-blue-800 border-blue-200' },
   O: { label: 'ONY', classe: 'bg-violet-50 text-violet-800 border-violet-200' },
   L: { label: 'LOI', classe: 'bg-amber-50 text-amber-800 border-amber-200' },
+  BDA: { label: 'BDA', classe: 'bg-cyan-50 text-cyan-800 border-cyan-200' },
 };
 
 const LEGACY_OF_TYPES: Record<string, OFType> = {
@@ -14,7 +29,7 @@ const LEGACY_OF_TYPES: Record<string, OFType> = {
 };
 
 export function normalizeOFType(type: unknown): OFType {
-  if (type === 'I' || type === 'O' || type === 'L') return type;
+  if (type === 'I' || type === 'O' || type === 'L' || type === 'BDA') return type;
   const legacy = typeof type === 'string' ? LEGACY_OF_TYPES[type] : undefined;
   return legacy || 'I';
 }
@@ -40,6 +55,8 @@ export interface OrdreFabrication {
   titre?: string;
   ordreRDL: number;
   type: OFType;
+  /** Destination (pays) de l'OF : FR, US, ES, MX… */
+  destination?: DestinationOF;
   nomExecutant: string;
   quantiteDemandee: number;
   quantiteFinie: number;

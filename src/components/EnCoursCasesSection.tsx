@@ -26,7 +26,7 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
 
-  const currentNb = Math.min(5, Math.max(3, nbCases || 5));
+  const currentNb = Math.min(5, Math.max(4, nbCases || 5));
   const values = Array.from({ length: currentNb }, (_, i) => casesEnCours[i] ?? 0);
   const totalAssigne = Number(values[values.length - 1]) || 0;
 
@@ -139,7 +139,7 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
               <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100">
                 Cases à afficher
               </div>
-              {[3, 4, 5].map((n) => (
+              {[4, 5].map((n) => (
                 <button
                   key={n}
                   type="button"

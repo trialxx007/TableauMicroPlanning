@@ -19,14 +19,28 @@ interface TableauxOFsViewProps {
 }
 
 /** Un OF affiché dans les tableaux : ses cases + son type, éditables. */
-const OF_TYPES_AFFICHES: OFType[] = ['L', 'O', 'I'];
+const OF_TYPES_AFFICHES: OFType[] = ['L', 'O', 'I', 'BDA'];
+
+/** Nombre de cases borné à 4 ou 5 (le menu ne propose plus que ces deux valeurs). */
+function nbCasesBorne(nb: number | undefined): number {
+  return Math.min(5, Math.max(4, nb || 5));
+}
+
+/**
+ * Abréviations des colonnes de quantité d'un OF, de la gauche vers la droite.
+ * `OF` est la dernière quantité (le total confié, qui ne bouge pas).
+ */
+function libellesCases(nb: number): string[] {
+  const etapes = nb >= 5 ? ['PK', 'FA', 'FT', 'QL'] : ['PK', 'FT', 'QL'];
+  return [...etapes, 'OF'];
+}
 
 /**
  * Recalcule les champs dérivés d'un OF après une saisie : la quantité finie est
  * la première case, le reste en découle, et le statut suit la progression.
  */
 function recalcOF(of: OrdreFabrication): OrdreFabrication {
-  const nb = of.nbCases || 5;
+  const nb = nbCasesBorne(of.nbCases);
   const total = Number(of.quantiteDemandee) || 0;
   const cases = normalizeCases(of.casesEnCours, nb, total);
   const finie = Number(cases[0]) || 0;
@@ -47,7 +61,7 @@ function recalcOF(of: OrdreFabrication): OrdreFabrication {
  * la modifier change la quantité demandée de l'OF, pas une étape.
  */
 function appliquerCase(of: OrdreFabrication, idx: number, val: number): OrdreFabrication {
-  const nb = of.nbCases || 5;
+  const nb = nbCasesBorne(of.nbCases);
   const cases = normalizeCases(of.casesEnCours, nb, of.quantiteDemandee);
   if (idx === nb - 1) {
     const total = Math.max(0, val);
@@ -68,7 +82,7 @@ const OFRowEditable: React.FC<{
   onCommitCase: (idx: number, val: number) => void;
   onCommitType: (t: OFType) => void;
 }> = ({ of, numero, onCommitCase, onCommitType }) => {
-  const nb = of.nbCases || 5;
+  const nb = nbCasesBorne(of.nbCases);
   const cases = normalizeCases(of.casesEnCours, nb, of.quantiteDemandee);
   const type = normalizeOFType(of.type);
 
@@ -92,7 +106,7 @@ const OFRowEditable: React.FC<{
               }}
               title={
                 idx === nb - 1
-                  ? "Total confié à cet OF (dernière case)"
+                  ? 'Total confié à cet OF (dernière quantité, fixe)'
                   : `Case ${idx + 1} : quantité ayant atteint cette étape`
               }
               className={`w-12 text-center text-[11px] font-bold px-1 py-0.5 rounded border border-slate-300 focus:outline-hidden focus:border-emerald-500 focus:bg-emerald-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
@@ -227,7 +241,11 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
             </p>
           </div>
         ) : (
-          parClient.map(([client, cartesClient]) => (
+          parClient.map(([client, cartesClient]) => {
+            // Une seule mention des colonnes de cases, en haut du tableau :
+            // on se base sur le nombre de cases du premier OF de la section.
+            const nbSection = nbCasesBorne(cartesClient[0]?.ofs?.[0]?.nbCases);
+            return (
             <section
             key={client}
             className="min-w-0 bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden"
@@ -244,7 +262,30 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
                   <thead>
                     <tr className="bg-slate-50 text-left text-[11px] uppercase tracking-wider text-slate-500">
                       <th className="px-4 py-2 font-bold w-56">Modèle</th>
-                      <th className="px-4 py-2 font-bold">Ordres de fabrication</th>
+                      <th className="px-4 py-2 font-bold align-top">
+                        <div className="space-y-1.5">
+                          <div>Ordres de fabrication</div>
+                          {/* Une seule mention des colonnes de cases (abréviations). */}
+                          <div className="flex items-center gap-1.5 normal-case tracking-normal">
+                            <span className="w-6" aria-hidden="true" />
+                            <div className="inline-flex items-center">
+                              {libellesCases(nbSection).map((l, i) => (
+                                <React.Fragment key={l}>
+                                  {i > 0 && (
+                                    <span
+                                      className="mx-1 h-3 w-px bg-slate-300"
+                                      aria-hidden="true"
+                                    />
+                                  )}
+                                  <span className="w-12 text-center text-[10px] font-bold uppercase tracking-wider leading-none text-slate-400">
+                                    {l}
+                                  </span>
+                                </React.Fragment>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -295,7 +336,8 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
                 </table>
               </div>
             </section>
-          ))
+            );
+          })
         )}
       </div>
     </div>

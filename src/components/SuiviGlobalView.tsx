@@ -22,13 +22,14 @@ import { AlertePopover } from './AlertePopover.tsx';
 import { useAlertesManuelles } from '../utils/alertesManuelles.ts';
 import { getJalonsCard, type JalonInfo } from '../utils/jalons.ts';
 import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
-import { demarrerGlisser } from '../utils/glisserCarte.ts';
+import { useGlisserCartes } from '../utils/glisserCarte.ts';
 import {
   blocInspectionVide,
   dateDuJourISO,
   normaliserBloc,
 } from '../utils/inspections.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
+import { useInspectionsParCarte } from '../context/InspectionsParCarteContext.tsx';
 import { ViewSwitcher, AppPage } from './ViewSwitcher.tsx';
 import { suiviGlobalApi, type SuiviGlobalLayoutRow } from '../services/api.ts';
 import {
@@ -185,6 +186,52 @@ function localiserCarteDansGroupe(
   return null;
 }
 
+/** Garantit qu'une carte n'occupe qu'une seule case d'un groupe : on conserve
+ *  l'occurrence à `garde` et on vide les doublons ailleurs dans le groupe. */
+function normaliserUniciteGroupe(
+  lignes: SuiviRow[],
+  groupe: GroupeSlot,
+  garde: CoordCase
+): SuiviRow[] {
+  const cardId = lireCarteEnCase(lignes, garde)?.cardId;
+  if (!cardId) return lignes;
+
+  const estGarde = (c: CoordCase) =>
+    c.rowId === garde.rowId &&
+    c.slotType === garde.slotType &&
+    (c.lancementIndex ?? 0) === (garde.lancementIndex ?? 0) &&
+    (c.slotIndex ?? 0) === (garde.slotIndex ?? 0);
+
+  return lignes.map((r) => {
+    if (groupe === 'expedition') {
+      const pile = (r.expeditionCards as PileDeCartes).map((s, i) => {
+        if (s?.cardId !== cardId) return s;
+        return estGarde({ rowId: r.id, slotType: 'expedition', slotIndex: i }) ? s : null;
+      }) as PileDeCartes;
+      return { ...r, expeditionCards: pile };
+    }
+    const modelePile = (r.modeleEnCoursCards as PileDeCartes).map((s, i) => {
+      if (s?.cardId !== cardId) return s;
+      return estGarde({ rowId: r.id, slotType: 'modeleEnCours', slotIndex: i }) ? s : null;
+    }) as PileDeCartes;
+    const lancementsPiles = (r.prochainsLancementsCards as ChaineRow['prochainsLancementsCards']).map(
+      (pile, li) =>
+        (pile ?? [null, null]).map((s, si) => {
+          if (s?.cardId !== cardId) return s;
+          return estGarde({
+            rowId: r.id,
+            slotType: 'lancement',
+            lancementIndex: li,
+            slotIndex: si,
+          })
+            ? s
+            : null;
+        })
+    ) as ChaineRow['prochainsLancementsCards'];
+    return { ...r, modeleEnCoursCards: modelePile, prochainsLancementsCards: lancementsPiles };
+  });
+}
+
 /** Un ancien cache peut stocker une carte seule : on la remonte en pile. */
 function enPile(brut: unknown): PileDeCartes {
   if (Array.isArray(brut)) return [brut[0] ?? null, brut[1] ?? null];
@@ -338,6 +385,20 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
   // Layout partagé via API (DB SQLite) avec polling + localStorage fallback
   const [rows, setRows] = useState<SuiviRow[]>(() => INITIAL_CHAINE_ROWS);
+
+  // Publie l'inspection de chaque carte (colonne Inspection) pour que la fiche
+  // carte (CardModal) puisse y référer le long de ses OF.
+  const { setParCarte } = useInspectionsParCarte();
+  useEffect(() => {
+    const map: Record<string, InspectionBloc> = {};
+    for (const r of rows) {
+      for (let i = 0; i < r.modeleEnCoursCards.length; i++) {
+        const cardId = r.modeleEnCoursCards[i]?.cardId;
+        if (cardId) map[cardId] = r.inspections[i] ?? blocInspectionVide();
+      }
+    }
+    setParCarte(map);
+  }, [rows, setParCarte]);
 
   // Synchronisation concurrente : le tableau est partagé entre postes, mais une
   // action locale (créer/renommer/supprimer une chaîne) ne doit JAMAIS être
@@ -618,8 +679,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     []
   );
 
-  // Envoie le modèle d'un bloc d'inspection vers la colonne Expédition, puis
-  // ouvre le suivi OF par OF. Le modèle reste aussi dans « Modèle en cours ».
+  // Active / désactive l'expédition du modèle d'un bloc d'inspection.
+  // Activation : la carte rejoint la colonne Expédition et le suivi OF par OF
+  // s'ouvre. Désactivation : la carte est retirée de la colonne Expédition.
+  // Le modèle reste dans tous les cas dans « Modèle en cours ».
   const handleEnvoyerExpedition = useCallback(
     (rowId: string, blocIndex: number) => {
       const ligne = rows.find((r) => r.id === rowId);
@@ -628,95 +691,78 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       if (!ligne || !cardId) return;
       const pile = ligne.expeditionCards as PileDeCartes;
       const existant = pile.findIndex((s) => s?.cardId === cardId);
-      const cibleIndex =
-        existant >= 0 ? existant : Math.max(0, pile.findIndex((s) => !s));
-      if (existant < 0) {
-        const carte = cardsParId.get(cardId);
-        handleAssignSlotCard(
-          rowId,
-          'expedition',
-          { cardId, customLabel: carte?.modele ?? slot?.customLabel },
-          undefined,
-          cibleIndex
+      if (existant >= 0) {
+        // Déjà en expédition : le clic désactive le suivi.
+        handleAssignSlotCard(rowId, 'expedition', null, undefined, existant);
+        setExpeditionOuverte((prev) =>
+          prev?.rowId === rowId && prev.slotIndex === existant ? null : prev
         );
+        return;
       }
+      const cibleIndex = Math.max(0, pile.findIndex((s) => !s));
+      const carte = cardsParId.get(cardId);
+      handleAssignSlotCard(
+        rowId,
+        'expedition',
+        { cardId, customLabel: carte?.modele ?? slot?.customLabel },
+        undefined,
+        cibleIndex
+      );
       setExpeditionOuverte({ rowId, slotIndex: cibleIndex });
     },
     [rows, cardsParId, handleAssignSlotCard]
   );
 
-  // Glisser-déposer d'une carte déjà posée vers une autre case : la carte de la
-  // case cible reprend la place de celle qu'on déplace (échange), plutôt que
-  // d'être écartée, pour ne jamais perdre une affectation.
-  const handleDropCarte = useCallback(
-    (
-      rowId: string,
-      slotType: TypeSlotGlobal,
-      cardId: string,
-      lancementIndex?: number,
-      slotIndex?: number
-    ) => {
-      const carte = cardsParId.get(cardId);
-      if (!carte) return;
-      const cible: CoordCase = { rowId, slotType, lancementIndex, slotIndex };
-
+  // --- Échange de cartes (glisser-échanger) ------------------------------
+  // Un glisser nous donne les deux cases concernées ; on échange leur contenu.
+  // La carte qui atterrit dans une case Expédition récupère le suivi OF par OF.
+  // Une carte reste unique dans le planning ; le seul doublon toléré est entre
+  // « Modèle en cours » et « Expédition ».
+  const handleSwapCases = useCallback(
+    (from: CoordCase, to: CoordCase) => {
       setRows((prev) => {
-        const groupe = groupeDe(cible.slotType);
-        const source = localiserCarteDansGroupe(prev, carte.id, groupe);
-        const memeCase =
-          source &&
-          source.rowId === cible.rowId &&
-          source.slotType === cible.slotType &&
-          (source.lancementIndex ?? 0) === (cible.lancementIndex ?? 0) &&
-          (source.slotIndex ?? 0) === (cible.slotIndex ?? 0);
-        if (memeCase) return prev;
+        const carteFrom = lireCarteEnCase(prev, from);
+        const carteTo = lireCarteEnCase(prev, to);
+        if (!carteFrom && !carteTo) return prev;
 
-        // Réutilise les données du slot source (préserve l'expédition OF par OF).
-        const slotSource = source ? lireCarteEnCase(prev, source) : null;
-        let carteDeposee: ChaineSlotCard =
-          slotSource ?? { cardId: carte.id, customLabel: carte.modele };
-        if (groupe === 'expedition' && !carteDeposee.expeditionOfs) {
-          carteDeposee = {
-            ...carteDeposee,
-            expeditionOfs: expeditionOfsDepuisCarte(carte),
-          };
+        const adapter = (
+          carte: ChaineSlotCard | null,
+          cible: CoordCase
+        ): ChaineSlotCard | null => {
+          if (!carte) return null;
+          if (cible.slotType === 'expedition' && !carte.expeditionOfs) {
+            return {
+              ...carte,
+              expeditionOfs: expeditionOfsDepuisCarte(cardsParId.get(carte.cardId ?? '')),
+            };
+          }
+          return carte;
+        };
+
+        let next = ecrireCarteEnCase(prev, from, adapter(carteTo, from));
+        next = ecrireCarteEnCase(next, to, adapter(carteFrom, to));
+
+        const gardePlanning = groupeDe(to.slotType) === 'planning' ? to : from;
+        if (groupeDe(gardePlanning.slotType) === 'planning') {
+          next = normaliserUniciteGroupe(next, 'planning', gardePlanning);
         }
-        const carteEnCible = lireCarteEnCase(prev, cible);
-        let prochain = retirerCarteDuGroupe(prev, carte.id, groupe);
-        prochain = ecrireCarteEnCase(prochain, cible, carteDeposee);
-        if (carteEnCible && source) prochain = ecrireCarteEnCase(prochain, source, carteEnCible);
-        return prochain;
+        const gardeExpedition = to.slotType === 'expedition' ? to : from;
+        if (gardeExpedition.slotType === 'expedition') {
+          next = normaliserUniciteGroupe(next, 'expedition', gardeExpedition);
+        }
+        return next;
       });
     },
     [cardsParId]
   );
 
-  // --- Glisser-déposer d'une carte « tenue en main » ---------------------
-  // Pointer Events : le contrôleur (utils/glisserCarte.ts) clone la carte, la
-  // fait décoller et suivre le curseur (transform composé GPU, aucun re-render
-  // React pendant le geste), puis appelle handleDropCarte sur la case visée.
-  // `event.currentTarget` est lu de façon synchrone, ici dans le onPointerDown.
-  const onGlisserCarte = useCallback(
-    (card: CardItem, event: React.PointerEvent<HTMLElement>) => {
-      const source = event.currentTarget as HTMLElement;
-      demarrerGlisser({
-        cardId: card.id,
-        source,
-        clientX: event.clientX,
-        clientY: event.clientY,
-        scrollContainer: tableScrollRef.current,
-        onDeposer: (cardId, coords) =>
-          handleDropCarte(
-            coords.rowId,
-            coords.slotType as TypeSlotGlobal,
-            cardId,
-            coords.lancementIndex,
-            coords.slotIndex
-          ),
-      });
-    },
-    [handleDropCarte]
-  );
+  // Le tableau entier est le conteneur du glisser-échanger : toutes les cases de
+  // cartes (Modèle en cours, Prochains lancements, Expédition) peuvent s'échanger.
+  const [tableGlisser, setTableGlisser] = useState<HTMLTableElement | null>(null);
+  const lierTableGlisser = useCallback((el: HTMLTableElement | null) => {
+    setTableGlisser(el);
+  }, []);
+  useGlisserCartes(tableGlisser, handleSwapCases);
 
   // --- Inspections (un bloc par modèle en cours) -------------------------
   const majBlocInspection = (
@@ -949,7 +995,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           ref={tableScrollRef}
           className="bg-[#eef2f6]/90 p-3 sm:p-4 rounded-2xl border border-slate-200/90 shadow-xs overflow-x-auto overscroll-x-contain"
         >
-          <table className="w-full border-separate border-spacing-x-2 border-spacing-y-2 min-w-[2900px]">
+          <table
+            ref={lierTableGlisser}
+            className="w-full border-separate border-spacing-x-2 border-spacing-y-2 min-w-[2900px]"
+          >
             {/* Header Row */}
             <thead>
               <tr>
@@ -996,7 +1045,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                 </th>
 
                 {/* EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
-                <th className="w-52 min-w-[170px]">
+                <th className="w-60 min-w-[210px]">
                   <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-extrabold text-emerald-800 tracking-wider uppercase  flex items-center justify-center gap-1.5">
                     <Truck className="w-3.5 h-3.5 text-emerald-600" />
                     <span>Expédition</span>
@@ -1036,7 +1085,6 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                       }
                       onEnvoyerExpedition={handleEnvoyerExpedition}
                       onAssignerSlot={handleAssignSlotCard}
-                      onGlisserCarte={onGlisserCarte}
                       onMajBloc={majBlocInspection}
                       onAjouterValeur={ajouterValeur}
                       onMajValeur={majValeur}

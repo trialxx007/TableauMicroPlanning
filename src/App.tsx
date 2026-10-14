@@ -10,6 +10,10 @@ import { SuiviGlobalView } from './components/SuiviGlobalView.tsx';
 import { TableauxOFsView } from './components/TableauxOFsView.tsx';
 import { AppPage } from './components/ViewSwitcher.tsx';
 import { JalonCatalogueProvider } from './context/JalonCatalogueContext.tsx';
+import {
+  InspectionsParCarteProvider,
+  InspectionsParCarte,
+} from './context/InspectionsParCarteContext.tsx';
 import { getEtatJalon, PREFIXE_JALON_MANQUANT } from './utils/jalons.ts';
 import { getNowParis } from './utils/dateFrance.ts';
 import { RefreshCw, FileSpreadsheet, Check, Plus } from 'lucide-react';
@@ -27,6 +31,9 @@ export default function App() {
   });
   const [cards, setCards] = useState<CardItem[]>([]);
   const [catalogue, setCatalogue] = useState<JalonCatalogue[]>([]);
+  // Inspection (colonne du Suivi Global) publiée par carte pour la fiche carte.
+  const [inspectionsParCarte, setInspectionsParCarte] =
+    useState<InspectionsParCarte>({});
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -308,6 +315,9 @@ export default function App() {
   };
 
   return (
+    <InspectionsParCarteProvider
+      value={{ parCarte: inspectionsParCarte, setParCarte: setInspectionsParCarte }}
+    >
     <JalonCatalogueProvider catalogue={catalogue}>
       <div className="min-h-screen bg-slate-50 flex flex-col text-slate-800">
       {/* Toast Notification */}
@@ -497,6 +507,7 @@ export default function App() {
       />
       </div>
     </JalonCatalogueProvider>
+    </InspectionsParCarteProvider>
   );
 }
 
