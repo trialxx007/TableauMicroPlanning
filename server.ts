@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import type { CardItem, CardJalon } from './src/types/card.ts';
+import { normaliserDateJalon, okProdAuto } from './src/utils/jalons.ts';
 import {
   createJalon,
   deleteCard,
@@ -18,6 +19,8 @@ import {
   resetDatabase,
   setJalonCategorie,
   updateCardData,
+  getSuiviGlobalLayout,
+  setSuiviGlobalLayout,
 } from './db.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -151,8 +154,7 @@ apiRouter.get('/cards', (req: Request, res: Response) => {
     results = results.filter(
       (c) =>
         c.client.toLowerCase().includes(q) ||
-        c.nom.toLowerCase().includes(q) ||
-        c.reference.toLowerCase().includes(q) ||
+        c.batch.toLowerCase().includes(q) ||
         c.modele.toLowerCase().includes(q)
     );
   }
@@ -200,10 +202,19 @@ function parseJalons(value: unknown): CardJalon[] | undefined {
     codes.add(code);
     if (!connus.has(code)) createJalon(code, code, (brut as CardJalon).categorie);
     const semaine = Number((brut as CardJalon).semaine);
+    const semaineFin = Number((brut as CardJalon).semaineFin);
+    const date = normaliserDateJalon((brut as CardJalon).date);
+    const valideLe = (brut as CardJalon).valideLe;
     nettoyes.push({
       code,
       valide: Boolean((brut as CardJalon).valide),
       ...(Number.isFinite(semaine) && semaine >= 1 && semaine <= 53 ? { semaine } : {}),
+      ...(Number.isFinite(semaineFin) && semaineFin >= 1 && semaineFin <= 53
+        ? { semaineFin }
+        : {}),
+      ...(date != null ? { date } : {}),
+      ...((brut as CardJalon).tbc ? { tbc: true } : {}),
+      ...(typeof valideLe === 'string' && valideLe.trim() ? { valideLe } : {}),
     });
   }
   return nettoyes;
@@ -213,10 +224,10 @@ function parseJalons(value: unknown): CardJalon[] | undefined {
 apiRouter.post('/cards', (req: Request, res: Response) => {
   const body = req.body;
 
-  if (!body.client || !body.nom || !body.reference || !body.modele) {
+  if (!body.client || !body.batch || !body.modele) {
     return res.status(400).json({
       success: false,
-      error: 'Les champs client, nom, référence et modèle sont obligatoires',
+      error: 'Les champs client, batch et nom sont obligatoires',
     });
   }
 
@@ -229,18 +240,20 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
   const jalons: CardJalon[] = Array.isArray(body.jalons)
     ? (parseJalons(body.jalons) as CardJalon[])
     : [];
+  // Règle d'accord automatique : DT, TC, FT et RDL validés => OK Prod accordé.
+  const okProdFinal = Boolean(body.okProd) || okProdAuto(jalons);
 
   const newCard: CardItem = {
     id: prochainIdCarte(),
     client: String(body.client).trim(),
-    nom: String(body.nom).trim(),
-    reference: String(body.reference).trim(),
+    batch: String(body.batch).trim(),
     modele: String(body.modele).trim(),
     ...(body.typeCarte === 'R' || body.typeCarte === 'T'
       ? { typeCarte: body.typeCarte }
       : {}),
     jalons,
-    okProd: Boolean(body.okProd),
+    okProd: okProdFinal,
+    ...(okProdFinal ? { dateOkProd: String(body.dateOkProd || dateStr) } : {}),
     ofs: Array.isArray(body.ofs) ? body.ofs : [],
     quantiteDemandee,
     quantiteFinie,
@@ -275,18 +288,25 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
   const quantiteFinie = Number(body.quantiteFinie) || 0;
   const { dateStr, timeStr } = getCurrentDateTime();
 
+  // Règle d'accord automatique : elle s'impose aux jalons portés par la carte.
+  const jalonsPut = parseJalons(body.jalons) ?? existant.jalons;
+  const okProdPut =
+    (typeof body.okProd === 'boolean' ? body.okProd : existant.okProd) || okProdAuto(jalonsPut);
+
   const updated = updateCardData(req.params.id, {
     client: body.client ?? existant.client,
-    nom: body.nom ?? existant.nom,
-    reference: body.reference ?? existant.reference,
+    batch: body.batch ?? existant.batch,
     modele: body.modele ?? existant.modele,
     ...(body.typeCarte === 'R' || body.typeCarte === 'T'
       ? { typeCarte: body.typeCarte }
       : existant.typeCarte
       ? { typeCarte: existant.typeCarte }
       : {}),
-    jalons: parseJalons(body.jalons) ?? existant.jalons,
-    okProd: typeof body.okProd === 'boolean' ? body.okProd : existant.okProd,
+    jalons: jalonsPut,
+    okProd: okProdPut,
+    dateOkProd: okProdPut
+      ? existant.dateOkProd ?? body.dateOkProd ?? dateStr
+      : existant.dateOkProd,
     ofs: Array.isArray(body.ofs) ? body.ofs : existant.ofs,
     quantiteDemandee,
     quantiteFinie,
@@ -313,8 +333,7 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
  */
 const CHAMPS_MODIFIABLES = [
   'client',
-  'nom',
-  'reference',
+  'batch',
   'modele',
   'typeCarte',
   'okProd',
@@ -366,6 +385,13 @@ apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
   }
   if (body.jalons !== undefined) {
     patch.jalons = parseJalons(body.jalons) ?? existing.jalons;
+  }
+
+  // Règle d'accord automatique : DT, TC, FT et RDL validés => OK Prod accordé,
+  // y compris si le client tente de le révoquer tant que la condition tient.
+  if (okProdAuto(patch.jalons ?? existing.jalons)) {
+    patch.okProd = true;
+    if (!existing.dateOkProd && patch.dateOkProd === undefined) patch.dateOkProd = dateStr;
   }
 
   const updated = updateCardData(req.params.id, patch);
@@ -427,8 +453,54 @@ apiRouter.get('/stats', (_req: Request, res: Response) => {
       bloquees,
       enAttente,
     },
-  });
 });
+});
+/* ------------------------------------------------------------------ suivi global layout */
+
+// GET layout partagé
+apiRouter.get('/suivi-layout', (_req: Request, res: Response) => {
+  try {
+    const layout = getSuiviGlobalLayout();
+    res.json({ success: true, data: layout?.rows ?? [] });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
+// PUT layout partagé (remplace tout)
+apiRouter.put('/suivi-layout', (req: Request, res: Response) => {
+  try {
+    const rows = req.body?.rows;
+    if (!Array.isArray(rows)) {
+      return res.status(400).json({ success: false, error: 'rows doit être un tableau' });
+    }
+    setSuiviGlobalLayout(rows);
+    res.json({ success: true, message: 'Layout Suivi Global sauvegardé' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
+// POST layout partagé : utilisé par navigator.sendBeacon à la fermeture de page.
+// sendBeacon envoie le corps en text/plain (non lu par express.json), on parse donc
+// le corps brut. Réponse 204 : sendBeacon ne lit pas la réponse.
+apiRouter.post(
+  '/suivi-layout',
+  express.text({ type: '*/*', limit: '4mb' }),
+  (req: Request, res: Response) => {
+    try {
+      const parsed = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      const rows = parsed?.rows;
+      if (!Array.isArray(rows)) {
+        return res.status(400).json({ success: false, error: 'rows doit être un tableau' });
+      }
+      setSuiviGlobalLayout(rows);
+      res.status(204).end();
+    } catch (err) {
+      res.status(500).json({ success: false, error: (err as Error).message });
+    }
+  }
+);
 
 // Mount /api/v1
 app.use('/api/v1', apiRouter);

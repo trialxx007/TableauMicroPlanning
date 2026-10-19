@@ -29,161 +29,78 @@ export const CATEGORIES_CONFIG: Record<string, CategorieConfig> = {
   },
 };
 
-export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
-  // --- BRODERIE MAIN ---
-  {
-    id: 'bm-glaieul',
-    categorieId: 'BRODERIE_MAIN',
-    nom: 'Glaïeul',
-    dotColor: '#f8b4a6',
-    modeleEnCoursCards: [{ cardId: 'CRD-001', customLabel: 'Robe Soirée Haute Couture' }, null],
-    inspections: [blocInspectionVide(''), blocInspectionVide('')],
-    alerte: 'Broderie col et poignets en cours',
-    prochainsLancementsCards: [
-      [{ cardId: 'CRD-003', customLabel: 'Veste Tweed Broderie Perles' }, null],
-      [{ customLabel: 'Jupe Plissée Soie' }, null],
-      [{ customLabel: 'Top Organza Brodé' }, null],
-      [null, null],
-      [null, null],
-    ],
-    expeditionCard: { cardId: 'CRD-001', dateExpedition: '05/10/2026', statutExpedition: 'A_EXPEDIER' },
-  },
-  {
-    id: 'bm-petunia',
-    categorieId: 'BRODERIE_MAIN',
-    nom: 'Pétunia',
-    dotColor: '#f8b4a6',
-    modeleEnCoursCards: [{ cardId: 'CRD-003', customLabel: 'Veste Tweed Broderie Perles' }, null],
-    inspections: [blocInspectionVide(''), blocInspectionVide('')],
-    alerte: '',
-    prochainsLancementsCards: [
-      [null, null],
-      [null, null],
-      [{ customLabel: 'Blouse Lin Brodé' }, null],
-      [null, null],
-      [null, null],
-    ],
-    expeditionCard: null,
-  },
-  {
-    id: 'bm-dhalia',
-    categorieId: 'BRODERIE_MAIN',
-    nom: 'Dhalia',
-    dotColor: '#f8b4a6',
-    modeleEnCoursCards: [{ customLabel: 'Jupon Étoile Volants' }, null],
-    inspections: [blocInspectionVide(''), blocInspectionVide('')],
-    alerte: 'Bonne cadence, fin prévue 16h',
-    prochainsLancementsCards: [
-      [{ customLabel: 'Chemisier Brodé Coton' }, null],
-      [{ cardId: 'CRD-005', customLabel: 'Robe Dentelle Fête' }, null],
-      [null, null],
-      [null, null],
-      [null, null],
-    ],
-    expeditionCard: { customLabel: 'Lot Jupons 50 pcs', dateExpedition: '02/10/2026', statutExpedition: 'A_EXPEDIER' },
-  },
-  {
-    id: 'bm-lotus',
-    categorieId: 'BRODERIE_MAIN',
-    nom: 'Lotus',
-    dotColor: '#f8b4a6',
-    modeleEnCoursCards: [{ customLabel: 'Chemisier Soie Brodé Main' }, null],
-    inspections: [blocInspectionVide(''), blocInspectionVide('')],
-    alerte: 'Attente fils dorés',
-    prochainsLancementsCards: [
-      [null, null],
-      [{ customLabel: 'Robe Mariée Broderie Perles' }, null],
-      [null, null],
-      [null, null],
-      [null, null],
-    ],
-    expeditionCard: null,
-  },
-  {
-    id: 'bm-orchidee',
-    categorieId: 'BRODERIE_MAIN',
-    nom: 'Orchidée',
-    dotColor: '#f8b4a6',
-    modeleEnCoursCards: [{ cardId: 'CRD-004', customLabel: 'Chemisier Soie Lavallière' }, null],
-    inspections: [blocInspectionVide(''), blocInspectionVide('')],
-    alerte: 'Cadence nominale atteinte',
-    prochainsLancementsCards: [
-      [null, null],
-      [null, null],
-      [null, null],
-      [null, null],
-      [null, null],
-    ],
-    expeditionCard: null,
-  },
-  {
-    id: 'bm-mimosa',
-    categorieId: 'BRODERIE_MAIN',
-    nom: 'Mimosa',
-    dotColor: '#f8b4a6',
-    modeleEnCoursCards: [{ customLabel: 'Écharpe Broderie Florale' }, null],
-    inspections: [blocInspectionVide(''), blocInspectionVide('')],
-    alerte: 'OF interne bientôt soldé',
-    prochainsLancementsCards: [
-      [{ customLabel: 'Tablier Technique Brodé' }, null],
-      [null, null],
-      [null, null],
-      [null, null],
-      [null, null],
-    ],
-    expeditionCard: { customLabel: 'Étole Brodée 60 pcs', dateExpedition: '01/10/2026', statutExpedition: 'EN_TRANSIT' },
-  },
+export interface ChaineOption {
+  id: string;
+  nom: string;
+  categorieId: 'BRODERIE_MAIN' | 'CONFECTION';
+  categorieTitre: string;
+  dotColor: string;
+}
 
-  // --- CONFECTION ---
-  {
-    id: 'conf-tan',
-    categorieId: 'CONFECTION',
-    nom: 'Tan',
-    dotColor: '#7dd3fc',
-    modeleEnCoursCards: [{ cardId: 'CRD-005', customLabel: 'Pantalon Gabardine Laine' }, null],
-    inspections: [blocInspectionVide(''), blocInspectionVide('')],
-    alerte: 'Montage ceintures et fermetures',
-    prochainsLancementsCards: [
-      [{ cardId: 'CRD-002', customLabel: 'Manteau Cachemire Double-Face' }, null],
-      [{ customLabel: 'Bermuda Crêpe' }, null],
-      [null, null],
-      [null, null],
-      [null, null],
-    ],
-    expeditionCard: { cardId: 'CRD-005', dateExpedition: '06/10/2026', statutExpedition: 'A_EXPEDIER' },
-  },
-  {
-    id: 'conf-mar',
-    categorieId: 'CONFECTION',
-    nom: 'Mar',
-    dotColor: '#7dd3fc',
-    modeleEnCoursCards: [{ cardId: 'CRD-002', customLabel: 'Manteau Cachemire Double-Face' }, null],
-    inspections: [blocInspectionVide(''), blocInspectionVide('')],
-    alerte: 'Assemblage col et manchettes OK',
-    prochainsLancementsCards: [
-      [{ cardId: 'CRD-002', customLabel: 'Chemise Travail' }, null],
-      [{ customLabel: 'Veste Softshell' }, null],
-      [null, null],
-      [null, null],
-      [null, null],
-    ],
-    expeditionCard: null,
-  },
-  {
-    id: 'conf-fen',
-    categorieId: 'CONFECTION',
-    nom: 'Fen',
-    dotColor: '#7dd3fc',
-    modeleEnCoursCards: [{ cardId: 'CRD-001' }, null],
-    inspections: [blocInspectionVide(''), blocInspectionVide('')],
-    alerte: 'Réglage machine ourlet invisible',
-    prochainsLancementsCards: [
-      [{ customLabel: 'Veste Costume Homme' }, null],
-      [{ customLabel: 'Pantalon Chino Homme' }, null],
-      [null, null],
-      [null, null],
-      [null, null],
-    ],
-    expeditionCard: null,
-  },
+export const PRODUCTION_CHAINS: ChaineOption[] = [
+  { id: 'bm-glaieul', nom: 'GLAÏEUL', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-petunia', nom: 'PÉTUNIA', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-dhalia', nom: 'DHALIA', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-rose', nom: 'ROSE', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-orchidee', nom: 'ORCHIDÉE', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'bm-mimosa', nom: 'MIMOSA', categorieId: 'BRODERIE_MAIN', categorieTitre: 'Broderie Main', dotColor: '#f8b4a6' },
+  { id: 'conf-tan', nom: 'TANA', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-mar', nom: 'MARGUERITE', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-pose-cuir', nom: 'POSE CUIR', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-sst', nom: 'SST', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-fen', nom: 'FEN', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-lotus', nom: 'LOTUS', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+  { id: 'conf-orchidee', nom: 'ORCHIDÉE', categorieId: 'CONFECTION', categorieTitre: 'Confection', dotColor: '#7dd3fc' },
+];
+
+/** Ligne de chaîne vide : seule la structure (id, nom, catégorie) existe, aucune
+ *  case (modèle en cours, inspection, alerte, lancement, expédition) n'est remplie. */
+function ligneVide(
+  id: string,
+  categorieId: 'BRODERIE_MAIN' | 'CONFECTION',
+  nom: string,
+  dotColor: string
+): ChaineRow {
+  return {
+    id,
+    categorieId,
+    nom,
+    dotColor,
+    modeleEnCoursCards: [null, null],
+    inspections: [blocInspectionVide(), blocInspectionVide()],
+    prochainsLancementsCards: Array.from({ length: 5 }, () => [
+      null,
+      null,
+    ]) as ChaineRow['prochainsLancementsCards'],
+    expeditionCards: [null, null],
+  };
+}
+
+/** Nouvelle chaîne créée à la main : même structure vide que les lignes initiales,
+ *  la couleur de point venant du type choisi. L'id est unique et stable. */
+export function nouvelleChaineVide(
+  categorieId: 'BRODERIE_MAIN' | 'CONFECTION',
+  nom: string
+): ChaineRow {
+  const id = `chaine-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+  const dotColor = CATEGORIES_CONFIG[categorieId]?.defaultDotColor ?? '#94a3b8';
+  return ligneVide(id, categorieId, nom, dotColor);
+}
+
+/** Lignes de chaînes au premier lancement : entièrement vides, sans jeu de démonstration.
+ *  Les modèles en cours, inspections, lancements et expéditions se remplissent au
+ *  fil des cartes réelles saisies dans le Point Commande Journalière. */
+export const INITIAL_CHAINE_ROWS: ChaineRow[] = [
+  ligneVide('bm-glaieul', 'BRODERIE_MAIN', 'GLAÏEUL', '#f8b4a6'),
+  ligneVide('bm-petunia', 'BRODERIE_MAIN', 'PÉTUNIA', '#f8b4a6'),
+  ligneVide('bm-dhalia', 'BRODERIE_MAIN', 'DHALIA', '#f8b4a6'),
+  ligneVide('bm-rose', 'BRODERIE_MAIN', 'ROSE', '#f8b4a6'),
+  ligneVide('bm-orchidee', 'BRODERIE_MAIN', 'ORCHIDÉE', '#f8b4a6'),
+  ligneVide('bm-mimosa', 'BRODERIE_MAIN', 'MIMOSA', '#f8b4a6'),
+  ligneVide('conf-tan', 'CONFECTION', 'TANA', '#7dd3fc'),
+  ligneVide('conf-mar', 'CONFECTION', 'MARGUERITE', '#7dd3fc'),
+  ligneVide('conf-pose-cuir', 'CONFECTION', 'POSE CUIR', '#7dd3fc'),
+  ligneVide('conf-sst', 'CONFECTION', 'SST', '#7dd3fc'),
+  ligneVide('conf-fen', 'CONFECTION', 'FEN', '#7dd3fc'),
+  ligneVide('conf-lotus', 'CONFECTION', 'LOTUS', '#7dd3fc'),
 ];

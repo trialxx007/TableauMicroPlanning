@@ -1,53 +1,221 @@
-import React, { useState } from 'react';
-import { OrdreFabrication, CardStatus, OFType } from '../types/card.ts';
+import React, { useState, useEffect, useRef } from 'react';
+import { OrdreFabrication, SousOrdreFabrication, CardStatus, OFType, OF_TYPES, OF_DESTINATIONS, DestinationOF, normalizeOFType } from '../types/card.ts';
+import { EnCoursGrid } from './EnCoursCasesSection.tsx';
+import { EditableItemName } from './EditableItemName.tsx';
+import { useInspectionsParCarte } from '../context/InspectionsParCarteContext.tsx';
 import {
-  Building2,
-  Handshake,
+  Check,
+  ChevronDown,
+  ChevronUp,
   Plus,
   Trash2,
-  ArrowUpDown,
-  CheckCircle2,
-  Clock,
-  AlertTriangle,
+  X,
 } from 'lucide-react';
 
+// Chevron dessiné en fond du <select> Destination (l'apparence native est retirée).
+const CHEVRON_DESTINATION =
+  "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6l6 -6'/%3E%3C/svg%3E\")";
+
 interface OFSubTableProps {
+  cardId: string;
   totalDemandee: number;
   ofs: OrdreFabrication[];
   onUpdateOFs: (newOfs: OrdreFabrication[]) => void;
+  onChangeTotalDemandee?: (n: number) => void;
+  isAddingOF?: boolean;
+  onCloseAddOF?: () => void;
+}
+
+export function normalizeCases(cases: number[] | undefined, nbCases: number, totalAssigne: number): number[] {
+  const src = cases && cases.length ? cases : [];
+  const intermediaires = src.slice(0, Math.max(0, src.length - 1));
+  const next = intermediaires.slice(0, Math.max(0, nbCases - 1));
+  while (next.length < nbCases - 1) {
+    next.push(0);
+  }
+  next.push(totalAssigne);
+  return next;
+}
+
+type CasesOwner = {
+  nbCases?: number;
+  casesEnCours?: number[];
+  quantiteDemandee: number;
+};
+
+export function computeOfQuantiteFinie(owner: CasesOwner): number {
+  const nb = owner.nbCases || 5;
+  const total = Number(owner.quantiteDemandee) || 0;
+  return Number(normalizeCases(owner.casesEnCours, nb, total)[0]) || 0;
+}
+
+const OF_TYPE_KEYS = Object.keys(OF_TYPES) as OFType[];
+
+interface TraitantPickerProps {
+  value: OFType;
+  onChange: (t: OFType) => void;
+}
+
+const TraitantPicker: React.FC<TraitantPickerProps> = ({ value, onChange }) => {
+  const [isOpen, setIsOpen] = useState(false);
+  const pickerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleClickOutside = (e: MouseEvent) => {
+      if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
+        setIsOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isOpen]);
+
+  return (
+    <div className="relative shrink-0" ref={pickerRef}>
+      <button
+        type="button"
+        onClick={() => setIsOpen((o) => !o)}
+        title="Cliquer pour changer de traitant"
+        className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-md border text-[11px] font-bold shadow-2xs cursor-pointer ${OF_TYPES[value].classe}`}
+      >
+        {value}
+        <ChevronDown
+          className={`w-2.5 h-2.5 transition-transform ${isOpen ? 'rotate-180' : ''}`}
+        />
+      </button>
+
+      {isOpen && (
+        <div className="absolute left-0 top-full mt-0.5 z-30 flex gap-0.5 bg-white border border-slate-300 rounded-lg shadow-lg p-0.5">
+          {OF_TYPE_KEYS.map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => {
+                onChange(t);
+                setIsOpen(false);
+              }}
+              title={OF_TYPES[t].label}
+              className={`px-2 py-0.5 rounded text-[11px] font-bold border cursor-pointer ${
+                value === t
+                  ? OF_TYPES[t].classe
+                  : 'bg-white text-slate-400 border-slate-200 hover:bg-slate-100 hover:text-slate-700'
+              }`}
+            >
+              {t}
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const getStatusBadge = (statut: CardStatus) => {
+  switch (statut) {
+    case 'TERMINE':
+      return 'bg-emerald-100 text-emerald-800 border-emerald-300';
+    case 'EN_COURS':
+      return 'bg-blue-100 text-blue-800 border-blue-300';
+    case 'BLOQUE':
+      return 'bg-rose-100 text-rose-800 border-rose-300';
+    case 'EN_ATTENTE':
+    default:
+      return 'bg-amber-100 text-amber-800 border-amber-300';
+  }
+};
+
+/** Le total d'un OF divisé en sous-OF est la somme de ses sous-OF. */
+function recalcOFDepuisSousOfs(of: OrdreFabrication): OrdreFabrication {
+  const sous = of.sousOfs || [];
+  if (sous.length === 0) return of;
+  const quantiteDemandee = sous.reduce((s, x) => s + (Number(x.quantiteDemandee) || 0), 0);
+  const quantiteFinie = sous.reduce((s, x) => s + computeOfQuantiteFinie(x), 0);
+  return {
+    ...of,
+    quantiteDemandee,
+    quantiteFinie,
+    resteAProduire: Math.max(0, quantiteDemandee - quantiteFinie),
+  };
 }
 
 export const OFSubTable: React.FC<OFSubTableProps> = ({
+  cardId,
   totalDemandee,
   ofs,
   onUpdateOFs,
+  onChangeTotalDemandee,
+  isAddingOF = false,
+  onCloseAddOF,
 }) => {
-  const [isAddingOF, setIsAddingOF] = useState(false);
-  const [newType, setNewType] = useState<OFType>('SOUS_TRAITANCE');
-  const [newNomExecutant, setNewNomExecutant] = useState('');
+  // Inspection de la carte (colonne Inspection du Suivi Global) : sert de
+  // référence pour afficher l'avancement des contrôles de chaque OF.
+  const { parCarte } = useInspectionsParCarte();
   const [newQuantite, setNewQuantite] = useState<number>(50);
+  const [newNbCases, setNewNbCases] = useState<number>(5);
+  const [newCases, setNewCases] = useState<number[]>(() => normalizeCases(undefined, 5, 50));
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   const totalAlloue = ofs.reduce((sum, o) => sum + o.quantiteDemandee, 0);
+  const totalFinie = ofs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0);
   const soldeNonAlloue = Math.max(0, totalDemandee - totalAlloue);
+  const ecartAlloue = totalAlloue - totalDemandee;
 
-  const getStatusBadge = (statut: CardStatus) => {
-    switch (statut) {
-      case 'TERMINE':
-        return 'bg-emerald-100 text-emerald-800 border-emerald-300';
-      case 'EN_COURS':
-        return 'bg-blue-100 text-blue-800 border-blue-300';
-      case 'BLOQUE':
-        return 'bg-rose-100 text-rose-800 border-rose-300';
-      case 'EN_ATTENTE':
-      default:
-        return 'bg-amber-100 text-amber-800 border-amber-300';
-    }
+  const closeAddOF = () => {
+    if (onCloseAddOF) onCloseAddOF();
   };
 
-  const handleUpdateSingleOF = (
-    ofId: string,
-    updates: Partial<OrdreFabrication>
-  ) => {
+  const handleChangeNbCases = (ofId: string, nb: number) => {
+    onUpdateOFs(ofs.map((o) => (o.id === ofId ? { ...o, nbCases: nb } : o)));
+  };
+
+  useEffect(() => {
+    if (isAddingOF) {
+      const qte = soldeNonAlloue > 0 ? soldeNonAlloue : 50;
+      setNewQuantite(qte);
+      setNewNbCases(5);
+      setNewCases(normalizeCases(undefined, 5, qte));
+    }
+  }, [isAddingOF, soldeNonAlloue]);
+
+  useEffect(() => {
+    if (isAddingOF && isCollapsed) {
+      setIsCollapsed(false);
+    }
+  }, [isAddingOF, isCollapsed]);
+
+  const handleCreateOF = (e: React.FormEvent) => {
+    e.preventDefault();
+    const numeros = ofs
+      .map((o) => parseInt((o.codeOF || '').replace(/\D/g, ''), 10))
+      .filter((n) => !Number.isNaN(n));
+    const nextIndex = (numeros.length ? Math.max(...numeros) : 0) + 1;
+    const defaultCode = `OF${nextIndex}`;
+    const newOF: OrdreFabrication = {
+      id: `OF-${Date.now().toString().slice(-5)}`,
+      codeOF: defaultCode,
+      titre: '',
+      ordreRDL: ofs.length + 1,
+      type: 'I',
+      nomExecutant: OF_TYPES['I'].label,
+      quantiteDemandee: Number(newQuantite),
+      quantiteFinie: 0,
+      resteAProduire: Number(newQuantite),
+      statut: 'EN_ATTENTE',
+      nbCases: newNbCases,
+      casesEnCours: normalizeCases(newCases, newNbCases, Number(newQuantite)),
+      sousOfs: [],
+    };
+    onUpdateOFs([...ofs, newOF]);
+    closeAddOF();
+  };
+
+  const handleDeleteOF = (ofId: string) => {
+    const nextOfs = ofs.filter((o) => o.id !== ofId);
+    onUpdateOFs(nextOfs.map((o, idx) => ({ ...o, ordreRDL: idx + 1 })));
+  };
+
+  const handleUpdateSingleOF = (ofId: string, updates: Partial<OrdreFabrication>) => {
     const nextOfs = ofs.map((o) => {
       if (o.id !== ofId) return o;
       const updated = { ...o, ...updates };
@@ -55,16 +223,13 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
         updates.quantiteDemandee !== undefined
           ? Number(updates.quantiteDemandee)
           : o.quantiteDemandee;
-      const qteFinie =
-        updates.quantiteFinie !== undefined
-          ? Number(updates.quantiteFinie)
-          : o.quantiteFinie;
       updated.quantiteDemandee = qteDemandee;
+      updated.casesEnCours = normalizeCases(updated.casesEnCours, updated.nbCases || 5, qteDemandee);
+      const qteFinie = computeOfQuantiteFinie(updated);
       updated.quantiteFinie = qteFinie;
       updated.resteAProduire = Math.max(0, qteDemandee - qteFinie);
 
-      // Auto update status if completed
-      if (updates.quantiteFinie !== undefined && updates.statut === undefined) {
+      if (qteFinie !== o.quantiteFinie && updates.statut === undefined) {
         if (qteFinie >= qteDemandee && qteDemandee > 0) {
           updated.statut = 'TERMINE';
         } else if (qteFinie > 0 && o.statut === 'EN_ATTENTE') {
@@ -73,413 +238,578 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
       }
       return updated;
     });
-
     onUpdateOFs(nextOfs);
   };
 
-  const handleDeleteOF = (ofId: string) => {
-    const nextOfs = ofs.filter((o) => o.id !== ofId);
-    // Re-index codeOF and ordreRDL
-    const reindexed = nextOfs.map((o, idx) => ({
-      ...o,
-      codeOF: `OF${idx + 1}`,
-      ordreRDL: idx + 1,
-    }));
-    onUpdateOFs(reindexed);
+  /** Réordonne les OF : le plus haut devient le plus prioritaire (le code OF reste inchangé). */
+  const handleMoveOF = (index: number, direction: 'UP' | 'DOWN') => {
+    const cible = direction === 'UP' ? index - 1 : index + 1;
+    if (cible < 0 || cible >= ofs.length) return;
+    const copie = [...ofs];
+    [copie[index], copie[cible]] = [copie[cible], copie[index]];
+    onUpdateOFs(copie.map((o, idx) => ({ ...o, ordreRDL: idx + 1 })));
   };
 
-  const handleMoveOrder = (index: number, direction: 'UP' | 'DOWN') => {
-    const targetIndex = direction === 'UP' ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= ofs.length) return;
-
-    const copy = [...ofs];
-    const temp = copy[index];
-    copy[index] = copy[targetIndex];
-    copy[targetIndex] = temp;
-
-    // Re-assign ordreRDL and codeOF based on RDL order
-    const updated = copy.map((o, idx) => ({
-      ...o,
-      codeOF: `OF${idx + 1}`,
-      ordreRDL: idx + 1,
-    }));
-
-    onUpdateOFs(updated);
+  /** Divise l'OF en créant un sous-OF. Le premier hérite du total de l'OF. */
+  const handleDirectAddSousOF = (ofId: string) => {
+    const nextOfs = ofs.map((o) => {
+      if (o.id !== ofId) return o;
+      const existants = o.sousOfs || [];
+      const nextNum = existants.length + 1;
+      const premier = existants.length === 0;
+      const qte = premier ? Number(o.quantiteDemandee) || 0 : 0;
+      const nbCases = premier ? o.nbCases || 5 : 5;
+      const newSousOF: SousOrdreFabrication = {
+        id: `SOF-${Date.now().toString().slice(-6)}`,
+        codeSousOF: `${o.codeOF}.${nextNum}`,
+        titre: '',
+        type: o.type,
+        nomExecutant: o.nomExecutant,
+        quantiteDemandee: qte,
+        quantiteFinie: 0,
+        statut: 'EN_ATTENTE',
+        nbCases,
+        casesEnCours: normalizeCases(premier ? o.casesEnCours : undefined, nbCases, qte),
+      };
+      return recalcOFDepuisSousOfs({ ...o, sousOfs: [...existants, newSousOF] });
+    });
+    onUpdateOFs(nextOfs);
   };
 
-  const handleCreateOF = (e: React.FormEvent) => {
-    e.preventDefault();
-    const nextIndex = ofs.length + 1;
-    const newOF: OrdreFabrication = {
-      id: `OF-${Date.now().toString().slice(-5)}`,
-      codeOF: `OF${nextIndex}`,
-      ordreRDL: nextIndex,
-      type: newType,
-      nomExecutant:
-        newType === 'INTERNE'
-          ? 'Atelier Interne (Entreprise)'
-          : newNomExecutant.trim() || `Sous-traitant #${nextIndex}`,
-      quantiteDemandee: Number(newQuantite),
-      quantiteFinie: 0,
-      resteAProduire: Number(newQuantite),
-      statut: 'EN_ATTENTE',
-    };
+  const handleUpdateSousOF = (
+    ofId: string,
+    sousOFId: string,
+    updates: Partial<SousOrdreFabrication>
+  ) => {
+    const nextOfs = ofs.map((o) => {
+      if (o.id !== ofId) return o;
+      const nextSousOfs = (o.sousOfs || []).map((sof) => {
+        if (sof.id !== sousOFId) return sof;
+        const updated = { ...sof, ...updates };
+        const nbCases = updated.nbCases || 5;
+        const total =
+          updates.quantiteDemandee !== undefined
+            ? Number(updates.quantiteDemandee)
+            : sof.quantiteDemandee;
+        updated.quantiteDemandee = total;
+        updated.casesEnCours = normalizeCases(updated.casesEnCours, nbCases, total);
+        updated.quantiteFinie = computeOfQuantiteFinie(updated);
+        return updated;
+      });
+      return recalcOFDepuisSousOfs({ ...o, sousOfs: nextSousOfs });
+    });
+    onUpdateOFs(nextOfs);
+  };
 
-    onUpdateOFs([...ofs, newOF]);
-    setIsAddingOF(false);
-    setNewNomExecutant('');
-    // La quantité proposée pour le OF suivant est le solde restant après celui-ci.
-    setNewQuantite(Math.max(10, totalDemandee - totalAlloue - newQuantite));
+  const handleDeleteSousOF = (ofId: string, sousOFId: string) => {
+    const nextOfs = ofs.map((o) => {
+      if (o.id !== ofId) return o;
+      const nextSousOfs = (o.sousOfs || []).filter((sof) => sof.id !== sousOFId);
+      if (nextSousOfs.length === 0) {
+        return { ...o, sousOfs: [] };
+      }
+      return recalcOFDepuisSousOfs({ ...o, sousOfs: nextSousOfs });
+    });
+    onUpdateOFs(nextOfs);
   };
 
   return (
-    <div className="bg-slate-50/90 p-4 rounded-xl border border-slate-200 mt-2 space-y-3">
-      {/* Header bar of OF subdivision */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-200/80 pb-3">
-        <div className="flex items-center gap-2">
-          <span className="font-bold text-slate-800 text-xs sm:text-sm flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-full bg-purple-600"></span>
-            Ordres de Fabrication (OF) après OK Prod
+    <div className="bg-slate-50/90 p-2 rounded-xl border border-slate-200 mt-1 space-y-1.5">
+      <div className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg border border-slate-200 text-[11px] text-slate-600 shadow-2xs">
+        <label className="font-semibold text-slate-700 whitespace-nowrap">
+          Quantité totale à répartir
+        </label>
+        <input
+          type="number"
+          min={1}
+          value={totalDemandee}
+          onChange={(e) => onChangeTotalDemandee?.(Math.max(0, Number(e.target.value)))}
+          disabled={!onChangeTotalDemandee}
+          title="Quantité totale qui sera divisée entre les OF"
+          className="w-20 text-xs font-semibold px-2 py-0.5 rounded-lg border border-slate-300 bg-white disabled:bg-slate-100 disabled:text-slate-500"
+        />
+        <span className="text-slate-300">•</span>
+        <span>
+          Total alloué : <b className="text-slate-900">{totalAlloue.toLocaleString('fr-FR')}</b> /{' '}
+          {totalDemandee.toLocaleString('fr-FR')}
+        </span>
+        <span>•</span>
+        {ecartAlloue > 0 ? (
+          <span className="text-rose-700 bg-rose-50 border border-rose-200 rounded px-1.5 py-0.5 font-bold">
+            Sur-alloué : {ecartAlloue.toLocaleString('fr-FR')}
           </span>
-          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-purple-100 text-purple-800 border border-purple-200">
-            Ordre déterminé en RDL
+        ) : ecartAlloue < 0 ? (
+          <span className="text-slate-600 bg-slate-100 border border-slate-200 rounded px-1.5 py-0.5 font-semibold">
+            Reste à allouer : {Math.abs(ecartAlloue).toLocaleString('fr-FR')}
           </span>
-        </div>
-
-        <div className="flex items-center gap-3 text-xs">
-          <div className="text-slate-600">
-            Total commande : <strong>{totalDemandee}</strong> pièces | Alloué aux OF :{' '}
-            <strong className={totalAlloue === totalDemandee ? 'text-emerald-700' : 'text-blue-700'}>
-              {totalAlloue}
-            </strong>
-            {soldeNonAlloue > 0 && (
-              <span className="ml-1 text-amber-700 font-semibold bg-amber-50 px-1.5 py-0.5 rounded border border-amber-200">
-                ({soldeNonAlloue} reste à allouer)
-              </span>
-            )}
-          </div>
-
-          {!isAddingOF && (
-            <button
-              onClick={() => {
-                setIsAddingOF(true);
-                setNewQuantite(soldeNonAlloue > 0 ? soldeNonAlloue : 50);
-              }}
-              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-blue-700 bg-white hover:bg-blue-50 border border-blue-200 rounded-lg shadow-2xs transition-colors cursor-pointer"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Ajouter un OF (Interne / Sous-traitant)</span>
-            </button>
-          )}
-        </div>
+        ) : (
+          <span className="text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-1.5 py-0.5 font-bold">
+            Tout alloué
+          </span>
+        )}
+        <span>•</span>
+        <span>
+          Produit fini : <b className="text-slate-900">{totalFinie.toLocaleString('fr-FR')}</b> /{' '}
+          {totalDemandee.toLocaleString('fr-FR')}
+        </span>
+        {ofs.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setIsCollapsed((c) => !c)}
+            className="ml-auto p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded transition-colors cursor-pointer"
+            aria-label={isCollapsed ? 'Expand OF cards' : 'Collapse OF cards'}
+            title={isCollapsed ? 'Expand OF cards' : 'Collapse OF cards'}
+          >
+            {isCollapsed ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+          </button>
+        )}
       </div>
 
-      {/* Form to add an OF */}
       {isAddingOF && (
-        <form
+        <div
           onSubmit={handleCreateOF}
-          className="bg-white p-3 rounded-lg border border-blue-200 shadow-xs space-y-3 animate-in fade-in"
+          className="bg-white p-3.5 rounded-xl border border-slate-300 shadow-xs space-y-3 animate-in fade-in"
         >
-          <div className="text-xs font-bold text-blue-900 flex items-center justify-between">
-            <span>Nouvel Ordre de Fabrication (Découpage RDL)</span>
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-bold text-slate-900">Ajouter un OF</h4>
             <button
               type="button"
-              onClick={() => setIsAddingOF(false)}
-              className="text-slate-400 hover:text-slate-600 text-xs"
+              onClick={closeAddOF}
+              className="p-1 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-full transition-colors cursor-pointer"
             >
-              Annuler
+              <X className="w-4 h-4" />
             </button>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-            <div>
-              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                Type d'exécution
-              </label>
-              <select
-                value={newType}
-                onChange={(e) => setNewType(e.target.value as OFType)}
-                className="w-full text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-slate-300 bg-slate-50 cursor-pointer"
-              >
-                <option value="INTERNE">Atelier Interne (Entreprise)</option>
-                <option value="SOUS_TRAITANCE">Sous-traitant (Extérieur)</option>
-              </select>
-            </div>
-
-            <div className="sm:col-span-2">
-              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                {newType === 'INTERNE' ? 'Exécutant' : 'Nom du sous-traitant'}
-              </label>
-              {newType === 'INTERNE' ? (
-                <input
-                  type="text"
-                  disabled
-                  value="Atelier Interne (Entreprise)"
-                  className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-100 text-slate-600"
-                />
-              ) : (
-                <input
-                  type="text"
-                  required
-                  placeholder="ex: Sous-traitant Duval Confection, Atelier Broderie Marigny..."
-                  value={newNomExecutant}
-                  onChange={(e) => setNewNomExecutant(e.target.value)}
-                  className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
-                />
-              )}
-            </div>
-
+          <div className="space-y-3">
             <div>
               <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                 Quantité confiée
               </label>
               <input
                 type="number"
-                min="1"
-                required
+                min={1}
                 value={newQuantite}
-                onChange={(e) => setNewQuantite(Number(e.target.value))}
+                onChange={(e) => {
+                  const qte = Math.max(0, Number(e.target.value));
+                  setNewQuantite(qte);
+                  setNewCases((prev) => normalizeCases(prev, newNbCases, qte));
+                }}
                 className="w-full text-xs font-semibold px-2.5 py-1.5 rounded-lg border border-slate-300 bg-white"
               />
             </div>
+
+            <EnCoursGrid
+              nbCases={newNbCases}
+              casesEnCours={newCases}
+              onChangeCaseValue={(idx, val) => {
+                const next = normalizeCases(newCases, newNbCases, Number(newQuantite));
+                next[idx] = val;
+                setNewCases(next);
+                setNewQuantite(next[next.length - 1]);
+              }}
+              onChangeNbCases={(n) => {
+                setNewNbCases(n);
+                setNewCases((prev) => normalizeCases(prev, n, Number(newQuantite)));
+              }}
+              showSelector={true}
+              total={newQuantite}
+            />
           </div>
 
           <div className="flex justify-end gap-2 pt-1">
             <button
               type="button"
-              onClick={() => setIsAddingOF(false)}
-              className="px-2.5 py-1 text-xs text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+              onClick={closeAddOF}
+              className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer shadow-2xs"
             >
               Annuler
             </button>
             <button
-              type="submit"
-              className="px-3 py-1 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg cursor-pointer shadow-2xs"
+              type="button"
+              onClick={handleCreateOF}
+              className="px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-black rounded-lg cursor-pointer shadow-2xs"
             >
               Enregistrer l'OF
             </button>
           </div>
-        </form>
+        </div>
       )}
 
-      {/* Table of OFs */}
       {ofs.length === 0 ? (
-        <div className="text-center py-4 bg-white rounded-lg border border-dashed border-slate-300 text-xs text-slate-500">
-          Aucun OF n'a encore été créé pour cette carte. Cliquez sur "Ajouter un OF" pour ventiler
-          la production entre l'atelier interne et les sous-traitants.
+        <div className="text-center py-2.5 bg-white rounded-xl border border-dashed border-slate-300 text-[11px] text-slate-500">
+          Aucun OF pour cette carte. Cliquez sur "Ajouter un OF".
         </div>
-      ) : (
-        <div className="bg-white rounded-lg border border-slate-200 shadow-2xs overflow-hidden">
-          <table className="w-full text-left text-xs border-collapse">
-            <thead>
-              <tr className="bg-slate-100/70 border-b border-slate-200 font-semibold text-slate-600">
-                <th className="py-2.5 px-3">Ordre RDL</th>
-                <th className="py-2.5 px-3">Code OF</th>
-                <th className="py-2.5 px-3">Type & Exécutant</th>
-                <th className="py-2.5 px-3 text-right">Qté Demandée</th>
-                <th className="py-2.5 px-3 text-center min-w-[160px]">Point Journalier (Qté Finie)</th>
-                <th className="py-2.5 px-3 text-right">Reste</th>
-                <th className="py-2.5 px-3 text-center">Statut OF</th>
-                <th className="py-2.5 px-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {ofs.map((ofItem, index) => {
-                const progress =
-                  ofItem.quantiteDemandee > 0
-                    ? Math.min(
-                        100,
-                        Math.round(
-                          (ofItem.quantiteFinie / ofItem.quantiteDemandee) * 100
-                        )
-                      )
-                    : 0;
+      ) : !isCollapsed ? (
+        <div className="space-y-1.5">
+          {ofs.map((ofItem, index) => {
+            const displayIndex = index + 1;
+            const labelOF = ofItem.codeOF || `OF${displayIndex}`;
+            const sousOfs = ofItem.sousOfs || [];
+            const hasSubOfs = sousOfs.length > 0;
+            const ofNbCases = ofItem.nbCases || 5;
+            const ofCases = normalizeCases(ofItem.casesEnCours, ofNbCases, ofItem.quantiteDemandee);
 
-                return (
-                  <tr key={ofItem.id} className="hover:bg-slate-50/80 transition-colors">
-                    {/* Ordre RDL */}
-                    <td className="py-2.5 px-3 whitespace-nowrap">
-                      <div className="flex items-center gap-1">
-                        <span className="font-bold text-purple-900 bg-purple-100 px-2 py-0.5 rounded text-[11px] border border-purple-200">
-                          #{ofItem.ordreRDL}
+            // Référence d'inspection de cet OF (colonne Inspection du Suivi
+            // Global) : 1 ✓ si I 50 % Pass, 2 ✓ si I 100 % Pass. Le CC ne
+            // compte pas comme un 3e ✓ ; tant qu'il n'est pas passé, on
+            // affiche simplement le libellé « CC » à côté.
+            const valeursInspection = parCarte[cardId]?.valeurs ?? [];
+            const controlePasse = (pct: 50 | 100) =>
+              valeursInspection.some(
+                (v) =>
+                  v.type !== 'CC' &&
+                  (v.ofIndex ?? 0) === index &&
+                  (v.pct ?? 50) === pct &&
+                  v.resultat === 'P'
+              );
+            const nbControlesPasses =
+              (controlePasse(50) ? 1 : 0) + (controlePasse(100) ? 1 : 0);
+            // Un contrôle à 100 % doit avoir été saisi (exister) pour que le CC
+            // soit envisageable ; avant cela, on n'affiche jamais « CC ».
+            const i100Existe = valeursInspection.some(
+              (v) =>
+                v.type !== 'CC' &&
+                (v.ofIndex ?? 0) === index &&
+                (v.pct ?? 50) === 100
+            );
+            const ccPasse = valeursInspection.some(
+              (v) =>
+                v.type === 'CC' && (v.ofIndex ?? 0) === index && v.resultat === 'P'
+            );
+            // Le CC ne compte pas comme un 3e ✓ : il reste à 2 contrôles, et
+            // tant qu'il n'est pas passé on affiche « CC » à côté des ✓.
+            const ccEnAttente = i100Existe && !ccPasse;
+
+            return (
+              <div
+                key={ofItem.id}
+                className="bg-white rounded-xl border border-slate-300 shadow-2xs overflow-hidden"
+              >
+                <div className="p-1.5 bg-slate-100/70 border-b border-slate-200 flex flex-wrap items-center justify-between gap-1.5">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <div className="flex items-center gap-1">
+                      <span className="font-bold text-slate-900 bg-white px-2 py-0.5 rounded text-[11px] border border-slate-300 shadow-2xs">
+                        {labelOF}
+                      </span>
+                      <div className="flex flex-col -space-y-1">
+                        <button
+                          type="button"
+                          disabled={index === 0}
+                          onClick={() => handleMoveOF(index, 'UP')}
+                          title={`Monter ${labelOF} (plus prioritaire)`}
+                          aria-label={`Monter ${labelOF}`}
+                          className="p-0.5 text-slate-400 hover:text-slate-800 hover:bg-slate-200 disabled:opacity-20 disabled:hover:bg-transparent rounded transition-colors cursor-pointer"
+                        >
+                          <ChevronUp className="w-3 h-3" />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={index === ofs.length - 1}
+                          onClick={() => handleMoveOF(index, 'DOWN')}
+                          title={`Descendre ${labelOF}`}
+                          aria-label={`Descendre ${labelOF}`}
+                          className="p-0.5 text-slate-400 hover:text-slate-800 hover:bg-slate-200 disabled:opacity-20 disabled:hover:bg-transparent rounded transition-colors cursor-pointer"
+                        >
+                          <ChevronDown className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                    <EditableItemName
+                      value={ofItem.titre}
+                      defaultValue=""
+                      placeholder="Nom de l'OF..."
+                      onSave={(nom) => handleUpdateSingleOF(ofItem.id, { titre: nom })}
+                      className="text-xs font-bold text-slate-900 bg-white border border-slate-200 rounded"
+                    />
+                    {hasSubOfs && (
+                      <span className="text-[10px] font-semibold text-slate-500 bg-white px-1.5 py-0.5 rounded border border-slate-200">
+                        {sousOfs.length} sous-OF
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Actions de l'OF */}
+                  <div className="flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => handleDirectAddSousOF(ofItem.id)}
+                      title={`Ajouter un sous-OF à ${labelOF}`}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded transition-colors shadow-2xs cursor-pointer"
+                    >
+                      <Plus className="w-3 h-3" />
+                      <span>Sous OF</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteOF(ofItem.id)}
+                      title={`Supprimer ${labelOF}`}
+                      className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="p-2 space-y-2">
+                  {hasSubOfs ? (
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 border-b border-slate-200 pb-0.5">
+                        <span>Sous-OF de {labelOF} ({sousOfs.length})</span>
+                        <span className="text-slate-400 font-semibold">
+                          Total confié : {ofItem.quantiteDemandee.toLocaleString('fr-FR')}
                         </span>
-                        <div className="flex flex-col">
-                          <button
-                            type="button"
-                            disabled={index === 0}
-                            onClick={() => handleMoveOrder(index, 'UP')}
-                            title="Monter dans l'ordre de passage RDL"
-                            className="text-slate-400 hover:text-purple-700 disabled:opacity-20 cursor-pointer text-[10px]"
+                      </div>
+
+                      {sousOfs.map((sof) => {
+                        const sofNbCases = sof.nbCases || 5;
+                        const sofCases = normalizeCases(
+                          sof.casesEnCours,
+                          sofNbCases,
+                          sof.quantiteDemandee
+                        );
+                        return (
+                          <div
+                            key={sof.id}
+                            className="bg-slate-50/70 rounded-lg border border-slate-200 p-1.5 space-y-1.5"
                           >
-                            ▲
-                          </button>
-                          <button
-                            type="button"
-                            disabled={index === ofs.length - 1}
-                            onClick={() => handleMoveOrder(index, 'DOWN')}
-                            title="Descendre dans l'ordre de passage RDL"
-                            className="text-slate-400 hover:text-purple-700 disabled:opacity-20 cursor-pointer text-[10px]"
+                            <div className="flex flex-wrap items-center gap-1.5">
+                              <span className="font-bold text-slate-700 bg-white px-1.5 py-0.5 rounded text-[10px] border border-slate-300 shadow-2xs">
+                                {sof.codeSousOF}
+                              </span>
+                              <EditableItemName
+                                value={sof.titre}
+                                defaultValue=""
+                                placeholder="Nom du sous-OF..."
+                                onSave={(nom) =>
+                                  handleUpdateSousOF(ofItem.id, sof.id, { titre: nom })
+                                }
+                                className="text-xs font-bold text-slate-900"
+                              />
+                              <div className="flex items-center gap-1 bg-white px-1.5 py-0.5 rounded border border-slate-300 shadow-2xs">
+                                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                                  Assig.
+                                </span>
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={sof.quantiteDemandee}
+                                  onChange={(e) =>
+                                    handleUpdateSousOF(ofItem.id, sof.id, {
+                                      quantiteDemandee: Math.max(
+                                        0,
+                                        parseInt(e.target.value, 10) || 0
+                                      ),
+                                    })
+                                  }
+                                  className="w-12 px-1 py-0.5 text-[11px] font-bold text-center text-slate-900 bg-slate-50 border border-slate-200 rounded focus:bg-white focus:outline-hidden [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                                />
+                                <span className="text-[9px] font-bold uppercase tracking-wider text-slate-400">
+                                  Fini
+                                </span>
+                                <span className="w-12 px-1 py-0.5 text-[11px] font-bold text-center text-slate-500 bg-slate-100 border border-slate-200 rounded">
+                                  {computeOfQuantiteFinie(sof)}
+                                </span>
+                              </div>
+                              <select
+                                value={sof.statut}
+                                onChange={(e) =>
+                                  handleUpdateSousOF(ofItem.id, sof.id, {
+                                    statut: e.target.value as CardStatus,
+                                  })
+                                }
+                                className={`text-[10px] font-semibold rounded px-1.5 py-0.5 border cursor-pointer ${getStatusBadge(
+                                  sof.statut
+                                )}`}
+                              >
+                                <option value="EN_COURS">En cours</option>
+                                <option value="EN_ATTENTE">En attente</option>
+                                <option value="TERMINE">Terminé</option>
+                                <option value="BLOQUE">Bloqué</option>
+                              </select>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteSousOF(ofItem.id, sof.id)}
+                                className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
+                                title="Supprimer ce sous-OF"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            </div>
+
+                            <EnCoursGrid
+                              nbCases={sofNbCases}
+                              casesEnCours={sofCases}
+                              onChangeCaseValue={(idx, val) =>
+                                handleUpdateSousOF(ofItem.id, sof.id, {
+                                  casesEnCours: normalizeCases(
+                                    sofCases.map((c, i) => (i === idx ? val : c)),
+                                    sofNbCases,
+                                    sof.quantiteDemandee
+                                  ),
+                                })
+                              }
+                              onChangeNbCases={(n) =>
+                                handleUpdateSousOF(ofItem.id, sof.id, { nbCases: n })
+                              }
+                              showSelector={true}
+                              total={sof.quantiteDemandee}
+                            />
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex flex-wrap items-center justify-between gap-1.5">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <label className="text-[11px] text-slate-600 font-medium">
+                            Quantité confiée
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={ofItem.quantiteDemandee}
+                            onChange={(e) =>
+                              handleUpdateSingleOF(ofItem.id, {
+                                quantiteDemandee: Math.max(0, Number(e.target.value)),
+                              })
+                            }
+                            className="w-14 text-xs font-semibold px-2 py-0.5 rounded-lg border border-slate-300 bg-white"
+                          />
+                          <select
+                            value={normalizeOFType(ofItem.type)}
+                            onChange={(e) => {
+                              const t = e.target.value as OFType;
+                              handleUpdateSingleOF(ofItem.id, {
+                                type: t,
+                                nomExecutant: OF_TYPES[t].label,
+                              });
+                            }}
+                            title={`Traitant : ${OF_TYPES[normalizeOFType(ofItem.type)].label}`}
+                            className={`text-[11px] font-bold rounded-lg px-1.5 py-0.5 border cursor-pointer ${OF_TYPES[normalizeOFType(ofItem.type)].classe}`}
                           >
-                            ▼
-                          </button>
+                            {(['L', 'O', 'I', 'BDA'] as OFType[]).map((t) => (
+                              <option key={t} value={t} title={OF_TYPES[t].label}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="flex items-center gap-2.5">
+                          <select
+                            value={ofItem.destination ?? ''}
+                            onChange={(e) =>
+                              handleUpdateSingleOF(ofItem.id, {
+                                destination: (e.target.value || undefined) as
+                                  | DestinationOF
+                                  | undefined,
+                              })
+                            }
+                            title={
+                              ofItem.destination
+                                ? `Destination : ${
+                                    OF_DESTINATIONS.find(
+                                      (d) => d.code === ofItem.destination
+                                    )?.label ?? ofItem.destination
+                                  }`
+                                : 'Choisir la destination de cet OF'
+                            }
+                            style={{
+                              backgroundImage: CHEVRON_DESTINATION,
+                              backgroundRepeat: 'no-repeat',
+                              backgroundPosition: 'right 6px center',
+                              backgroundSize: '14px',
+                            }}
+                            className={`appearance-none text-[11px] font-bold rounded-md border pl-2 pr-7 py-0.5 cursor-pointer shadow-2xs ${
+                              ofItem.destination
+                                ? OF_DESTINATIONS.find(
+                                    (d) => d.code === ofItem.destination
+                                  )?.classe ?? 'bg-white text-slate-700'
+                                : 'bg-white text-slate-700'
+                            }`}
+                          >
+                            <option value="">Destination</option>
+                            {OF_DESTINATIONS.map((d) => (
+                              <option key={d.code} value={d.code} title={d.label}>
+                                {d.code}
+                              </option>
+                            ))}
+                          </select>
+                          {(nbControlesPasses > 0 || ccEnAttente) && (
+                            <span
+                              className={`inline-flex items-center gap-1.5 rounded-full pl-2 py-0.5 ${
+                                ccEnAttente ? 'pr-2.5' : 'pr-2'
+                              } ${
+                                nbControlesPasses > 0
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : 'bg-slate-100 text-slate-400'
+                              }`}
+                              title={
+                                `Contrôles passés : ${nbControlesPasses}/2` +
+                                (i100Existe
+                                  ? ccPasse
+                                    ? ' • CC OK'
+                                    : ' • CC en attente'
+                                  : '')
+                              }
+                            >
+                              {nbControlesPasses > 0 && (
+                                <span className="inline-flex items-center">
+                                  {Array.from({ length: nbControlesPasses }).map(
+                                    (_, i) => (
+                                      <Check
+                                        key={i}
+                                        className="-ml-1.5 first:ml-0 w-[15px] h-[15px]"
+                                        strokeWidth={3}
+                                      />
+                                    )
+                                  )}
+                                </span>
+                              )}
+                              {ccEnAttente && (
+                                <>
+                                  <span
+                                    className={`w-px h-3 ${
+                                      nbControlesPasses > 0
+                                        ? 'bg-emerald-300'
+                                        : 'bg-slate-300'
+                                    }`}
+                                  />
+                                  <span className="text-[10px] font-bold tracking-wide leading-none">
+                                    CC
+                                  </span>
+                                </>
+                              )}
+                            </span>
+                          )}
                         </div>
                       </div>
-                    </td>
 
-                    {/* Code OF */}
-                    <td className="py-2.5 px-3 font-mono font-bold text-slate-900 whitespace-nowrap">
-                      {ofItem.codeOF}
-                    </td>
-
-                    {/* Type & Exécutant */}
-                    <td className="py-2.5 px-3">
-                      <div className="flex items-center gap-1.5">
-                        {ofItem.type === 'INTERNE' ? (
-                          <span
-                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200"
-                            title="Traité par l'atelier de l'entreprise"
-                          >
-                            <Building2 className="w-3 h-3 text-blue-600" />
-                            Interne
-                          </span>
-                        ) : (
-                          <span
-                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded border border-indigo-200"
-                            title="Traité en dehors de l'entreprise par un sous-traitant"
-                          >
-                            <Handshake className="w-3 h-3 text-indigo-600" />
-                            Sous-traitant
-                          </span>
-                        )}
-                        <span className="font-semibold text-slate-800 truncate max-w-[200px]" title={ofItem.nomExecutant}>
-                          {ofItem.nomExecutant}
-                        </span>
-                      </div>
-                    </td>
-
-                    {/* Qté Demandée */}
-                    <td className="py-2.5 px-3 text-right font-semibold text-slate-900">
-                      {ofItem.quantiteDemandee.toLocaleString('fr-FR')}
-                    </td>
-
-                    {/* Point Fini */}
-                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                      <div className="flex items-center justify-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleUpdateSingleOF(ofItem.id, {
-                              quantiteFinie: Math.max(0, ofItem.quantiteFinie - 5),
-                            })
-                          }
-                          className="w-5 h-5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center cursor-pointer"
-                          title="-5 pièces"
-                        >
-                          -
-                        </button>
-
-                        <input
-                          type="number"
-                          min="0"
-                          max={ofItem.quantiteDemandee}
-                          value={ofItem.quantiteFinie}
-                          onChange={(e) =>
-                            handleUpdateSingleOF(ofItem.id, {
-                              quantiteFinie: Math.min(
-                                ofItem.quantiteDemandee,
-                                Math.max(0, Number(e.target.value) || 0)
-                              ),
-                            })
-                          }
-                          className="w-14 text-center font-bold text-slate-900 border border-slate-200 rounded py-0.5 px-1 bg-white focus:outline-hidden focus:ring-1 focus:ring-blue-500"
-                        />
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleUpdateSingleOF(ofItem.id, {
-                              quantiteFinie: Math.min(
-                                ofItem.quantiteDemandee,
-                                ofItem.quantiteFinie + 5
-                              ),
-                            })
-                          }
-                          className="w-5 h-5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold flex items-center justify-center cursor-pointer"
-                          title="+5 pièces"
-                        >
-                          +
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() =>
-                            handleUpdateSingleOF(ofItem.id, {
-                              quantiteFinie: ofItem.quantiteDemandee,
-                            })
-                          }
-                          title="Marquer l'OF comme 100% terminé"
-                          className="px-1.5 py-0.5 text-[10px] font-semibold bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded border border-emerald-200 cursor-pointer"
-                        >
-                          Max
-                        </button>
-                      </div>
-
-                      {/* Micro progress bar */}
-                      <div className="w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1">
-                        <div
-                          className={`h-full ${progress === 100 ? 'bg-emerald-500' : 'bg-blue-600'}`}
-                          style={{ width: `${progress}%` }}
-                        />
-                      </div>
-                    </td>
-
-                    {/* Reste à produire */}
-                    <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-700">
-                      {ofItem.resteAProduire === 0 ? (
-                        <span className="text-emerald-600 font-bold">Terminé ✓</span>
-                      ) : (
-                        `${ofItem.resteAProduire.toLocaleString('fr-FR')}`
-                      )}
-                    </td>
-
-                    {/* Statut OF */}
-                    <td className="py-2.5 px-3 text-center whitespace-nowrap">
-                      <select
-                        value={ofItem.statut}
-                        onChange={(e) =>
+                      <EnCoursGrid
+                        nbCases={ofNbCases}
+                        casesEnCours={ofCases}
+                        onChangeCaseValue={(idx, val) =>
                           handleUpdateSingleOF(ofItem.id, {
-                            statut: e.target.value as CardStatus,
+                            casesEnCours: normalizeCases(
+                              ofCases.map((c, i) => (i === idx ? val : c)),
+                              ofNbCases,
+                              ofItem.quantiteDemandee
+                            ),
                           })
                         }
-                        className={`text-[11px] font-semibold rounded px-2 py-0.5 border cursor-pointer ${getStatusBadge(
-                          ofItem.statut
-                        )}`}
-                      >
-                        <option value="EN_COURS">En cours</option>
-                        <option value="EN_ATTENTE">En attente</option>
-                        <option value="TERMINE">Terminé</option>
-                        <option value="BLOQUE">Bloqué</option>
-                      </select>
-                    </td>
-
-                    {/* Action supprimer */}
-                    <td className="py-2.5 px-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteOF(ofItem.id)}
-                        className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
-                        title="Supprimer cet OF"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
+                        onChangeNbCases={(n) => handleChangeNbCases(ofItem.id, n)}
+                        showSelector={true}
+                        total={ofItem.quantiteDemandee}
+                      />
+                    </>
+                  )}
+                </div>
+              </div>
+            );
+          })}
         </div>
-      )}
+      ) : null}
     </div>
   );
 };

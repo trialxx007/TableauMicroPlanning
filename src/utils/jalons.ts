@@ -5,16 +5,24 @@ import type {
   JalonCode,
   JalonCatalogue,
 } from '../types/card.ts';
-import { getSemaineISO } from './dateFrance.ts';
-import { CATALOGUE_INITIAL, categorieParCode } from '../data/mockJalons.ts';
+import { getNowParis, getSemaineISO } from './dateFrance.ts';
+import { CATALOGUE_INITIAL, CODE_TDS_PPS, categorieParCode } from '../data/mockJalons.ts';
 
 /**
- * États possibles d'un jalon — trois choix distincts :
- * - VALIDE     : validé, la semaine est ignorée.
+ * États possibles d'un jalon :
+ * - VALIDE     : validé, l'échéance est ignorée.
  * - SEMAINE    : planifié sur une semaine ISO cible (S12, S40...).
- * - EN_ATTENTE : en attente, sans échéance et sans semaine.
+ * - DATE       : planifié sur une date calendaire (JJ/MM).
+ * - TBC        : échéance « to be confirmed », pas encore arbitrée.
+ * - EN_ATTENTE : en attente, sans échéance.
  */
-export type JalonEtat = 'VALIDE' | 'SEMAINE' | 'EN_ATTENTE';
+export type JalonEtat = 'VALIDE' | 'SEMAINE' | 'DATE' | 'TBC' | 'EN_ATTENTE';
+
+/**
+ * Code de la nomenclature qui porte la marge : elle seule accepte une semaine de
+ * fin et s'affiche en orange dans la plage, puis en rouge au-delà.
+ */
+export const CODE_NOMENCLATURE_R: JalonCode = 'R';
 
 export interface JalonInfo {
   code: JalonCode;
@@ -30,8 +38,17 @@ export interface JalonInfo {
   etatLibelle: string;
   /** Semaine cible, uniquement renseignée quand l'état est SEMAINE. */
   semaine: number | null;
-  /** Vrai si la semaine cible est déjà dépassée et le jalon non validé. */
+  /** Semaine de fin de la marge (nomenclature R) ; `null` hors de ce cas. */
+  semaineFin: number | null;
+  /** Date cible (ISO `AAAA-MM-JJ`), uniquement renseignée quand l'état est DATE. */
+  date: string | null;
+  /** Vrai si l'échéance (semaine ou date) est déjà dépassée et le jalon non validé. */
   enRetard: boolean;
+  /**
+   * Nomenclature R : la semaine courante est dans la plage [semaine, semaineFin]
+   * — la pastille passe en orange.
+   */
+  enMarge: boolean;
 }
 
 export { CATALOGUE_INITIAL };
@@ -55,6 +72,26 @@ export function normaliserSemaine(valeur: unknown): number | null {
   return Math.min(SEMAINE_MAX, Math.max(SEMAINE_MIN, Math.round(n)));
 }
 
+/** Date ISO `AAAA-MM-JJ` épurée ; toute valeur non conforme devient `null`. */
+export function normaliserDateJalon(valeur: unknown): string | null {
+  const s = String(valeur ?? '').trim();
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null;
+  const d = new Date(`${s}T00:00:00`);
+  return Number.isNaN(d.getTime()) ? null : s;
+}
+
+/** Jour courant au format ISO `AAAA-MM-JJ`, à l'heure de Paris (GMT+3). */
+export function dateDuJourJalon(): string {
+  const [j, m, a] = getNowParis().dateStr.split('/');
+  return `${a}-${m}-${j}`;
+}
+
+/** Date ISO restituée en `JJ/MM` pour une pastille compacte. */
+export function dateCourteJalon(iso: string): string {
+  const [a, m, j] = iso.split('-');
+  return a && m && j ? `${j}/${m}` : iso;
+}
+
 /** Un code du catalogue déjà épuré : 3 caractères maximum, en majuscules. */
 export function normaliserCodeJalon(valeur: unknown): string {
   return String(valeur ?? '')
@@ -74,28 +111,149 @@ export function jalonEnRetard(
   return semaine < semaineActuelle;
 }
 
+/** Vrai si la date cible est passée et le jalon non validé. */
+export function jalonDateEnRetard(
+  valide: boolean,
+  date: string | null | undefined,
+  aujourdhui = dateDuJourJalon()
+): boolean {
+  if (valide || !date) return false;
+  return date < aujourdhui;
+}
+
 /** État d'un jalon tel qu'il est stocké ; absent = « En attente » sans échéance. */
 export function getEtatJalon(card: CardItem | undefined, code: JalonCode): CardJalon {
   return card?.jalons.find((j) => j.code === code) ?? { code, valide: false };
 }
 
+/**
+ * Les quatre statuts qui déclenchent l'accord OK Prod automatique : dès que DT,
+ * TC, FT et RDL sont tous validés sur une carte, l'accord est accordé. La
+ * validation manuelle reste possible avant ce stade.
+ */
+export const CODES_OK_PROD: readonly JalonCode[] = ['DT', 'TC', 'FT', 'RDL'];
+
+/** Vrai dès que DT, TC, FT et RDL sont tous validés (`valide: true`). */
+export function okProdAuto(jalons: Pick<CardJalon, 'code' | 'valide'>[] | undefined): boolean {
+  const parCode = new Map((jalons ?? []).map((j) => [j.code, j]));
+  return CODES_OK_PROD.every((code) => parCode.get(code)?.valide === true);
+}
+
+/**
+ * Règle d'avenant PPS → RDL : dès que le jalon PPS (TDS/PPS) porte une échéance
+ * (semaine ou date), la semaine de RDL s'affiche automatiquement à S+2. Purement
+ * visuel : la valeur stockée de RDL n'est pas modifiée, seule sa pastille la
+ * reprend. Un RDL déjà validé reste sur son « Validé » — la validation, elle,
+ * demeure manuelle.
+ */
+export const CODE_RDL: JalonCode = 'RDL';
+
+/** Forme minimale d'un jalon lue par la règle PPS → RDL : le code et l'échéance. */
+type JalonEcheance = {
+  code: JalonCode;
+  semaine?: number | null;
+  date?: string | null;
+};
+
+/**
+ * Semaine cible de PPS : sa semaine si posée, sinon la semaine ISO de sa date.
+ * `null` tant que PPS n'a aucune échéance.
+ */
+function semainePps(jalons: JalonEcheance[] | undefined): number | null {
+  const pps = (jalons ?? []).find((j) => j.code === CODE_TDS_PPS);
+  if (!pps) return null;
+  if (pps.semaine != null) return normaliserSemaine(pps.semaine);
+  if (pps.date) return getSemaineISO(new Date(`${pps.date}T00:00:00`));
+  return null;
+}
+
+/**
+ * Semaine de RDL à afficher : S+2 de PPS dès que PPS a une échéance, sinon la
+ * semaine stockée de RDL. La dérivation prime donc toujours sur une saisie
+ * manuelle, conformément à la règle d'affichage.
+ */
+export function semaineRdlAffichee(
+  jalons: JalonEcheance[] | undefined,
+  rdlSemaine: number | null
+): number | null {
+  const pps = semainePps(jalons);
+  if (pps == null) return rdlSemaine;
+  return normaliserSemaine(pps + 2);
+}
+
+/**
+ * Règle PPS → RDL appliquée à une pastille : l'affichage de RDL prend S+2 dès que
+ * PPS porte une échéance. Un RDL déjà validé reste sur son « Validé » ; sinon la
+ * pastille passe en « Semaine S+2 » et le retard se recalcule sur cette semaine
+ * dérivée, même si RDL était resté en attente ou sur une autre date.
+ */
+export function appliquerReglePpsRdl(
+  info: JalonInfo,
+  jalons: JalonEcheance[] | undefined,
+  semaineActuelle = getSemaineISO()
+): JalonInfo {
+  if (info.code !== CODE_RDL || info.etat === 'VALIDE') return info;
+  const pps = semainePps(jalons);
+  if (pps == null) return info;
+  info.etat = 'SEMAINE';
+  info.etatLibelle = 'En attente';
+  info.semaine = normaliserSemaine(pps + 2);
+  info.date = null;
+  info.enRetard = jalonEnRetard(false, info.semaine, semaineActuelle);
+  return info;
+}
+
 export function getJalonInfo(
   catalogue: JalonCatalogue,
-  etat: { valide?: boolean; semaine?: number | null } | undefined,
+  etat:
+    | {
+        valide?: boolean;
+        semaine?: number | null;
+        semaineFin?: number | null;
+        date?: string | null;
+        tbc?: boolean;
+      }
+    | undefined,
   semaineActuelle: number
 ): JalonInfo {
   const valide = Boolean(etat?.valide);
-  const s = valide ? null : normaliserSemaine(etat?.semaine);
-  const enRetard = jalonEnRetard(valide, s, semaineActuelle);
-  const etatFinal: JalonEtat = valide ? 'VALIDE' : s != null ? 'SEMAINE' : 'EN_ATTENTE';
+  const tbc = !valide && Boolean(etat?.tbc);
+  const s = valide || tbc ? null : normaliserSemaine(etat?.semaine);
+  const d = valide || tbc ? null : normaliserDateJalon(etat?.date);
+  // Marge de la nomenclature R : la semaine de fin borne la plage orange. Sans
+  // fin saisie, le jalon se comporte comme les autres (rouge dès la semaine passée).
+  const estR = catalogue.code === CODE_NOMENCLATURE_R;
+  const fin = estR && !valide && !tbc ? normaliserSemaine(etat?.semaineFin) : null;
+  const enMarge =
+    fin != null && s != null && s <= semaineActuelle && semaineActuelle <= fin;
+  const enRetard =
+    s != null
+      ? fin != null
+        ? fin < semaineActuelle
+        : jalonEnRetard(valide, s, semaineActuelle)
+      : jalonDateEnRetard(valide, d);
+  const etatFinal: JalonEtat = valide
+    ? 'VALIDE'
+    : tbc
+    ? 'TBC'
+    : d != null
+    ? 'DATE'
+    : s != null
+    ? 'SEMAINE'
+    : 'EN_ATTENTE';
+  const etatLibelle =
+    etatFinal === 'VALIDE' ? 'Validé' : etatFinal === 'TBC' ? 'À confirmer' : 'En attente';
   return {
     code: catalogue.code,
     titre: catalogue.libelle,
     categorie: catalogue.categorie ?? categorieParCode(catalogue.code),
     etat: etatFinal,
-    etatLibelle: etatFinal === 'VALIDE' ? 'Validé' : 'En attente',
+    etatLibelle,
     semaine: s,
+    semaineFin: fin,
+    date: d,
     enRetard,
+    enMarge,
   };
 }
 
@@ -184,7 +342,8 @@ export function getJalonsCard(
         semaineActuelle
       );
     })
-    .sort((a, b) => (rang.get(a.code) ?? 999) - (rang.get(b.code) ?? 999));
+    .sort((a, b) => (rang.get(a.code) ?? 999) - (rang.get(b.code) ?? 999))
+    .map((info) => appliquerReglePpsRdl(info, card.jalons, semaineActuelle));
 }
 
 /** Jalons non validés dont la semaine est dépassée, parmi ceux que la carte porte. */
@@ -196,10 +355,13 @@ export function getJalonsEnRetard(
   return getJalonsCard(card, catalogue, semaineActuelle).filter((j) => j.enRetard);
 }
 
-/** Marque courte d'un jalon, Stable en largeur : « ✓ », « S40 » ou « — ». */
+/** Marque courte d'un jalon, Stable en largeur : « ✓ », « S40 », « 12/06 », « TBC » ou « — ». */
 export function marqueJalon(j: JalonInfo): string {
   if (j.etat === 'VALIDE') return '✓';
-  if (j.etat === 'SEMAINE') return `S${j.semaine}`;
+  if (j.etat === 'SEMAINE')
+    return j.semaineFin != null ? `S${j.semaine} - S${j.semaineFin}` : `S${j.semaine}`;
+  if (j.etat === 'DATE' && j.date) return dateCourteJalon(j.date);
+  if (j.etat === 'TBC') return 'TBC';
   return '—';
 }
 
@@ -209,7 +371,13 @@ export function detailJalon(j: JalonInfo): string {
     j.etat === 'VALIDE'
       ? 'Validé'
       : j.etat === 'SEMAINE'
-      ? `Semaine S${j.semaine}${j.enRetard ? ' — en retard' : ''}`
+      ? `Semaine S${j.semaine}${j.semaineFin != null ? ` → S${j.semaineFin}` : ''}${
+          j.enRetard ? ' — en retard' : j.enMarge ? ' — dans la marge' : ''
+        }`
+      : j.etat === 'DATE' && j.date
+      ? `Échéance ${dateCourteJalon(j.date)}${j.enRetard ? ' — en retard' : ''}`
+      : j.etat === 'TBC'
+      ? 'À confirmer (TBC)'
       : 'En attente';
   return `${j.code} (${j.titre}) : ${etat}`;
 }
@@ -292,6 +460,14 @@ const RETARD: Teinte = {
   controle: 'text-rose-800',
 };
 
+/** L'orange de la marge R : semaine cible atteinte mais pas encore dépassée. */
+const MARGE: Teinte = {
+  fond: 'bg-amber-500',
+  texte: 'text-white',
+  bordure: 'border-amber-600',
+  controle: 'text-amber-800',
+};
+
 export interface JalonTheme extends Teinte {
   /** Fond, texte et bordure réunis : à poser tel quel sur la pastille. */
   pastille: string;
@@ -302,9 +478,11 @@ export function themeJalon(j: JalonInfo): JalonTheme {
   const teintes = TEINTES[j.categorie] ?? TEINTES.STATUT;
   const base = j.enRetard
     ? RETARD
+    : j.enMarge
+    ? MARGE
     : j.etat === 'VALIDE'
     ? teintes.valide
-    : j.etat === 'SEMAINE'
+    : j.etat === 'SEMAINE' || j.etat === 'DATE'
     ? teintes.planifie
     : teintes.attente;
   return { ...base, pastille: `${base.fond} ${base.texte} ${base.bordure}` };

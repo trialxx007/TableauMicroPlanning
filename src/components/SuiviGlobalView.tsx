@@ -1,29 +1,61 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { CardFormData, CardItem } from '../types/card.ts';
-import { ChaineRow, ChaineSlotCard } from '../types/suiviGlobal.ts';
-import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS } from '../data/mockSuiviGlobal.ts';
-import { CardPickerModal } from './CardPickerModal.tsx';
-import { SlotActionModal } from './SlotActionModal.tsx';
 import {
-  ArrowLeft,
-  Plus,
-  RotateCcw,
-  Download,
-  Edit3,
-  Check,
-  Search,
+  ChaineRow,
+  ChaineSlotCard,
+  CategorieConfig,
+  InspectionBloc,
+  InspectionValeur,
+  InspectionEvenement,
+  ExpeditionOF,
+  AlerteChamp,
+  TEINTE_ALERTE_DEFAUT,
+  normaliserTeinteAlerte,
+} from '../types/suiviGlobal.ts';
+import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS, nouvelleChaineVide } from '../data/mockSuiviGlobal.ts';
+import { CardPickerModal } from './CardPickerModal.tsx';
+import { ExpeditionModal } from './ExpeditionModal.tsx';
+import { NouvelleChaineModal } from './NouvelleChaineModal.tsx';
+import { InspectionEtatMenu } from './InspectionEtatMenu.tsx';
+import { OfPopover } from './OfPopover.tsx';
+import { AlertePopover } from './AlertePopover.tsx';
+import { useAlertesManuelles } from '../utils/alertesManuelles.ts';
+import { getJalonsCard, type JalonInfo } from '../utils/jalons.ts';
+import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { useGlisserCartes } from '../utils/glisserCarte.ts';
+import {
+  blocInspectionVide,
+  dateDuJourISO,
+  normaliserBloc,
+} from '../utils/inspections.ts';
+import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
+import { useInspectionsParCarte } from '../context/InspectionsParCarteContext.tsx';
+import { ViewSwitcher, AppPage } from './ViewSwitcher.tsx';
+import { suiviGlobalApi, type SuiviGlobalLayoutRow } from '../services/api.ts';
+import {
+  LigneTableSuivi,
+  NOMBRE_LANCEMENTS,
+  type AlerteOuverteGlobal,
+  type ApercuBanniere,
+  type MenuEtatInspection,
+  type OfOuvertGlobal,
+  type TypeSlotGlobal,
+} from './LigneTableSuivi.tsx';
+import {
   Sparkles,
-  Info,
   Truck,
-  ExternalLink,
-  X,
-  ArrowLeftRight,
-  Zap,
+  TableProperties,
+  Calendar,
+  Clock,
+  Plus,
 } from 'lucide-react';
 
+
 interface SuiviGlobalViewProps {
-  onBackToPointJournalier: () => void;
+  onChangePage: (page: AppPage) => void;
   cards: CardItem[];
+  /** Persiste des modifications partielles d'une carte (juron validé…). */
+  onUpdateCard?: (id: string, updates: Partial<CardItem>) => Promise<void>;
   onOpenCardModal?: (card: CardItem) => void;
   onOpenCreateCard?: (
     prefillData: Partial<CardFormData> | null,
@@ -34,812 +66,923 @@ interface SuiviGlobalViewProps {
 interface ActiveSlotPicker {
   rowId: string;
   slotType: 'modeleEnCours' | 'lancement' | 'expedition';
+  /** Colonne « Prochain Lancement » (0..4). */
   lancementIndex?: number;
+  /** Rang dans la pile de 2 cartes de la case (0 = haut, 1 = bas). */
+  slotIndex?: number;
   slotTitle: string;
 }
 
+/** Alias historiques : la ligne du suivi global et la pile de deux cartes. */
+type SuiviRow = ChaineRow;
+type PileDeCartes = ChaineRow['modeleEnCoursCards'];
+
+/** Coordonnées d'une case du tableau (pour déplacer une carte par glisser-déposer). */
+interface CoordCase {
+  rowId: string;
+  slotType: TypeSlotGlobal;
+  lancementIndex?: number;
+  slotIndex?: number;
+}
+
+/** Carte posée dans une case, ou null si la case est vide. */
+function lireCarteEnCase(lignes: SuiviRow[], c: CoordCase): ChaineSlotCard | null {
+  const ligne = lignes.find((r) => r.id === c.rowId);
+  if (!ligne) return null;
+  if (c.slotType === 'modeleEnCours') return ligne.modeleEnCoursCards[c.slotIndex ?? 0] ?? null;
+  if (c.slotType === 'expedition') return ligne.expeditionCards[c.slotIndex ?? 0] ?? null;
+  return ligne.prochainsLancementsCards[c.lancementIndex ?? 0]?.[c.slotIndex ?? 0] ?? null;
+}
+
+/** Remplace la carte d'une case (null pour la vider), sans toucher aux autres. */
+function ecrireCarteEnCase(lignes: SuiviRow[], c: CoordCase, carte: ChaineSlotCard | null): SuiviRow[] {
+  return lignes.map((r) => {
+    if (r.id !== c.rowId) return r;
+    if (c.slotType === 'modeleEnCours') {
+      const pile = [...r.modeleEnCoursCards] as PileDeCartes;
+      pile[c.slotIndex ?? 0] = carte;
+      return { ...r, modeleEnCoursCards: pile };
+    }
+    if (c.slotType === 'expedition') {
+      const pile = [...r.expeditionCards] as PileDeCartes;
+      pile[c.slotIndex ?? 0] = carte;
+      return { ...r, expeditionCards: pile };
+    }
+    const lancements = [...r.prochainsLancementsCards] as ChaineRow['prochainsLancementsCards'];
+    const pile = [...(lancements[c.lancementIndex ?? 0] ?? [null, null])] as PileDeCartes;
+    pile[c.slotIndex ?? 0] = carte;
+    lancements[c.lancementIndex ?? 0] = pile;
+    return { ...r, prochainsLancementsCards: lancements };
+  });
+}
+
+/** Groupe de colonnes : le « planning » (modèle en cours + prochains
+ *  lancements) et l'« expédition » sont indépendants. Une carte peut donc être
+ *  à la fois en production (planning) et en expédition, mais reste unique à
+ *  l'intérieur de chaque groupe. */
+type GroupeSlot = 'planning' | 'expedition';
+
+function groupeDe(slotType: TypeSlotGlobal): GroupeSlot {
+  return slotType === 'expedition' ? 'expedition' : 'planning';
+}
+
+/** Suivi d'expédition initial d'une carte : un OF par OF, à expédier. La date
+ *  d'envoi est choisie par l'utilisateur dans la fenêtre Expédition. */
+function expeditionOfsDepuisCarte(carte: CardItem | undefined): ExpeditionOF[] {
+  return (carte?.ofs ?? []).map((_, i) => ({
+    ofIndex: i,
+    statutExpedition: 'A_EXPEDIER' as const,
+  }));
+}
+
+/** Retire cette carte des cases de ce groupe uniquement. */
+function retirerCarteDuGroupe(lignes: SuiviRow[], cardId: string, groupe: GroupeSlot): SuiviRow[] {
+  return lignes.map((r) => {
+    if (groupe === 'expedition') {
+      const pile = (r.expeditionCards as PileDeCartes).map((s) =>
+        s?.cardId === cardId ? null : s
+      ) as PileDeCartes;
+      return { ...r, expeditionCards: pile };
+    }
+    const modelePile = (r.modeleEnCoursCards as PileDeCartes).map((s) =>
+      s?.cardId === cardId ? null : s
+    ) as PileDeCartes;
+    const lancementsPiles = (r.prochainsLancementsCards as ChaineRow['prochainsLancementsCards']).map(
+      (pile) => (pile ?? [null, null]).map((s) => (s?.cardId === cardId ? null : s))
+    ) as ChaineRow['prochainsLancementsCards'];
+    return {
+      ...r,
+      modeleEnCoursCards: modelePile,
+      prochainsLancementsCards: lancementsPiles,
+    };
+  });
+}
+
+/** Localise l'unique case de ce groupe où est posée cette carte, si elle y est. */
+function localiserCarteDansGroupe(
+  lignes: SuiviRow[],
+  cardId: string,
+  groupe: GroupeSlot
+): CoordCase | null {
+  for (const r of lignes) {
+    if (groupe === 'expedition') {
+      for (const [i, s] of (r.expeditionCards as PileDeCartes).entries()) {
+        if (s?.cardId === cardId) return { rowId: r.id, slotType: 'expedition', slotIndex: i };
+      }
+      continue;
+    }
+    for (const [i, s] of r.modeleEnCoursCards.entries()) {
+      if (s?.cardId === cardId) return { rowId: r.id, slotType: 'modeleEnCours', slotIndex: i };
+    }
+    for (let li = 0; li < r.prochainsLancementsCards.length; li++) {
+      const pile = r.prochainsLancementsCards[li] ?? [];
+      for (let si = 0; si < pile.length; si++) {
+        if (pile[si]?.cardId === cardId) {
+          return { rowId: r.id, slotType: 'lancement', lancementIndex: li, slotIndex: si };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Garantit qu'une carte n'occupe qu'une seule case d'un groupe : on conserve
+ *  l'occurrence à `garde` et on vide les doublons ailleurs dans le groupe. */
+function normaliserUniciteGroupe(
+  lignes: SuiviRow[],
+  groupe: GroupeSlot,
+  garde: CoordCase
+): SuiviRow[] {
+  const cardId = lireCarteEnCase(lignes, garde)?.cardId;
+  if (!cardId) return lignes;
+
+  const estGarde = (c: CoordCase) =>
+    c.rowId === garde.rowId &&
+    c.slotType === garde.slotType &&
+    (c.lancementIndex ?? 0) === (garde.lancementIndex ?? 0) &&
+    (c.slotIndex ?? 0) === (garde.slotIndex ?? 0);
+
+  return lignes.map((r) => {
+    if (groupe === 'expedition') {
+      const pile = (r.expeditionCards as PileDeCartes).map((s, i) => {
+        if (s?.cardId !== cardId) return s;
+        return estGarde({ rowId: r.id, slotType: 'expedition', slotIndex: i }) ? s : null;
+      }) as PileDeCartes;
+      return { ...r, expeditionCards: pile };
+    }
+    const modelePile = (r.modeleEnCoursCards as PileDeCartes).map((s, i) => {
+      if (s?.cardId !== cardId) return s;
+      return estGarde({ rowId: r.id, slotType: 'modeleEnCours', slotIndex: i }) ? s : null;
+    }) as PileDeCartes;
+    const lancementsPiles = (r.prochainsLancementsCards as ChaineRow['prochainsLancementsCards']).map(
+      (pile, li) =>
+        (pile ?? [null, null]).map((s, si) => {
+          if (s?.cardId !== cardId) return s;
+          return estGarde({
+            rowId: r.id,
+            slotType: 'lancement',
+            lancementIndex: li,
+            slotIndex: si,
+          })
+            ? s
+            : null;
+        })
+    ) as ChaineRow['prochainsLancementsCards'];
+    return { ...r, modeleEnCoursCards: modelePile, prochainsLancementsCards: lancementsPiles };
+  });
+}
+
+/** Un ancien cache peut stocker une carte seule : on la remonte en pile. */
+function enPile(brut: unknown): PileDeCartes {
+  if (Array.isArray(brut)) return [brut[0] ?? null, brut[1] ?? null];
+  if (brut && typeof brut === 'object') return [brut as ChaineSlotCard, null];
+  return [null, null];
+}
+
+function lancementsVides(): ChaineRow['prochainsLancementsCards'] {
+  return Array.from({ length: NOMBRE_LANCEMENTS }, () => [
+    null,
+    null,
+  ]) as unknown as ChaineRow['prochainsLancementsCards'];
+}
+
+/** Reconstruit des lignes valides quel que soit le format du cache :
+ *  cartes uniques, lancements à plat, inspections manquantes… */
+function normaliserLignes(brut: unknown): SuiviRow[] {
+  if (!Array.isArray(brut)) return INITIAL_CHAINE_ROWS;
+  const lignes = brut
+    .filter((r) => r && typeof r === 'object')
+    .map((brutLigne) => {
+      const r = brutLigne as Record<string, unknown>;
+      // L'ancien champ unique « modeleEnCoursCard » est remplacé par la pile.
+      const { modeleEnCoursCard: _ancienneCarte, ...reste } = r;
+      const lancements = Array.isArray(reste.prochainsLancementsCards)
+        ? reste.prochainsLancementsCards
+        : [];
+      const inspections = Array.isArray(reste.inspections) ? reste.inspections : [];
+      
+      // Migration ancienne structure (remarque, remarque2) -> nouvelles alertes[]
+      let alertes: AlerteChamp[] = [];
+      if (Array.isArray(reste.alertes)) {
+        alertes = (reste.alertes as unknown[]).map((a: unknown) => {
+          const obj = a as Record<string, unknown>;
+          return {
+            texte: typeof obj.texte === 'string' ? obj.texte : '',
+            teinte: normaliserTeinteAlerte(obj.teinte),
+          };
+        });
+      } else {
+        // Ancien format
+        const r1 = typeof r.remarque === 'string' ? r.remarque : '';
+        const r2 = typeof r.remarque2 === 'string' ? r.remarque2 : '';
+        const t1 = normaliserTeinteAlerte(r.remarqueTeinte);
+        const t2 = normaliserTeinteAlerte(r.remarque2Teinte);
+        if (r1) alertes.push({ texte: r1, teinte: t1 });
+        if (r2) alertes.push({ texte: r2, teinte: t2 });
+      }
+      // Toujours au moins une alerte vide pour permettre l'ajout
+      if (alertes.length === 0) alertes.push({ texte: '', teinte: TEINTE_ALERTE_DEFAUT });
+
+      return {
+        ...reste,
+        id: typeof reste.id === 'string' ? reste.id : `chaine-${Math.random().toString(36).slice(2, 8)}`,
+        categorieId:
+          reste.categorieId === 'BRODERIE_MAIN' || reste.categorieId === 'CONFECTION'
+            ? reste.categorieId
+            : 'CONFECTION',
+        nom: typeof reste.nom === 'string' ? reste.nom.toUpperCase() : '',
+        dotColor: typeof reste.dotColor === 'string' ? reste.dotColor : '#94a3b8',
+        modeleEnCoursCards: enPile(reste.modeleEnCoursCards),
+        inspections: [
+          inspections[0] ? normaliserBloc(inspections[0]) : blocInspectionVide(),
+          inspections[1] ? normaliserBloc(inspections[1]) : blocInspectionVide(),
+        ] as ChaineRow['inspections'],
+        prochainsLancementsCards: Array.from(
+          { length: NOMBRE_LANCEMENTS },
+          (_, i) => enPile(lancements[i])
+        ) as unknown as ChaineRow['prochainsLancementsCards'],
+        // Migration : l'ancienne carte unique « expeditionCard » devient une pile.
+        expeditionCards: reste.expeditionCards
+          ? enPile(reste.expeditionCards)
+          : enPile(reste.expeditionCard),
+        alertes,
+      } satisfies SuiviRow;
+    });
+  // Les chaînes créées / renommées / supprimées par l'utilisateur sont respectées
+  // telles quelles : plus aucune migration codée en dur ne vient les écraser.
+  return lignes.length > 0 ? lignes : INITIAL_CHAINE_ROWS;
+}
+
+const BANNER_LINE_RATIO = 1.06;
+const BANNER_WORD_GAP = 0.45;
+const BANNER_FILL_W = 0.72;
+const BANNER_FILL_H = 0.88;
+const BANNER_GLYPH_W_RATIO = 0.66;
+
+function buildBanner(
+  catConfig: CategorieConfig,
+  availW: number,
+  availH: number
+): {
+  glyphs: { char: string; x: number; y: number; size: number }[];
+  vbW: number;
+  vbH: number;
+} {
+  const lines = catConfig.titreVerticalLignes;
+  const totalChars = lines.reduce((sum, line) => sum + line.length, 0);
+  const stackUnits =
+    totalChars * BANNER_LINE_RATIO + (lines.length - 1) * BANNER_WORD_GAP;
+
+  if (!(availW > 0) || !(availH > 0) || !(stackUnits > 0)) {
+    return { glyphs: [], vbW: 1, vbH: 1 };
+  }
+
+  const size = Math.min(
+    (availW * BANNER_FILL_W) / BANNER_GLYPH_W_RATIO,
+    (availH * BANNER_FILL_H) / stackUnits
+  );
+
+  const glyphs: { char: string; x: number; y: number; size: number }[] = [];
+  let cursor = 0;
+
+  lines.forEach((line, lineIdx) => {
+    if (lineIdx > 0) cursor += size * BANNER_WORD_GAP;
+    line.forEach((char) => {
+      cursor += size * BANNER_LINE_RATIO;
+      glyphs.push({
+        char,
+        x: availW / 2,
+        y: cursor - size * 0.18,
+        size,
+      });
+    });
+  });
+
+  const offset = (availH - cursor) / 2;
+  return {
+    vbW: availW,
+    vbH: availH,
+    glyphs: glyphs.map((glyph) => ({ ...glyph, y: glyph.y + offset })),
+  };
+}
+
 export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
-  onBackToPointJournalier,
+  onChangePage,
   cards,
+  onUpdateCard,
   onOpenCardModal,
   onOpenCreateCard,
 }) => {
-  const [rows, setRows] = useState<ChaineRow[]>(() => {
-    try {
-      const saved = localStorage.getItem('suivi_global_rows_v3');
-      if (saved) {
-        return JSON.parse(saved);
-      }
-    } catch {
-      // Fallback
-    }
-    return INITIAL_CHAINE_ROWS;
-  });
-
-  const [isEditMode, setIsEditMode] = useState(false);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [savedFeedback, setSavedFeedback] = useState(false);
-  const [activePicker, setActivePicker] = useState<ActiveSlotPicker | null>(null);
-  const [selectedSlotAction, setSelectedSlotAction] = useState<ActiveSlotPicker | null>(null);
+  const catalogue = useJalonCatalogue();
+  const [parisTime, setParisTime] = useState(getNowParis().timeStr);
+  const { fullFrenchDate } = getNowParis();
+  const [layoutLoading, setLayoutLoading] = useState(true);
 
   useEffect(() => {
+    const timer = setInterval(() => setParisTime(getNowParis().timeStr), 15000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Layout partagé via API (DB SQLite) avec polling + localStorage fallback
+  const [rows, setRows] = useState<SuiviRow[]>(() => INITIAL_CHAINE_ROWS);
+
+  // Publie l'inspection de chaque carte (colonne Inspection) pour que la fiche
+  // carte (CardModal) puisse y référer le long de ses OF.
+  const { setParCarte } = useInspectionsParCarte();
+  useEffect(() => {
+    const map: Record<string, InspectionBloc> = {};
+    for (const r of rows) {
+      for (let i = 0; i < r.modeleEnCoursCards.length; i++) {
+        const cardId = r.modeleEnCoursCards[i]?.cardId;
+        if (cardId) map[cardId] = r.inspections[i] ?? blocInspectionVide();
+      }
+    }
+    setParCarte(map);
+  }, [rows, setParCarte]);
+
+  // Synchronisation concurrente : le tableau est partagé entre postes, mais une
+  // action locale (créer/renommer/supprimer une chaîne) ne doit JAMAIS être
+  // annulée par une réponse serveur arrivée en retard.
+  // - `sauvegardeEnAttenteRef` : des modifs locales ne sont pas encore écrites,
+  //   le polling ne doit donc pas appliquer l'état (ancien) du serveur.
+  // - `derniereEcritureRef` : horodatage de notre dernier envoi réussi ; toute
+  //   requête GET démarrée AVANT est ignorée (sa réponse est forcément périmée).
+  const sauvegardeEnAttenteRef = useRef(false);
+  const derniereEcritureRef = useRef(0);
+  // Vrai quand le dernier setRows provient du serveur : inutile de le renvoyer.
+  const applicationServeurRef = useRef(false);
+
+  const loadLayout = useCallback(async (isInitial = false) => {
+    const debutRequete = Date.now();
+    try {
+      if (isInitial) console.log('[SuiviGlobal] Chargement layout via API...');
+      const data = await suiviGlobalApi.getLayout();
+      if (isInitial) console.log('[SuiviGlobal] Layout reçu:', data.length, 'lignes');
+      // Réponse périmée (une écriture locale a eu lieu depuis) ou modifs locales
+      // en attente : on ne touche pas à l'état local.
+      if (sauvegardeEnAttenteRef.current || debutRequete < derniereEcritureRef.current) {
+        return;
+      }
+      if (data.length > 0) {
+        const normalized = normaliserLignes(data);
+        setRows((prev) => {
+          const prevStr = JSON.stringify(prev);
+          const nextStr = JSON.stringify(normalized);
+          if (prevStr !== nextStr) {
+            applicationServeurRef.current = true;
+            if (!isInitial) console.log('[SuiviGlobal] Layout mis à jour depuis le serveur');
+            return normalized;
+          }
+          return prev;
+        });
+      } else if (isInitial) {
+        console.log('[SuiviGlobal] Layout vide, utilisation INITIAL_CHAINE_ROWS');
+      }
+    } catch (e) {
+      console.warn('[SuiviGlobal] Erreur chargement layout', e);
+    } finally {
+      if (isInitial) setLayoutLoading(false);
+    }
+  }, []);
+
+  // Chargement initial
+  useEffect(() => {
+    let mounted = true;
+    const init = async () => {
+      await loadLayout(true);
+    };
+    init();
+    return () => { mounted = false; };
+  }, [loadLayout]);
+
+  // Polling toutes les 3s pour synchroniser avec les autres postes
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadLayout(false);
+    }, 3000);
+    return () => clearInterval(interval);
+  }, [loadLayout]);
+
+  const [activePicker, setActivePicker] = useState<ActiveSlotPicker | null>(null);
+
+  // Fenêtre d'expédition OF par OF : ligne dont la case Expédition est ouverte.
+  const [expeditionOuverte, setExpeditionOuverte] = useState<{
+    rowId: string;
+    slotIndex: number;
+  } | null>(null);
+
+  // Alertes saisies à la main dans le popover : source partagée (localStorage),
+  // écrites par le popover, lues ici pour allumer la bande de la ligne.
+  const alertesManuelles = useAlertesManuelles();
+
+  // --- Caches de lecture rendu par rendu -------------------------------
+  // Le tableau affiche jusqu'à ~12 lignes × 13 cases : sans cache, chaque rendu
+  // refait getCardById (find linéaire) et getJalonsCard (construction d'un Map +
+  // tri) des dizaines de fois. Ces caches ne se recalculent que quand les cartes
+  // ou le catalogue changent, pas à chaque rendu (horloge 15 s, saisie, etc.).
+  const cardsParId = useMemo(
+    () => new Map(cards.map((c) => [c.id, c])),
+    [cards]
+  );
+  const jalonInfosParCarte = useMemo(() => {
+    const m = new Map<string, JalonInfo[]>();
+    for (const c of cards) m.set(c.id, getJalonsCard(c, catalogue));
+    return m;
+  }, [cards, catalogue]);
+  const cartesAlerteRetard = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of cards) {
+      const infos = jalonInfosParCarte.get(c.id);
+      if (infos?.some((j) => j.enRetard)) s.add(c.id);
+    }
+    return s;
+  }, [cards, jalonInfosParCarte]);
+
+  // Popover d'alerte ouvert : la carte concernée, son titre de case, l'ancre DOM.
+  const [alerteOuverte, setAlerteOuverte] = useState<AlerteOuverteGlobal | null>(null);
+
+  // Taille réelle de chaque bandeau vertical, pour dimensionner le texte
+  // proportionnellement à la hauteur cumulée des modèles en cours de la catégorie.
+  const [bannerSizes, setBannerSizes] = useState<Record<string, { w: number; h: number }>>({});
+  const bannerNodesRef = useRef<Record<string, HTMLTableCellElement | null>>({});
+  const bannerObserverRef = useRef<ResizeObserver | null>(null);
+  const bannerRefCacheRef = useRef<Record<string, (el: HTMLTableCellElement | null) => void>>({});
+
+  // Conteneur défilant de la table : pendant le défilement, on met en pause les
+  // animations de pulsation pour éviter de repeindre chaque frame (fluide au
+  // scroll horizontal). La classe est retirée ~200 ms après l'arrêt.
+  const tableScrollRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    const el = tableScrollRef.current;
+    if (!el) return;
+    let fin: number | undefined;
+    const stop = () => {
+      el.classList.remove('suivi-table-au-scroll');
+      fin = undefined;
+    };
+    const onScroll = () => {
+      el.classList.add('suivi-table-au-scroll');
+      if (fin) window.clearTimeout(fin);
+      fin = window.setTimeout(stop, 200);
+    };
+    el.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      el.removeEventListener('scroll', onScroll);
+      if (fin) window.clearTimeout(fin);
+    };
+  }, []);
+
+  const getBannerRef = (catId: string) => {
+    const cache = bannerRefCacheRef.current;
+    if (!cache[catId]) {
+      cache[catId] = (el: HTMLTableCellElement | null) => {
+        const previous = bannerNodesRef.current[catId];
+        if (previous && previous !== el) {
+          bannerObserverRef.current?.unobserve(previous);
+        }
+        bannerNodesRef.current[catId] = el;
+        if (el) {
+          bannerObserverRef.current?.observe(el);
+        } else {
+          delete bannerNodesRef.current[catId];
+        }
+      };
+    }
+    return cache[catId];
+  };
+
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver((entries) => {
+      setBannerSizes((prev) => {
+        let changed = false;
+        const next: Record<string, { w: number; h: number }> = { ...prev };
+        for (const entry of entries) {
+          const catId = (entry.target as HTMLTableCellElement).dataset.bannerCat;
+          if (!catId) continue;
+          const w = Math.round(entry.contentRect.width);
+          const h = Math.round(entry.contentRect.height);
+          if (prev[catId]?.w !== w || prev[catId]?.h !== h) {
+            next[catId] = { w, h };
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
+    });
+    bannerObserverRef.current = observer;
+    Object.values(bannerNodesRef.current).forEach((node) => {
+      if (node) observer.observe(node);
+    });
+    return () => {
+      observer.disconnect();
+      bannerObserverRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (layoutLoading) return; // Ne pas sauvegarder pendant le chargement initial
+    // Sauvegarde locale immédiate (réactivité)
     try {
       localStorage.setItem('suivi_global_rows_v3', JSON.stringify(rows));
-    } catch {
-      // ignore
+    } catch {}
+    // L'état vient du serveur : pas de renvoi inutile.
+    if (applicationServeurRef.current) {
+      applicationServeurRef.current = false;
+      return;
     }
+    // Modifs locales : on ouvre la fenêtre pendant laquelle le polling ne doit
+    // pas écraser l'état local, puis on écrit (debounced) côté serveur.
+    sauvegardeEnAttenteRef.current = true;
+    const timeout = setTimeout(() => {
+      suiviGlobalApi
+        .setLayout(rows)
+        .catch(console.warn)
+        .finally(() => {
+          derniereEcritureRef.current = Date.now();
+          sauvegardeEnAttenteRef.current = false;
+        });
+    }, 500);
+    return () => clearTimeout(timeout);
+  }, [rows, layoutLoading]);
+
+  // Flush avant fermeture page (recharge, onglet fermé)
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      try {
+        localStorage.setItem('suivi_global_rows_v3', JSON.stringify(rows));
+      } catch {}
+      // sendBeacon pour serveur même si page déchargée
+      navigator.sendBeacon('/api/v1/suivi-layout', JSON.stringify({ rows }));
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [rows]);
 
-  // Synchronise automatiquement les cartes selon la règle stricte :
-  // - Les cartes "OK Prod validé" sont STRICTEMENT migrées dans la colonne "Modèle en cours" (et interdites en Prochains Lancements)
-  // - Les cartes "En attente OK Prod" sont STRICTEMENT dans "PROCHAINS LANCEMENTS" (et interdites en Modèle en cours)
-  const reconcileRowsWithOkProdRule = (
-    currentRows: ChaineRow[],
-    allCards: CardItem[]
-  ): { newRows: ChaineRow[]; changed: boolean } => {
-    let changed = false;
+  const handleAssignSlotCard = useCallback(
+    (
+      rowId: string,
+      slotType: 'modeleEnCours' | 'lancement' | 'expedition',
+      slotCard: ChaineSlotCard | null,
+      lancementIndex?: number,
+      slotIndex = 0
+    ) => {
+      // Affectation purement manuelle : OK Prod ne déplace jamais une carte ici.
+      // Une carte reste unique par groupe (planning / expédition) : si elle est
+      // déjà posée ailleurs dans le MÊME groupe, elle en est retirée avant
+      // d'être placée. Elle peut en revanche figurer aussi dans l'autre groupe
+      // (ex. produite en « Modèle en cours » et suivie en « Expédition »).
+      const cardId = slotCard?.cardId;
+      const groupe = groupeDe(slotType);
 
-    // Cartes avec OK Prod validé à promouvoir en Modèle en cours si trouvées en Prochains Lancements
-    const validatedCardsToPromote: ChaineSlotCard[] = [];
-    // Cartes en attente OK Prod à rétrograder vers Prochains Lancements si trouvées en Modèle en cours
-    const pendingCardsToDemote: ChaineSlotCard[] = [];
-
-    // 1) Vérifier chaque ligne : purger les cartes mal positionnées
-    const newRows = currentRows.map((row) => {
-      let currentModele = row.modeleEnCoursCard;
-      let nextLancements = [...row.prochainsLancementsCards] as [
-        ChaineSlotCard | null,
-        ChaineSlotCard | null,
-        ChaineSlotCard | null,
-        ChaineSlotCard | null,
-        ChaineSlotCard | null
-      ];
-
-      // A) Si une carte en "Modèle en cours" n'a PAS OK Prod -> elle doit migrer vers Prochains Lancements
-      if (currentModele?.cardId) {
-        const card = allCards.find((c) => c.id === currentModele!.cardId);
-        if (card && !card.okProd) {
-          pendingCardsToDemote.push(currentModele);
-          currentModele = undefined;
-          changed = true;
-        }
-      }
-
-      // B) Si une carte en "Prochains Lancements" a l'OK Prod validé -> elle doit GLISSER vers Modèle en cours
-      nextLancements = nextLancements.map((slot) => {
-        if (slot?.cardId) {
-          const card = allCards.find((c) => c.id === slot.cardId);
-          if (card && card.okProd) {
-            // Si la chaîne actuelle a son Modèle en cours libre, la carte y glisse directement !
-            if (!currentModele) {
-              currentModele = slot;
-            } else {
-              validatedCardsToPromote.push(slot);
-            }
-            changed = true;
-            return null; // Retirer de Prochains Lancements
-          }
-        }
-        return slot;
-      }) as [
-        ChaineSlotCard | null,
-        ChaineSlotCard | null,
-        ChaineSlotCard | null,
-        ChaineSlotCard | null,
-        ChaineSlotCard | null
-      ];
-
-      return {
-        ...row,
-        modeleEnCoursCard: currentModele,
-        prochainsLancementsCards: nextLancements,
-      };
-    });
-
-    // 2) Placer les cartes avec OK Prod validé dans la colonne "Modèle en cours"
-    const validatedCards = allCards.filter((c) => c.okProd);
-    validatedCards.forEach((c) => {
-      const alreadyInModeleEnCours = newRows.some(
-        (r) => r.modeleEnCoursCard?.cardId === c.id
-      );
-
-      if (!alreadyInModeleEnCours) {
-        // Priorité : si la carte a une chaîne assignée (chaineId ou chaineNom), tenter de la placer dessus
-        const targetRow = c.chaineId
-          ? newRows.find((r) => r.id === c.chaineId)
-          : c.chaineNom
-          ? newRows.find(
-              (r) => r.nom.toLowerCase().trim() === c.chaineNom!.toLowerCase().trim()
-            )
-          : undefined;
-
-        if (targetRow && !targetRow.modeleEnCoursCard) {
-          targetRow.modeleEnCoursCard = {
-            cardId: c.id,
-            customLabel: c.modele,
-          };
-          changed = true;
-        } else {
-          // Sinon trouver la première chaîne qui a son Modèle en cours libre
-          for (const r of newRows) {
-            if (!r.modeleEnCoursCard) {
-              r.modeleEnCoursCard = {
-                cardId: c.id,
-                customLabel: c.modele,
-              };
-              changed = true;
-              break;
-            }
-          }
-        }
-      }
-    });
-
-    // 3) Placer les cartes en attente d'OK Prod dans "PROCHAINS LANCEMENTS"
-    const nonValidatedCards = allCards.filter((c) => !c.okProd);
-    nonValidatedCards.forEach((c) => {
-      const alreadyInLancements = newRows.some((r) =>
-        r.prochainsLancementsCards.some((s) => s?.cardId === c.id)
-      );
-
-      if (!alreadyInLancements) {
-        // Priorité : si la carte a une chaîne assignée, tenter de la placer dans les prochains lancements de cette chaîne
-        const targetRow = c.chaineId
-          ? newRows.find((r) => r.id === c.chaineId)
-          : c.chaineNom
-          ? newRows.find(
-              (r) => r.nom.toLowerCase().trim() === c.chaineNom!.toLowerCase().trim()
-            )
-          : undefined;
-
-        if (targetRow) {
-          const emptyIdx = targetRow.prochainsLancementsCards.findIndex(
-            (s) => s === null
-          );
-          if (emptyIdx !== -1) {
-            targetRow.prochainsLancementsCards[emptyIdx] = {
-              cardId: c.id,
-              customLabel: c.modele,
-            };
-            changed = true;
-            return;
-          }
-        }
-
-        // Sinon trouver la première chaîne qui a une case libre dans Prochains Lancements
-        for (const r of newRows) {
-          const emptyIdx = r.prochainsLancementsCards.findIndex(
-            (s) => s === null
-          );
-          if (emptyIdx !== -1) {
-            r.prochainsLancementsCards[emptyIdx] = {
-              cardId: c.id,
-              customLabel: c.modele,
-            };
-            changed = true;
-            break;
-          }
-        }
-      }
-    });
-
-    // 4) Placer les cartes rétrogradées éventuelles
-    pendingCardsToDemote.forEach((slotCard) => {
-      const alreadyInTable = newRows.some((r) =>
-        r.prochainsLancementsCards.some((s) => s?.cardId === slotCard.cardId)
-      );
-      if (!alreadyInTable) {
-        for (const r of newRows) {
-          const emptyIdx = r.prochainsLancementsCards.findIndex(
-            (s) => s === null
-          );
-          if (emptyIdx !== -1) {
-            r.prochainsLancementsCards[emptyIdx] = slotCard;
-            changed = true;
-            break;
-          }
-        }
-      }
-    });
-
-    return { newRows, changed };
-  };
-
-  // Re-synchronisation automatique lorsque les cartes du Point Commande Journalière changent
-  useEffect(() => {
-    if (cards && cards.length > 0) {
       setRows((prev) => {
-        const { newRows, changed } = reconcileRowsWithOkProdRule(prev, cards);
-        return changed ? newRows : prev;
+        // Conserve l'expédition OF par OF si la carte était déjà en expédition.
+        let aEcrire = slotCard;
+        if (cardId && groupe === 'expedition') {
+          const existant = localiserCarteDansGroupe(prev, cardId, 'expedition');
+          const slotExistant = existant ? lireCarteEnCase(prev, existant) : null;
+          if (slotExistant) {
+            aEcrire = { ...slotExistant };
+          } else if (aEcrire && !aEcrire.expeditionOfs) {
+            // Première mise en expédition : pré-remplit les OF (état + date).
+            aEcrire = {
+              ...aEcrire,
+              expeditionOfs: expeditionOfsDepuisCarte(cardsParId.get(cardId)),
+            };
+          }
+        }
+        const retrait = cardId ? retirerCarteDuGroupe(prev, cardId, groupe) : prev;
+        return ecrireCarteEnCase(
+          retrait,
+          { rowId, slotType, lancementIndex, slotIndex },
+          aEcrire
+        );
       });
-    }
-  }, [cards]);
+    },
+    [cardsParId]
+  );
 
-  const handleSyncOkProd = () => {
-    const { newRows, changed } = reconcileRowsWithOkProdRule(rows, cards);
-    setRows(newRows);
-    setSavedFeedback(true);
-    setTimeout(() => setSavedFeedback(false), 2000);
-    alert(
-      changed
-        ? 'Migration stricte OK Prod effectuée :\n• Les cartes "OK Prod Validé" ont été migrées en colonne "Modèle en cours".\n• Les cartes "En attente OK Prod" ont été migrées en colonne "PROCHAINS LANCEMENTS".'
-        : 'Le tableau est déjà parfaitement aligné :\n• Toutes les cartes validées sont en "Modèle en cours".\n• Toutes les cartes en attente sont en "PROCHAINS LANCEMENTS".'
-    );
-  };
+  // Met à jour l'expédition OF par OF de la carte posée dans la case Expédition.
+  const majExpeditionOfs = useCallback(
+    (rowId: string, slotIndex: number, expeditionOfs: ExpeditionOF[]) => {
+      setRows((prev) =>
+        prev.map((r) => {
+          if (r.id !== rowId) return r;
+          const slot = r.expeditionCards[slotIndex];
+          if (!slot) return r;
+          const pile = [...r.expeditionCards] as PileDeCartes;
+          pile[slotIndex] = { ...slot, expeditionOfs };
+          return { ...r, expeditionCards: pile };
+        })
+      );
+    },
+    []
+  );
 
-  // Find CardItem from Point Commande Journalière by cardId
-  const getCardById = (cardId?: string): CardItem | undefined => {
-    if (!cardId) return undefined;
-    return cards.find((c) => c.id === cardId);
-  };
-
-  const handleCellChange = (
-    rowId: string,
-    field: 'nom' | 'objectifJour' | 'realisationJour' | 'remarque',
-    value: string | number
-  ) => {
-    setRows((prev) =>
-      prev.map((r) => (r.id === rowId ? { ...r, [field]: value } : r))
-    );
-    setSavedFeedback(true);
-  };
-
-  const handleAssignSlotCard = (
-    rowId: string,
-    slotType: 'modeleEnCours' | 'lancement' | 'expedition',
-    slotCard: ChaineSlotCard | null,
-    lancementIndex?: number
-  ) => {
-    // RÈGLE MÉTIER STRICTE :
-    // 1) Si affectation en "Modèle en cours" mais que la carte n'a pas OK Prod -> refusée & migrée en Prochains Lancements
-    if (slotType === 'modeleEnCours' && slotCard?.cardId) {
-      const card = getCardById(slotCard.cardId);
-      if (card && !card.okProd) {
-        alert(
-          `Action refusée : Seules les cartes avec accord "OK Prod validé" sont acceptées dans la colonne "Modèle en cours".\n\nLa carte "${card.modele}" (${card.reference}) est en attente d'OK Prod et a été automatiquement migrée dans "PROCHAINS LANCEMENTS".`
-        );
-        setRows((prev) =>
-          prev.map((r) => {
-            if (r.id !== rowId) return r;
-            const nextLancements = [...r.prochainsLancementsCards] as [
-              ChaineSlotCard | null,
-              ChaineSlotCard | null,
-              ChaineSlotCard | null,
-              ChaineSlotCard | null,
-              ChaineSlotCard | null
-            ];
-            const freeIdx = nextLancements.findIndex((s) => s === null);
-            const targetIdx = freeIdx !== -1 ? freeIdx : 0;
-            nextLancements[targetIdx] = slotCard;
-            return { ...r, prochainsLancementsCards: nextLancements };
-          })
+  // Active / désactive l'expédition du modèle d'un bloc d'inspection.
+  // Activation : la carte rejoint la colonne Expédition et le suivi OF par OF
+  // s'ouvre. Désactivation : la carte est retirée de la colonne Expédition.
+  // Le modèle reste dans tous les cas dans « Modèle en cours ».
+  const handleEnvoyerExpedition = useCallback(
+    (rowId: string, blocIndex: number) => {
+      const ligne = rows.find((r) => r.id === rowId);
+      const slot = ligne?.modeleEnCoursCards[blocIndex];
+      const cardId = slot?.cardId;
+      if (!ligne || !cardId) return;
+      const pile = ligne.expeditionCards as PileDeCartes;
+      const existant = pile.findIndex((s) => s?.cardId === cardId);
+      if (existant >= 0) {
+        // Déjà en expédition : le clic désactive le suivi.
+        handleAssignSlotCard(rowId, 'expedition', null, undefined, existant);
+        setExpeditionOuverte((prev) =>
+          prev?.rowId === rowId && prev.slotIndex === existant ? null : prev
         );
         return;
       }
-    }
+      const cibleIndex = Math.max(0, pile.findIndex((s) => !s));
+      const carte = cardsParId.get(cardId);
+      handleAssignSlotCard(
+        rowId,
+        'expedition',
+        { cardId, customLabel: carte?.modele ?? slot?.customLabel },
+        undefined,
+        cibleIndex
+      );
+      setExpeditionOuverte({ rowId, slotIndex: cibleIndex });
+    },
+    [rows, cardsParId, handleAssignSlotCard]
+  );
 
-    // 2) Si affectation en "Prochains Lancements" mais que la carte a déjà son OK Prod validé -> refusée & migrée en Modèle en cours
-    if (slotType === 'lancement' && slotCard?.cardId) {
-      const card = getCardById(slotCard.cardId);
-      if (card && card.okProd) {
-        alert(
-          `Action refusée : La carte "${card.modele}" (${card.reference}) a déjà son accord "OK Prod validé".\n\nElle est strictement migrée dans la colonne "Modèle en cours" et ne peut pas être placée dans "PROCHAINS LANCEMENTS".`
-        );
-        setRows((prev) =>
-          prev.map((r) => {
-            if (r.id !== rowId) return r;
-            return { ...r, modeleEnCoursCard: slotCard };
-          })
-        );
-        return;
-      }
-    }
+  // --- Échange de cartes (glisser-échanger) ------------------------------
+  // Un glisser nous donne les deux cases concernées ; on échange leur contenu.
+  // La carte qui atterrit dans une case Expédition récupère le suivi OF par OF.
+  // Une carte reste unique dans le planning ; le seul doublon toléré est entre
+  // « Modèle en cours » et « Expédition ».
+  const handleSwapCases = useCallback(
+    (from: CoordCase, to: CoordCase) => {
+      setRows((prev) => {
+        const carteFrom = lireCarteEnCase(prev, from);
+        const carteTo = lireCarteEnCase(prev, to);
+        if (!carteFrom && !carteTo) return prev;
 
+        const adapter = (
+          carte: ChaineSlotCard | null,
+          cible: CoordCase
+        ): ChaineSlotCard | null => {
+          if (!carte) return null;
+          if (cible.slotType === 'expedition' && !carte.expeditionOfs) {
+            return {
+              ...carte,
+              expeditionOfs: expeditionOfsDepuisCarte(cardsParId.get(carte.cardId ?? '')),
+            };
+          }
+          return carte;
+        };
+
+        let next = ecrireCarteEnCase(prev, from, adapter(carteTo, from));
+        next = ecrireCarteEnCase(next, to, adapter(carteFrom, to));
+
+        const gardePlanning = groupeDe(to.slotType) === 'planning' ? to : from;
+        if (groupeDe(gardePlanning.slotType) === 'planning') {
+          next = normaliserUniciteGroupe(next, 'planning', gardePlanning);
+        }
+        const gardeExpedition = to.slotType === 'expedition' ? to : from;
+        if (gardeExpedition.slotType === 'expedition') {
+          next = normaliserUniciteGroupe(next, 'expedition', gardeExpedition);
+        }
+        return next;
+      });
+    },
+    [cardsParId]
+  );
+
+  // Le tableau entier est le conteneur du glisser-échanger : toutes les cases de
+  // cartes (Modèle en cours, Prochains lancements, Expédition) peuvent s'échanger.
+  const [tableGlisser, setTableGlisser] = useState<HTMLTableElement | null>(null);
+  const lierTableGlisser = useCallback((el: HTMLTableElement | null) => {
+    setTableGlisser(el);
+  }, []);
+  useGlisserCartes(tableGlisser, handleSwapCases);
+
+  // --- Inspections (un bloc par modèle en cours) -------------------------
+  const majBlocInspection = (
+    rowId: string,
+    blocIndex: number,
+    maj: (bloc: InspectionBloc) => InspectionBloc
+  ) => {
     setRows((prev) =>
       prev.map((r) => {
         if (r.id !== rowId) return r;
-        if (slotType === 'modeleEnCours') {
-          return { ...r, modeleEnCoursCard: slotCard || undefined };
-        }
-        if (slotType === 'expedition') {
-          return { ...r, expeditionCard: slotCard || null };
-        }
-        if (slotType === 'lancement' && typeof lancementIndex === 'number') {
-          const nextLancements = [...r.prochainsLancementsCards] as [
-            ChaineSlotCard | null,
-            ChaineSlotCard | null,
-            ChaineSlotCard | null,
-            ChaineSlotCard | null,
-            ChaineSlotCard | null
-          ];
-          nextLancements[lancementIndex] = slotCard;
-          return { ...r, prochainsLancementsCards: nextLancements };
-        }
-        return r;
+        const inspections = [...r.inspections] as ChaineRow['inspections'];
+        if (!inspections[blocIndex]) return r;
+        inspections[blocIndex] = maj(inspections[blocIndex]);
+        return { ...r, inspections };
       })
     );
   };
 
-  const handleCreateNewCardForSlot = (slot: ActiveSlotPicker) => {
-    const isModeleEnCours = slot.slotType === 'modeleEnCours';
-    const chaineRow = rows.find((r) => r.id === slot.rowId);
-    const chaineNom = chaineRow?.nom || '';
-    const chaineCategorie = chaineRow?.categorieId || 'BRODERIE_MAIN';
+  /** Journalise une modification d'état dans l'historique du bloc d'inspection. */
+  const consignerEvenement = (
+    rowId: string,
+    blocIndex: number,
+    evt: InspectionEvenement
+  ) => {
+    majBlocInspection(rowId, blocIndex, (bloc) => ({
+      ...bloc,
+      historique: [...(bloc.historique ?? []), evt],
+    }));
+  };
 
-    const prefill: Partial<CardFormData> = {
-      client: '',
-      modele: '',
-      nom: chaineNom ? `Modèle ${chaineNom}` : '',
-      chaineId: slot.rowId,
-      chaineNom: chaineNom,
-      chaineCategorie: chaineCategorie,
-      statut: isModeleEnCours ? 'EN_COURS' : 'EN_ATTENTE',
-      dt: isModeleEnCours,
-      tc: isModeleEnCours,
-      sms: isModeleEnCours,
-      rdl: isModeleEnCours,
-      okProd: isModeleEnCours,
-      quantiteDemandee: 120,
-      quantiteFinie: 0,
-      ofs: [],
-    };
+  // --- Renommage d'une chaîne --------------------------------------------
+  const renommerChaine = (rowId: string, nouveauNom: string) => {
+    setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, nom: nouveauNom } : r)));
+  };
 
-    if (onOpenCreateCard) {
-      onOpenCreateCard(prefill, (newCard) => {
-        // Direct assignment to this specific slot/case!
-        handleAssignSlotCard(
-          slot.rowId,
-          slot.slotType,
+  // --- Création d'une chaîne ---------------------------------------------
+  const [nouvelleChaineOuverte, setNouvelleChaineOuverte] = useState(false);
+  const creerChaine = useCallback(
+    (categorieId: 'BRODERIE_MAIN' | 'CONFECTION', nom: string) => {
+      const ligne = nouvelleChaineVide(categorieId, nom);
+      setRows((prev) => [...prev, ligne]);
+    },
+    []
+  );
+
+  // --- Suppression d'une chaîne ------------------------------------------
+  const supprimerChaine = useCallback(
+    (rowId: string) => {
+      const ligne = rows.find((r) => r.id === rowId);
+      if (!ligne) return;
+      if (!window.confirm(`Confirmez-vous la suppression de la chaîne "${ligne.nom}" ?`)) return;
+      setRows((prev) => prev.filter((r) => r.id !== rowId));
+    },
+    [rows]
+  );
+
+  const majValeur = useCallback(
+    (
+      rowId: string,
+      blocIndex: number,
+      valeurId: string,
+      maj: (valeur: InspectionValeur) => InspectionValeur
+    ) =>
+      majBlocInspection(rowId, blocIndex, (bloc) => ({
+        ...bloc,
+        valeurs: bloc.valeurs.map((v) => (v.id === valeurId ? maj(v) : v)),
+      })),
+    [majBlocInspection]
+  );
+
+  const ajouterValeur = useCallback(
+    (
+      rowId: string,
+      blocIndex: number,
+      type: 'I' | 'OF' | 'CC',
+      pct?: 50 | 100,
+      ofIndex?: number
+    ) =>
+      majBlocInspection(rowId, blocIndex, (bloc) => ({
+        ...bloc,
+        valeurs: [
+          ...bloc.valeurs,
           {
-            cardId: newCard.id,
-            customLabel: newCard.modele || newCard.nom,
+            id: `val-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+            type,
+            ...(type === 'I'
+              ? { pct: pct ?? 50, ofIndex }
+              : type === 'CC'
+              ? { ofIndex }
+              : {}),
+            date: dateDuJourISO(),
+            resultat: null,
           },
-          slot.lancementIndex
-        );
-      });
-    }
-  };
+        ],
+      })),
+    [majBlocInspection]
+  );
 
-  const handleResetToDefault = () => {
-    if (
-      window.confirm(
-        'Voulez-vous réinitialiser le tableau du suivi global avec les cartes d’origine ?'
-      )
-    ) {
-      setRows(INITIAL_CHAINE_ROWS);
-      localStorage.removeItem('suivi_global_rows_v2');
-    }
-  };
-
-  const handleAddChaine = (categorieId: 'BRODERIE_MAIN' | 'CONFECTION') => {
-    const nomPrompt = window.prompt(
-      `Nom de la nouvelle chaîne pour ${
-        categorieId === 'BRODERIE_MAIN' ? 'Broderie Main' : 'Confection'
-      } :`,
-      categorieId === 'BRODERIE_MAIN' ? 'Lys' : 'Ligne 4'
-    );
-    if (!nomPrompt || !nomPrompt.trim()) return;
-
-    const newRow: ChaineRow = {
-      id: `${categorieId.toLowerCase()}-${Date.now()}`,
-      categorieId,
-      nom: nomPrompt.trim(),
-      dotColor: CATEGORIES_CONFIG[categorieId]?.defaultDotColor || '#94a3b8',
-      modeleEnCoursCard: undefined,
-      objectifJour: '',
-      realisationJour: '',
-      remarque: '',
-      prochainsLancementsCards: [null, null, null, null, null],
-      expeditionCard: null,
-    };
-
-    setRows((prev) => [...prev, newRow]);
-  };
-
-  const handleExportCSV = () => {
-    const headers = [
-      'Divers',
-      'Chaîne',
-      'Modèle en cours (Carte)',
-      'Objectif/Jour',
-      'Réalisation/Jour',
-      'Remarque',
-      'Prochain Lancement 1',
-      'Prochain Lancement 2',
-      'Prochain Lancement 3',
-      'Prochain Lancement 4',
-      'Prochain Lancement 5',
-      'Expédition',
-    ];
-
-    const csvRows = [headers.join(';')];
-    rows.forEach((r) => {
-      const catTitle = CATEGORIES_CONFIG[r.categorieId]?.titre || r.categorieId;
-      const modeleEnCoursText =
-        getCardById(r.modeleEnCoursCard?.cardId)?.modele ||
-        r.modeleEnCoursCard?.customLabel ||
-        '';
-
-      const lancementsTexts = r.prochainsLancementsCards.map((l) => {
-        if (!l) return '';
-        return getCardById(l.cardId)?.modele || l.customLabel || '';
-      });
-
-      const expeditionText =
-        getCardById(r.expeditionCard?.cardId)?.modele ||
-        r.expeditionCard?.customLabel ||
-        '';
-
-      const values = [
-        `"${catTitle}"`,
-        `"${r.nom}"`,
-        `"${modeleEnCoursText}"`,
-        `"${r.objectifJour}"`,
-        `"${r.realisationJour}"`,
-        `"${r.remarque}"`,
-        ...lancementsTexts.map((txt) => `"${txt}"`),
-        `"${expeditionText}"`,
-      ];
-      csvRows.push(values.join(';'));
-    });
-
-    const blob = new Blob(['\uFEFF' + csvRows.join('\n')], {
-      type: 'text/csv;charset=utf-8;',
-    });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `Suivi_Global_Chaines_Cartes_${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
+  const [menuEtat, setMenuEtat] = useState<MenuEtatInspection | null>(null);
+  const [ofOuvert, setOfOuvert] = useState<OfOuvertGlobal | null>(null);
 
   const categoriesList = ['BRODERIE_MAIN', 'CONFECTION'];
 
-  const filteredRows = rows.filter((r) => {
-    if (!searchQuery.trim()) return true;
-    const q = searchQuery.toLowerCase();
-    const modeleCard = getCardById(r.modeleEnCoursCard?.cardId);
-    return (
-      r.nom.toLowerCase().includes(q) ||
-      (modeleCard && modeleCard.modele.toLowerCase().includes(q)) ||
-      (r.modeleEnCoursCard?.customLabel &&
-        r.modeleEnCoursCard.customLabel.toLowerCase().includes(q)) ||
-      r.remarque.toLowerCase().includes(q)
-    );
-  });
+  const filteredRows = rows;
 
-  // Helper to render card chip inside table cell
-  const renderCardSlotContent = (
-    slotCard: ChaineSlotCard | null | undefined,
-    row: ChaineRow,
-    slotType: 'modeleEnCours' | 'lancement' | 'expedition',
-    lancementIndex?: number
-  ) => {
-    let linkedCard = slotCard?.cardId ? getCardById(slotCard.cardId) : undefined;
-    const customLabel = slotCard?.customLabel;
-    if (!linkedCard && customLabel) {
-      linkedCard = cards.find(
-        (c) =>
-          c.modele.toLowerCase().trim() === customLabel.toLowerCase().trim() ||
-          c.nom.toLowerCase().trim() === customLabel.toLowerCase().trim()
-      );
+  // Le bandeau vertical est propre à la catégorie (pas à chaque ligne) :
+  // calculé une seule fois par catégorie, et stable pour un même bannerSizes,
+  // pour préserver la mémoïsation des lignes.
+  const catBanners = useMemo(() => {
+    const out: Record<string, ApercuBanniere> = {};
+    for (const catKey of categoriesList) {
+      const cfg = CATEGORIES_CONFIG[catKey];
+      const size = bannerSizes[catKey];
+      out[catKey] = buildBanner(cfg, size?.w ?? 0, size?.h ?? 0);
     }
+    return out;
+  }, [categoriesList, bannerSizes]);
 
-    // RÈGLE MÉTIER STRICTE D'AFFICHAGE :
-    // 1) Si on est dans "Modèle en cours" mais que la carte est en attente d'OK Prod (okProd === false) :
-    //    -> ELLE NE DOIT STRICTEMENT PAS ÊTRE AFFICHÉE DANS MODÈLE EN COURS !
-    if (slotType === 'modeleEnCours' && linkedCard && !linkedCard.okProd) {
-      linkedCard = undefined;
-      slotCard = null;
-    }
+  /** Ouvre le sélecteur de carte (recherche) pour une case vide ou à réassigner. */
+  const onOuvrirPicker = useCallback(
+    (
+      rowId: string,
+      titreSlot: string,
+      slotType: TypeSlotGlobal,
+      lancementIndex?: number,
+      slotIndex?: number
+    ) => {
+      setActivePicker({ rowId, slotType, lancementIndex, slotIndex, slotTitle: titreSlot });
+    },
+    []
+  );
 
-    // 2) Si on est dans "Prochains Lancements" mais que la carte a son OK Prod validé (okProd === true) :
-    //    -> ELLE NE DOIT STRICTEMENT PAS ÊTRE AFFICHÉE DANS PROCHAINS LANCEMENTS !
-    if (slotType === 'lancement' && linkedCard && linkedCard.okProd) {
-      linkedCard = undefined;
-      slotCard = null;
-    }
+  /** Ouvre la fiche carte. */
+  const onCarteClick = useCallback(
+    (card: CardItem) => {
+      if (onOpenCardModal) onOpenCardModal(card);
+    },
+    [onOpenCardModal]
+  );
 
-    const label = linkedCard ? linkedCard.modele : slotCard?.customLabel;
-    const subLabel = linkedCard ? `${linkedCard.reference} • ${linkedCard.client}` : null;
-
-    if (!label || !slotCard) {
-      return (
-        <button
-          onClick={() =>
-            setSelectedSlotAction({
-              rowId: row.id,
-              slotType,
-              lancementIndex,
-              slotTitle:
-                slotType === 'modeleEnCours'
-                  ? `Modèle en cours (${row.nom})`
-                  : slotType === 'expedition'
-                  ? `Expédition (${row.nom})`
-                  : `Prochain Lancement #${(lancementIndex || 0) + 1} (${row.nom})`,
-            })
-          }
-          className="w-full h-full min-h-[50px] flex items-center justify-center text-[11px] font-semibold text-slate-400 hover:text-blue-700 bg-slate-50/60 hover:bg-blue-50/80 rounded-xl transition-all border border-dashed border-slate-300/80 hover:border-blue-400 cursor-pointer p-1.5 group shadow-2xs"
-          title="Cliquez pour choisir : + Nouvelle Carte ou Réassigner une carte"
-        >
-          <span className="flex items-center gap-1.5 transition-transform group-hover:scale-105">
-            <span className="w-5 h-5 rounded-md bg-white border border-slate-200 group-hover:border-blue-400 group-hover:bg-blue-600 group-hover:text-white flex items-center justify-center text-slate-400 transition-colors shadow-2xs">
-              <Plus className="w-3.5 h-3.5" />
-            </span>
-            <span className="text-slate-600 group-hover:text-blue-700 font-semibold">
-              {slotType === 'expedition'
-                ? '+ Expédition'
-                : slotType === 'modeleEnCours'
-                ? '+ Remplir case'
-                : `+ Lanc. #${(lancementIndex || 0) + 1}`}
-            </span>
-          </span>
-        </button>
-      );
-    }
-
-    // CLIC DIRECT SUR LA CARTE -> OUVRE LA FICHE IDENTITAIRE (CardModal) ET NON LE PICKER !
-    const handleSlotClick = () => {
-      const targetCard =
-        linkedCard ||
-        (slotCard?.cardId ? getCardById(slotCard.cardId) : undefined) ||
-        (slotCard?.customLabel
-          ? cards.find(
-              (c) =>
-                c.modele.toLowerCase().trim() ===
-                  slotCard.customLabel!.toLowerCase().trim() ||
-                c.nom.toLowerCase().trim() ===
-                  slotCard.customLabel!.toLowerCase().trim()
-            )
-          : undefined);
-
-      if (targetCard && onOpenCardModal) {
-        onOpenCardModal(targetCard);
-        return;
-      }
-
-      if (onOpenCardModal && (slotCard?.customLabel || slotCard?.cardId)) {
-        const fallbackCard: CardItem = {
-          id: slotCard?.cardId || `CRD-${Date.now()}`,
-          client: row.nom || 'Atelier',
-          nom: slotCard?.customLabel || 'Carte de Commande',
-          reference: `OF-${row.nom.toUpperCase().slice(0, 3)}-2026`,
-          modele: slotCard?.customLabel || 'Modèle de Commande',
-          dt: true,
-          tc: slotType === 'modeleEnCours',
-          sms: slotType === 'modeleEnCours',
-          rdl: slotType === 'modeleEnCours',
-          okProd: slotType === 'modeleEnCours',
-          quantiteDemandee: 100,
-          quantiteFinie: 0,
-          resteAProduire: 100,
-          statut: slotType === 'modeleEnCours' ? 'EN_COURS' : 'EN_ATTENTE',
-          dateCreation: new Date().toLocaleDateString('fr-FR'),
-          pointFaitAujourdhui: false,
-          decisionReunion: '',
-          notes: '',
-          ofs: [],
-        };
-        onOpenCardModal(fallbackCard);
-      }
+  /** Depuis le sélecteur : crée une carte qui occupera la case en attente. */
+  const handlePickerCreateNew = useCallback(() => {
+    if (!activePicker || !onOpenCreateCard) return;
+    const { rowId, slotType, lancementIndex, slotIndex } = activePicker;
+    const isModeleEnCours = slotType === 'modeleEnCours';
+    const prefill: Partial<CardFormData> = {
+      ...(isModeleEnCours ? { okProd: true, statut: 'EN_COURS' } : { okProd: false, statut: 'EN_ATTENTE' }),
     };
-
-    return (
-      <div className="group relative w-full h-full min-h-[52px] flex flex-col justify-center px-2 py-1.5 rounded-xl bg-slate-50/90 hover:bg-blue-50/70 border border-slate-200 hover:border-blue-300 transition-all text-left">
-        <div
-          onClick={handleSlotClick}
-          className="cursor-pointer"
-          title={
-            linkedCard
-              ? `Cliquer pour ouvrir la fiche identitaire complète : ${linkedCard.modele} (${linkedCard.reference})`
-              : 'Cliquer pour ouvrir la fiche identitaire'
-          }
-        >
-          <div className="flex items-center gap-1.5">
-            {linkedCard && (
-              <span
-                className={`w-2 h-2 rounded-full shrink-0 ${
-                  linkedCard.statut === 'TERMINE'
-                    ? 'bg-emerald-500'
-                    : linkedCard.statut === 'EN_COURS'
-                    ? 'bg-blue-500'
-                    : linkedCard.statut === 'BLOQUE'
-                    ? 'bg-rose-500'
-                    : 'bg-amber-500'
-                }`}
-              />
-            )}
-            <span className="font-bold text-[11px] sm:text-xs text-slate-900 leading-snug line-clamp-1">
-              {label}
-            </span>
-          </div>
-
-          {subLabel && (
-            <div className="text-[10px] text-slate-500 font-mono truncate mt-0.5">
-              {subLabel}
-            </div>
-          )}
-
-          {/* Expedition Specific Tags */}
-          {slotType === 'expedition' && slotCard?.dateExpedition && (
-            <div className="flex items-center gap-1 text-[10px] font-semibold text-emerald-800 bg-emerald-100/70 px-1.5 py-0.2 rounded mt-0.5 w-fit">
-              <span>🚚 {slotCard.dateExpedition}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Action icons on hover */}
-        <div className="absolute right-1 top-1 hidden group-hover:flex items-center gap-0.5 bg-white/95 rounded-md shadow-xs border border-slate-200/80 p-0.5 z-10">
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleSlotClick();
-            }}
-            title="Ouvrir la fiche identitaire de la carte"
-            className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors cursor-pointer"
-          >
-            <ExternalLink className="w-3 h-3" />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              setSelectedSlotAction({
-                rowId: row.id,
-                slotType,
-                lancementIndex,
-                slotTitle:
-                  slotType === 'modeleEnCours'
-                    ? `Modèle en cours (${row.nom})`
-                    : slotType === 'expedition'
-                    ? `Expédition (${row.nom})`
-                    : `Prochain Lancement #${(lancementIndex || 0) + 1} (${row.nom})`,
-              });
-            }}
-            title="Changer : + Nouvelle Carte ou Réassigner une carte existante"
-            className="p-1 text-slate-400 hover:text-blue-600 rounded transition-colors cursor-pointer"
-          >
-            <ArrowLeftRight className="w-3 h-3" />
-          </button>
-          <button
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              handleAssignSlotCard(row.id, slotType, null, lancementIndex);
-            }}
-            title="Retirer cette carte"
-            className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
-          >
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      </div>
-    );
-  };
+    setActivePicker(null);
+    onOpenCreateCard(prefill, (createdCard) => {
+      handleAssignSlotCard(
+        rowId,
+        slotType,
+        { cardId: createdCard.id, customLabel: createdCard.modele },
+        lancementIndex,
+        slotIndex
+      );
+    });
+  }, [activePicker, onOpenCreateCard, handleAssignSlotCard]);
 
   // Currently selected slot for CardPickerModal
-  const currentSlotForPicker = activePicker
-    ? activePicker.slotType === 'modeleEnCours'
-      ? rows.find((r) => r.id === activePicker.rowId)?.modeleEnCoursCard
-      : activePicker.slotType === 'expedition'
-      ? rows.find((r) => r.id === activePicker.rowId)?.expeditionCard
-      : rows.find((r) => r.id === activePicker.rowId)?.prochainsLancementsCards[
-          activePicker.lancementIndex || 0
-        ]
-    : null;
+  const currentSlotForPicker = (() => {
+    if (!activePicker) return null;
+    const row = rows.find((r) => r.id === activePicker.rowId);
+    if (!row) return null;
+    const slotIndex = activePicker.slotIndex ?? 0;
+    if (activePicker.slotType === 'modeleEnCours') {
+      return row.modeleEnCoursCards[slotIndex] ?? null;
+    }
+    if (activePicker.slotType === 'expedition') {
+      return row.expeditionCards[slotIndex] ?? null;
+    }
+    return row.prochainsLancementsCards[activePicker.lancementIndex ?? 0]?.[slotIndex] ?? null;
+  })();
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
       {/* Top Banner / Actions Bar */}
-      <div className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-xs">
-        <div className="max-w-[1850px] mx-auto px-4 sm:px-6 lg:px-8 py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-3">
-          {/* Back button & Page title */}
+      <div className="bg-white border-b border-slate-200 relative z-20 shadow-xs">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
+          {/* Gauche : titre + date & heure, comme le Point Commande Journalière */}
           <div className="flex items-center gap-3">
-            <button
-              onClick={onBackToPointJournalier}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:text-blue-700 bg-slate-100 hover:bg-blue-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-              title="Retourner au Point Commande Journalière"
-            >
-              <ArrowLeft className="w-4 h-4" />
-              <span>Point Commande Journalière</span>
-            </button>
-
-            <div className="h-5 w-px bg-slate-200 hidden sm:block" />
-
+            <div className="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
+              <TableProperties className="w-5 h-5" />
+            </div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">
-                  Suivi Global des Chaînes & Prochains Lancements
-                </h1>
-                <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                  Vue Atelier Connectée aux Cartes
+              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                Tableau AIC
+              </h1>
+              <div className="flex flex-wrap items-center gap-2.5 text-xs sm:text-sm text-slate-500 mt-0.5">
+                <span className="flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                  {fullFrenchDate}
+                </span>
+                <span className="text-slate-300">•</span>
+                <span className="flex items-center gap-1 font-semibold text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/60">
+                  <Clock className="w-3.5 h-3.5 text-blue-600" />
+                  {parisTime}
+                  <span className="text-[10px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
                 </span>
               </div>
-              <p className="text-xs text-slate-500">
-                Les cases de « Modèle en cours », « Prochains Lancements » et « Expédition » reçoivent directement les cartes de commande.
-              </p>
             </div>
           </div>
 
-          {/* Controls & Quick Actions */}
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Search */}
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-              <input
-                type="text"
-                placeholder="Filtrer chaîne, modèle..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg w-44 sm:w-56 focus:outline-hidden focus:ring-1 focus:ring-blue-500 focus:bg-white"
-              />
-            </div>
+          {/* Centre : sélecteur de vue (Point Commande / Suivi Global) */}
+          <div className="flex md:justify-center">
+            <ViewSwitcher
+              currentPage="suivi-global"
+              onChangePage={onChangePage}
+            />
+          </div>
 
-            {/* Quick edit mode toggle for Objectif / Réalisation / Remarque */}
+          {/* Droite : création d'une nouvelle chaîne */}
+          <div className="flex items-center justify-end">
             <button
-              onClick={() => {
-                setIsEditMode(!isEditMode);
-                if (isEditMode) {
-                  setSavedFeedback(true);
-                  setTimeout(() => setSavedFeedback(false), 2000);
-                }
-              }}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all cursor-pointer ${
-                isEditMode
-                  ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
-                  : 'bg-white text-slate-700 hover:bg-slate-50 border-slate-300'
-              }`}
-              title="Modifier directement les objectifs, réalisations et remarques"
+              onClick={() => setNouvelleChaineOuverte(true)}
+              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded-lg shadow-sm hover:shadow transition-all cursor-pointer"
             >
-              {isEditMode ? (
-                <>
-                  <Check className="w-3.5 h-3.5 stroke-[2.5]" />
-                  <span>Enregistrer Objectifs/Réalisations</span>
-                </>
-              ) : (
-                <>
-                  <Edit3 className="w-3.5 h-3.5" />
-                  <span>Édition Objectifs & Remarques</span>
-                </>
-              )}
-            </button>
-
-            {savedFeedback && (
-              <span className="text-xs font-semibold text-emerald-600 flex items-center gap-1 animate-in fade-in">
-                <Check className="w-3.5 h-3.5" />
-                Enregistré
-              </span>
-            )}
-
-            {/* Synchroniser OK Prod */}
-            <button
-              onClick={handleSyncOkProd}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 rounded-lg transition-colors cursor-pointer shadow-2xs"
-              title="Synchroniser le tableau : seules les cartes avec OK Prod validé restent en Modèle en cours, les autres sont automatiquement en Prochains Lancements"
-            >
-              <Zap className="w-3.5 h-3.5 text-amber-500 fill-amber-500" />
-              <span>Synchroniser OK Prod</span>
-            </button>
-
-            {/* Export CSV */}
-            <button
-              onClick={handleExportCSV}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 hover:text-slate-900 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-              title="Exporter le tableau en format CSV / Excel"
-            >
-              <Download className="w-3.5 h-3.5 text-slate-500" />
-              <span className="hidden sm:inline">Exporter</span>
-            </button>
-
-            {/* Reset */}
-            <button
-              onClick={handleResetToDefault}
-              className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-              title="Réinitialiser avec les valeurs par défaut"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>Nouvelle Chaîne</span>
             </button>
           </div>
         </div>
@@ -847,90 +990,63 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
       {/* Main Board Container */}
       <div className="max-w-[1850px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        {/* Help / Guidance pill */}
-        <div className="mb-4 bg-white border border-slate-200/80 rounded-xl px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 text-xs text-slate-600 shadow-2xs">
-          <div className="flex items-center gap-2">
-            <Info className="w-4 h-4 text-blue-600 shrink-0" />
-            <span>
-              <strong>Règle OK Prod :</strong> Seules les cartes avec accord <em>OK Prod validé</em> sont acceptées dans <em>Modèle en cours</em>. Toutes les cartes en attente d'accord OK Prod sont automatiquement placées dans <em>PROCHAINS LANCEMENTS</em>.
-            </span>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => handleAddChaine('BRODERIE_MAIN')}
-              className="text-xs font-semibold text-[#881337] bg-[#fbe7e2] hover:bg-[#f6c2b7] px-2.5 py-1 rounded-md transition-colors cursor-pointer flex items-center gap-1"
-            >
-              <Plus className="w-3 h-3" />
-              + Chaîne Broderie
-            </button>
-            <button
-              onClick={() => handleAddChaine('CONFECTION')}
-              className="text-xs font-semibold text-[#0369a1] bg-[#e0f2fe] hover:bg-[#bae6fd] px-2.5 py-1 rounded-md transition-colors cursor-pointer flex items-center gap-1"
-            >
-              <Plus className="w-3 h-3" />
-              + Chaîne Confection
-            </button>
-          </div>
-        </div>
-
         {/* The Exact Table matching the PNG + Expedition column */}
-        <div className="bg-[#eef2f6]/90 p-3 sm:p-4 rounded-2xl border border-slate-200/90 shadow-xs overflow-x-auto">
-          <table className="w-full border-separate border-spacing-x-2 border-spacing-y-2 min-w-[1450px]">
+        <div
+          ref={tableScrollRef}
+          className="bg-[#eef2f6]/90 p-3 sm:p-4 rounded-2xl border border-slate-200/90 shadow-xs overflow-x-auto overscroll-x-contain"
+        >
+          <table
+            ref={lierTableGlisser}
+            className="w-full border-separate border-spacing-x-2 border-spacing-y-2 min-w-[2900px]"
+          >
             {/* Header Row */}
             <thead>
               <tr>
-                {/* Divers */}
-                <th className="w-16 min-w-[64px] max-w-[72px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
-                    Divers
+                {/* Type */}
+                <th className="w-14 min-w-[56px] max-w-[56px]">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 ">
+                    Type
                   </div>
                 </th>
 
                 {/* Chaîne */}
                 <th className="w-36 min-w-[130px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 shadow-2xs">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 ">
                     Chaîne
                   </div>
                 </th>
 
                 {/* Modèle en cours (Carte) */}
-                <th className="w-60 min-w-[200px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 shadow-2xs">
+                <th className="w-[330px] min-w-[290px]">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 ">
                     Modèle en cours
                   </div>
                 </th>
 
-                {/* Objectif/Jour */}
-                <th className="w-32 min-w-[110px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
-                    Objectif/Jour
+                {/* Inspection (OF / I du jour, un bloc par modèle en cours) */}
+                <th className="w-[360px] min-w-[340px]">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 ">
+                    Inspection
                   </div>
                 </th>
 
-                {/* Réalisation/Jour */}
-                <th className="w-32 min-w-[110px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-2 text-center text-xs font-bold text-slate-700 shadow-2xs">
-                    Réalisation/Jour
-                  </div>
-                </th>
-
-                {/* Remarque */}
+                {/* Alertes */}
                 <th className="w-60 min-w-[190px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 shadow-2xs">
-                    Remarque
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-bold text-slate-700 ">
+                    Alertes
                   </div>
                 </th>
 
                 {/* PROCHAINS LANCEMENTS (Spans 5 columns) */}
-                <th colSpan={5}>
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-4 text-center text-xs sm:text-sm font-extrabold text-[#1e40af] tracking-wider uppercase shadow-2xs">
+                <th colSpan={NOMBRE_LANCEMENTS}>
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-4 text-center text-xs sm:text-sm font-extrabold text-[#1e40af] tracking-wider uppercase ">
                     PROCHAINS LANCEMENTS
                   </div>
                 </th>
 
                 {/* EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
-                <th className="w-52 min-w-[170px]">
-                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-extrabold text-emerald-800 tracking-wider uppercase shadow-2xs flex items-center justify-center gap-1.5">
+                <th className="w-60 min-w-[210px]">
+                  <div className="bg-white border border-slate-200/90 rounded-xl py-2.5 px-3 text-center text-xs font-extrabold text-emerald-800 tracking-wider uppercase  flex items-center justify-center gap-1.5">
                     <Truck className="w-3.5 h-3.5 text-emerald-600" />
                     <span>Expédition</span>
                   </div>
@@ -938,181 +1054,54 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
               </tr>
             </thead>
 
-            {/* Table Body with Categorized Rows */}
+{/* Table Body with Categorized Rows */}
             <tbody>
               {categoriesList.map((catKey) => {
-                const catConfig = CATEGORIES_CONFIG[catKey];
-                const catRows = filteredRows.filter((r) => r.categorieId === catKey);
+                  const catConfig = CATEGORIES_CONFIG[catKey];
+                  const catRows = filteredRows.filter((r) => r.categorieId === catKey);
 
-                if (catRows.length === 0) return null;
+                  if (catRows.length === 0) return null;
 
-                return catRows.map((row, index) => {
-                  const isFirstRowOfCategory = index === 0;
+                  const catBanner = catBanners[catKey];
 
-                  return (
-                    <tr key={row.id}>
-                      {/* Column 1: Divers (Vertical category banner spanning all rows of this category) */}
-                      {isFirstRowOfCategory && (
-                        <td
-                          rowSpan={catRows.length}
-                          className="align-middle p-0"
-                        >
-                          <div
-                            className={`h-full w-full min-h-[160px] rounded-xl sm:rounded-2xl border flex flex-col items-center justify-center p-2 shadow-2xs ${catConfig.bgClass} ${catConfig.borderClass}`}
-                          >
-                            <div
-                              className={`flex flex-col items-center justify-center font-extrabold text-[11px] sm:text-xs tracking-widest uppercase select-none ${catConfig.textClass}`}
-                            >
-                              {catConfig.titreVerticalLignes.map((line, lIdx) => (
-                                <React.Fragment key={lIdx}>
-                                  {lIdx > 0 && <span className="h-3 my-0.5"></span>}
-                                  {line.map((char, cIdx) => (
-                                    <span key={cIdx} className="leading-tight py-[1px]">
-                                      {char}
-                                    </span>
-                                  ))}
-                                </React.Fragment>
-                              ))}
-                            </div>
-                          </div>
-                        </td>
-                      )}
-
-                      {/* Column 2: Chaîne (Dot + Name) */}
-                      <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 hover:border-slate-300 focus-within:border-blue-400 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl sm:rounded-2xl px-3 py-2 shadow-2xs h-full min-h-[58px] flex items-center gap-2.5 transition-all">
-                          <span
-                            className="w-3.5 h-3.5 rounded-full shrink-0 shadow-2xs"
-                            style={{ backgroundColor: row.dotColor }}
-                          />
-                          <input
-                            type="text"
-                            value={row.nom}
-                            onChange={(e) =>
-                              handleCellChange(row.id, 'nom', e.target.value)
-                            }
-                            className="w-full font-bold text-xs sm:text-sm text-slate-800 bg-transparent hover:bg-slate-50/80 focus:bg-white rounded px-1.5 py-1 focus:outline-hidden transition-colors cursor-text"
-                            title="Cliquer pour modifier le nom de la chaîne"
-                          />
-                        </div>
-                      </td>
-
-                      {/* Column 3: Modèle en cours (Carte du Point Commande Journalière) */}
-                      <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[58px] flex items-center">
-                          {renderCardSlotContent(
-                            row.modeleEnCoursCard,
-                            row,
-                            'modeleEnCours'
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Column 4: Objectif/Jour (Zone de texte multiligne) */}
-                      <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 hover:border-blue-300 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[64px] flex items-center justify-center transition-all">
-                          <textarea
-                            rows={2}
-                            value={row.objectifJour}
-                            placeholder="—"
-                            onChange={(e) =>
-                              handleCellChange(
-                                row.id,
-                                'objectifJour',
-                                e.target.value
-                              )
-                            }
-                            className="w-full h-full min-h-[52px] text-center text-xs sm:text-sm font-bold text-slate-900 font-mono bg-transparent hover:bg-slate-50/80 focus:bg-white rounded-lg p-1.5 focus:outline-hidden transition-colors cursor-text resize-none leading-snug"
-                            title="Zone de texte pour l'objectif (possibilité de sauts de ligne avec Entrée)"
-                          />
-                        </div>
-                      </td>
-
-                      {/* Column 5: Réalisation/Jour (Zone de texte multiligne) */}
-                      <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 hover:border-blue-300 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[64px] flex items-center justify-center transition-all">
-                          <textarea
-                            rows={2}
-                            value={row.realisationJour}
-                            placeholder="—"
-                            onChange={(e) =>
-                              handleCellChange(
-                                row.id,
-                                'realisationJour',
-                                e.target.value
-                              )
-                            }
-                            className={`w-full h-full min-h-[52px] text-center text-xs sm:text-sm font-bold font-mono bg-transparent hover:bg-slate-50/80 focus:bg-white rounded-lg p-1.5 focus:outline-hidden transition-colors cursor-text resize-none leading-snug ${
-                              !isNaN(Number(row.realisationJour)) &&
-                              !isNaN(Number(row.objectifJour)) &&
-                              Number(row.realisationJour) >=
-                                Number(row.objectifJour) &&
-                              Number(row.realisationJour) > 0
-                                ? 'text-emerald-700'
-                                : 'text-slate-900'
-                            }`}
-                            title="Zone de texte pour la réalisation (possibilité de sauts de ligne avec Entrée)"
-                          />
-                        </div>
-                      </td>
-
-                      {/* Column 6: Remarque (Zone de texte multiligne) */}
-                      <td className="p-0">
-                        <div className="bg-white border border-slate-200/90 hover:border-blue-300 focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[64px] flex items-center transition-all">
-                          <textarea
-                            rows={2}
-                            value={row.remarque}
-                            placeholder="Remarque, consigne..."
-                            onChange={(e) =>
-                              handleCellChange(
-                                row.id,
-                                'remarque',
-                                e.target.value
-                              )
-                            }
-                            className="w-full h-full min-h-[52px] text-xs text-slate-700 bg-transparent hover:bg-slate-50/80 focus:bg-white rounded-lg p-1.5 focus:outline-hidden transition-colors cursor-text resize-none leading-relaxed"
-                            title="Zone de texte pour les remarques et consignes"
-                          />
-                        </div>
-                      </td>
-
-                      {/* Columns 7 to 11: 5 Slots under PROCHAINS LANCEMENTS (Cartes) */}
-                      {[0, 1, 2, 3, 4].map((slotIdx) => {
-                        const slotCard = row.prochainsLancementsCards[slotIdx];
-                        return (
-                          <td key={slotIdx} className="p-0 min-w-[125px]">
-                            <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[58px] flex flex-col justify-center items-center">
-                              {renderCardSlotContent(
-                                slotCard,
-                                row,
-                                'lancement',
-                                slotIdx
-                              )}
-                            </div>
-                          </td>
-                        );
-                      })}
-
-                      {/* Column 12: EXPÉDITION (Nouvelle colonne après Prochains Lancements) */}
-                      <td className="p-0 min-w-[145px]">
-                        <div className="bg-white border border-slate-200/90 rounded-xl sm:rounded-2xl p-1 shadow-2xs h-full min-h-[58px] flex flex-col justify-center items-center">
-                          {renderCardSlotContent(
-                            row.expeditionCard,
-                            row,
-                            'expedition'
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                });
-              })}
+                  return catRows.map((row, index) => (
+                    <LigneTableSuivi
+                      key={row.id}
+                      row={row}
+                      isFirstRowOfCategory={index === 0}
+                      rowSpan={catRows.length}
+                      catConfig={catConfig}
+                      catBanner={catBanner}
+                      bannerRef={getBannerRef(catKey)}
+                      cardsParId={cardsParId}
+                      jalonInfosParCarte={jalonInfosParCarte}
+                      cartesAlerteRetard={cartesAlerteRetard}
+                      alertesManuelles={alertesManuelles}
+                      onCarteClick={onCarteClick}
+                      onOuvrirActionSlot={onOuvrirPicker}
+                      onOuvrirPicker={onOuvrirPicker}
+                      onOuvrirExpedition={(rowId, slotIndex) =>
+                        setExpeditionOuverte({ rowId, slotIndex })
+                      }
+                      onEnvoyerExpedition={handleEnvoyerExpedition}
+                      onAssignerSlot={handleAssignSlotCard}
+                      onMajBloc={majBlocInspection}
+                      onAjouterValeur={ajouterValeur}
+                      onMajValeur={majValeur}
+                      onRenommerChaine={renommerChaine}
+                      onSupprimerChaine={supprimerChaine}
+                      setAlerteOuverte={setAlerteOuverte}
+                      setOfOuvert={setOfOuvert}
+                      setMenuEtat={setMenuEtat}
+                    />
+                  ));
+                })}
             </tbody>
           </table>
         </div>
 
         {/* Footer Summary / Quick stats */}
-        <div className="mt-4 bg-white border border-slate-200 rounded-xl p-3.5 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-3 shadow-2xs">
+        <div className="mt-4 bg-white border border-slate-200 rounded-xl p-3.5 flex flex-col sm:flex-row items-center justify-between text-xs text-slate-500 gap-3 ">
           <div className="flex flex-wrap items-center gap-3">
             <span>
               Total chaînes : <strong>{rows.length}</strong>
@@ -1139,31 +1128,20 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           <div className="flex items-center gap-2 text-slate-600">
             <Sparkles className="w-3.5 h-3.5 text-blue-600" />
             <span>
-              Cliquez sur une case pour lier instantanément une carte de commande.
+              Cliquez sur une case pour lier une carte de commande, ou glissez-déposez
+              une carte vers une autre case.
             </span>
           </div>
         </div>
       </div>
 
-      {/* Slot Action Modal: 2 choix pour remplir la case (+ Nouvelle Carte / Reassigner une carte) */}
-      {selectedSlotAction && (
-        <SlotActionModal
-          isOpen={Boolean(selectedSlotAction)}
-          onClose={() => setSelectedSlotAction(null)}
-          slotTitle={selectedSlotAction.slotTitle}
-          slotType={selectedSlotAction.slotType}
-          onChooseNewCard={() => {
-            const slot = selectedSlotAction;
-            setSelectedSlotAction(null);
-            handleCreateNewCardForSlot(slot);
-          }}
-          onChooseExistingCard={() => {
-            const slot = selectedSlotAction;
-            setSelectedSlotAction(null);
-            setActivePicker(slot);
-          }}
-        />
-      )}
+      {/* Nouvelle Chaîne : type + nom */}
+      <NouvelleChaineModal
+        isOpen={nouvelleChaineOuverte}
+        onClose={() => setNouvelleChaineOuverte(false)}
+        onCreate={creerChaine}
+        nomsExistants={rows.map((r) => r.nom)}
+      />
 
       {/* Card Picker Modal */}
       {activePicker && (
@@ -1173,18 +1151,128 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           cards={cards}
           currentSlot={currentSlotForPicker}
           slotTitle={activePicker.slotTitle}
-          slotType={activePicker.slotType}
-          isExpeditionSlot={activePicker.slotType === 'expedition'}
           onSelectCard={(slotCard) => {
             handleAssignSlotCard(
               activePicker.rowId,
               activePicker.slotType,
               slotCard,
-              activePicker.lancementIndex
+              activePicker.lancementIndex,
+              activePicker.slotIndex
             );
           }}
+          onCreateNewCard={onOpenCreateCard ? handlePickerCreateNew : undefined}
+        />
+      )}
+
+      {/* Fenêtre d'expédition OF par OF d'une case Expédition */}
+      {(() => {
+        if (!expeditionOuverte) return null;
+        const ligne = rows.find((r) => r.id === expeditionOuverte.rowId);
+        const slot = ligne?.expeditionCards[expeditionOuverte.slotIndex];
+        const carte = slot?.cardId ? cardsParId.get(slot.cardId) : undefined;
+        if (!slot || !carte) return null;
+        return (
+          <ExpeditionModal
+            isOpen={true}
+            onClose={() => setExpeditionOuverte(null)}
+            card={carte}
+            slotCard={slot}
+            onChange={(ofs) =>
+              majExpeditionOfs(expeditionOuverte.rowId, expeditionOuverte.slotIndex, ofs)
+            }
+          />
+        );
+      })()}
+
+      {/* Menu Pass/Fail d'un contrôle d'inspection */}
+      {menuEtat && (
+        <InspectionEtatMenu
+          anchor={menuEtat.anchor}
+          actuel={menuEtat.actuel}
+          onChoisir={(etat) => {
+            const ligne = rows.find((r) => r.id === menuEtat.rowId);
+            const bloc = ligne?.inspections[menuEtat.blocIndex];
+            const valeur = bloc?.valeurs.find((v) => v.id === menuEtat.valeurId);
+            majValeur(menuEtat.rowId, menuEtat.blocIndex, menuEtat.valeurId, (v) => ({
+              ...v,
+              resultat: etat,
+              dateResultat: etat ? dateDuJourISO() : undefined,
+            }));
+            // Journalisation : on garde trace de chaque modification d'état,
+            // même si le contrôle change ensuite de Pass à Fail (ou est remis
+            // à « non défini »). Rien à consigner si l'état est inchangé.
+            if (bloc && valeur && valeur.resultat !== etat) {
+              const ofIndex = valeur.ofIndex ?? 0;
+              const estCC = valeur.type === 'CC';
+              const rang = estCC
+                ? 0
+                : bloc.valeurs
+                    .filter((v) => v.type === 'I' && (v.ofIndex ?? 0) === ofIndex)
+                    .findIndex((v) => v.id === valeur.id) + 1;
+              consignerEvenement(menuEtat.rowId, menuEtat.blocIndex, {
+                id: `evt-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+                date: dateDuJourISO(),
+                ofIndex,
+                rang,
+                pct: valeur.pct ?? 50,
+                estCC,
+                resultat: etat,
+              });
+            }
+            // Échec sur le dernier contrôle de l'OF : on enchaîne automatiquement
+            // le contrôle suivant (I 50 %) de ce même OF, date du jour.
+            if (etat === 'F') {
+              const defaillant = bloc?.valeurs.find(
+                (v) => v.id === menuEtat.valeurId
+              );
+              if (bloc && defaillant?.type === 'I') {
+                const groupe = bloc.valeurs.filter(
+                  (v) =>
+                    v.type === 'I' &&
+                    (v.ofIndex ?? 0) === (defaillant.ofIndex ?? 0)
+                );
+                const dernier = groupe[groupe.length - 1];
+                if (dernier?.id === menuEtat.valeurId) {
+                  ajouterValeur(
+                    menuEtat.rowId,
+                    menuEtat.blocIndex,
+                    'I',
+                    50,
+                    defaillant.ofIndex ?? 0
+                  );
+                }
+              }
+            }
+            setMenuEtat(null);
+          }}
+          onClose={() => setMenuEtat(null)}
+        />
+      )}
+
+      {/* Détail des alertes d'une ligne : jalons en retard + alertes saisies à la main */}
+      {/* Detail dun OF clique depuis la colonne Inspection */}
+      {ofOuvert && (
+        <OfPopover
+          card={ofOuvert.card}
+          numero={ofOuvert.numero}
+          slotTitle={ofOuvert.slotTitle}
+          anchor={ofOuvert.anchor}
+          onClose={() => setOfOuvert(null)}
+        />
+      )}
+
+      {alerteOuverte && (
+        <AlertePopover
+          card={cardsParId.get(alerteOuverte.card.id) ?? alerteOuverte.card}
+          slotTitle={alerteOuverte.slotTitle}
+          anchor={alerteOuverte.anchor}
+          onUpdateCard={onUpdateCard}
+          onClose={() => setAlerteOuverte(null)}
         />
       )}
     </div>
   );
 };
+
+export default SuiviGlobalView;
+

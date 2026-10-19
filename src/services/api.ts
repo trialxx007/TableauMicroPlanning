@@ -1,7 +1,7 @@
-import { CardFormData, CardItem, JalonCategorie, JalonCatalogue, normalizeOFType } from '../types/card.ts';
+import { CardFormData, CardItem, JalonCategorie, JalonCatalogue } from '../types/card.ts';
 import { CATALOGUE_INITIAL, cataloguePourType, categorieParCode } from '../data/mockJalons.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
-import { normaliserSemaine } from '../utils/jalons.ts';
+import { normaliserDateJalon, normaliserSemaine } from '../utils/jalons.ts';
 
 /**
  * Cache hors ligne. La v6 correspond au passage aux jalons dynamiques : un cache
@@ -9,18 +9,6 @@ import { normaliserSemaine } from '../utils/jalons.ts';
  * cartes s'afficheraient sans aucun jalon.
  */
 const STORAGE_KEY = 'point_commande_cards_cache_textile_v6';
-
-/**
- * Normalise les types d'OF arrivant du serveur ou d'un ancien cache :
- * les libellés historiques (INTERNE / SOUS_TRAITANCE) deviennent I / O,
- * toute valeur inconnue retombe sur I.
- */
-function normalizeCards(cards: CardItem[]): CardItem[] {
-  return (cards || []).map((c) => ({
-    ...c,
-    ofs: (c.ofs || []).map((o) => ({ ...o, type: normalizeOFType(o.type) })),
-  }));
-}
 
 function estCacheCompatible(raw: unknown): raw is CardItem[] {
   return (
@@ -39,7 +27,7 @@ function getLocalFallback(): CardItem[] {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed: unknown = JSON.parse(raw);
-      if (estCacheCompatible(parsed)) return normalizeCards(parsed);
+      if (estCacheCompatible(parsed)) return parsed;
       localStorage.removeItem(STORAGE_KEY);
     }
   } catch (e) {
@@ -63,9 +51,8 @@ export const cardApi = {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (json.success && Array.isArray(json.data)) {
-        const normalized = normalizeCards(json.data);
-        saveLocalFallback(normalized);
-        return normalized;
+        saveLocalFallback(json.data);
+        return json.data;
       }
     } catch {
       // Fallback
@@ -83,11 +70,10 @@ export const cardApi = {
       if (res.ok) {
         const json = await res.json();
         if (json.success && json.data) {
-          const created = normalizeCards([json.data])[0];
           const list = getLocalFallback();
-          list.unshift(created);
+          list.unshift(json.data);
           saveLocalFallback(list);
-          return created;
+          return json.data;
         }
       }
     } catch {
@@ -102,8 +88,7 @@ export const cardApi = {
     const newCard: CardItem = {
       id: `CRD-L${Date.now().toString(36).toUpperCase()}`,
       client: data.client,
-      nom: data.nom,
-      reference: data.reference,
+      batch: data.batch,
       modele: data.modele,
       ...(data.typeCarte ? { typeCarte: data.typeCarte } : {}),
       jalons: Array.isArray(data.jalons)
@@ -113,13 +98,15 @@ export const cardApi = {
             ...(normaliserSemaine(j.semaine) != null
               ? { semaine: normaliserSemaine(j.semaine) as number }
               : {}),
+            ...(normaliserDateJalon(j.date) != null ? { date: normaliserDateJalon(j.date) as string } : {}),
+            ...(j.tbc ? { tbc: true } : {}),
           }))
         : cataloguePourType(data.typeCarte ?? 'R').map((j) => ({
             code: j.code,
             valide: false,
           })),
       okProd: Boolean(data.okProd),
-      ofs: (data.ofs || []).map((o) => ({ ...o, type: normalizeOFType(o.type) })),
+      ofs: data.ofs || [],
       quantiteDemandee,
       quantiteFinie,
       resteAProduire: Math.max(0, quantiteDemandee - quantiteFinie),
@@ -130,9 +117,6 @@ export const cardApi = {
       pointFaitAujourdhui: true,
       decisionReunion: data.decisionReunion,
       notes: data.notes,
-      ...(data.chaineId ? { chaineId: data.chaineId } : {}),
-      ...(data.chaineNom ? { chaineNom: data.chaineNom } : {}),
-      ...(data.chaineCategorie ? { chaineCategorie: data.chaineCategorie } : {}),
     };
 
     const current = getLocalFallback();
@@ -151,10 +135,9 @@ export const cardApi = {
       const json = await res.json().catch(() => null);
       if (res.ok) {
         if (json?.success && json.data) {
-          const patched = normalizeCards([json.data])[0];
-          const list = getLocalFallback().map((c) => (c.id === id ? patched : c));
+          const list = getLocalFallback().map((c) => (c.id === id ? json.data : c));
           saveLocalFallback(list);
-          return patched;
+          return json.data;
         }
       } else {
         // Réponse explicite du serveur (404, 400…) : c'est une erreur métier,
@@ -218,10 +201,9 @@ export const cardApi = {
       const json = await res.json().catch(() => null);
       if (res.ok) {
         if (json?.success && json.data) {
-          const replaced = normalizeCards([json.data])[0];
-          const list = getLocalFallback().map((c) => (c.id === id ? replaced : c));
+          const list = getLocalFallback().map((c) => (c.id === id ? json.data : c));
           saveLocalFallback(list);
-          return replaced;
+          return json.data;
         }
       } else {
         throw new Error(json?.error || `Erreur ${res.status}`);
@@ -276,9 +258,8 @@ export const cardApi = {
       if (res.ok) {
         const json = await res.json();
         if (json.success && Array.isArray(json.data)) {
-          const normalized = normalizeCards(json.data);
-          saveLocalFallback(normalized);
-          return normalized;
+          saveLocalFallback(json.data);
+          return json.data;
         }
       }
     } catch {
@@ -361,5 +342,59 @@ export const jalonApi = {
     if (!res.ok || !json.success) {
       throw new Error(json?.error || `Erreur ${res.status}`);
     }
+  },
+};
+
+/* ------------------------------------------------------------------ suivi global layout */
+
+export interface SuiviGlobalLayoutRow {
+  id: string;
+  nom: string;
+  categorieId: string;
+  dotColor: string;
+  modeleEnCoursCards: (unknown | null)[];
+  inspections: unknown[];
+  prochainsLancementsCards: unknown[];
+  expeditionCards?: unknown[];
+  alertes?: unknown[];
+}
+
+export const suiviGlobalApi = {
+  async getLayout(): Promise<SuiviGlobalLayoutRow[]> {
+    try {
+      const res = await fetch('/api/v1/suivi-layout');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        return json.data;
+      }
+    } catch {
+      // Fallback localStorage si serveur indisponible
+    }
+    // Fallback localStorage (pour compatibilité / hors ligne)
+    try {
+      const raw = localStorage.getItem('suivi_global_rows_v3');
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return [];
+  },
+
+  async setLayout(rows: SuiviGlobalLayoutRow[]): Promise<void> {
+    try {
+      const res = await fetch('/api/v1/suivi-layout', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rows }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (!json.success) throw new Error(json.error);
+    } catch (e) {
+      console.warn('Erreur sauvegarde layout serveur, fallback localStorage', e);
+    }
+    // Fallback localStorage toujours écrit pour accès immédiat
+    try {
+      localStorage.setItem('suivi_global_rows_v3', JSON.stringify(rows));
+    } catch {}
   },
 };

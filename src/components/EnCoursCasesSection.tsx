@@ -1,12 +1,14 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { ChevronDown } from 'lucide-react';
 
 interface EnCoursGridProps {
-  nbCases?: number; // 3, 4, ou 5
+  nbCases?: number;
   casesEnCours?: number[];
   onChangeNbCases?: (newNb: number) => void;
   onChangeCaseValue: (index: number, val: number) => void;
   showSelector?: boolean;
+  total?: number;
+  labels?: string[];
 }
 
 export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
@@ -15,15 +17,59 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
   onChangeNbCases,
   onChangeCaseValue,
   showSelector = true,
+  total,
+  labels,
 }) => {
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
 
-  const currentNb = Math.min(5, Math.max(3, nbCases || 5));
+  const currentNb = Math.min(5, Math.max(4, nbCases || 5));
   const values = Array.from({ length: currentNb }, (_, i) => casesEnCours[i] ?? 0);
   const totalAssigne = Number(values[values.length - 1]) || 0;
 
-  // Close picker when clicking outside
+  // Replace le menu en fonction de l'espace disponible : il s'ouvre vers le
+  // haut quand il n'y a plus de place en bas, et reste toujours dans l'écran.
+  const placerMenu = useCallback(() => {
+    const bouton = buttonRef.current;
+    const menu = menuRef.current;
+    if (!bouton) return;
+    const r = bouton.getBoundingClientRect();
+    const largeur = menu?.offsetWidth ?? 130;
+    const hauteur = menu?.offsetHeight ?? 0;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const marge = 8;
+
+    let left = r.left;
+    if (left + largeur > vw - marge) left = Math.max(marge, vw - marge - largeur);
+
+    let top = r.bottom + 4;
+    if (hauteur && top + hauteur > vh - marge) {
+      const auDessus = r.top - 4 - hauteur;
+      top = auDessus >= marge ? auDessus : Math.max(marge, vh - marge - hauteur);
+    }
+
+    setMenuPos((p) => (p && p.top === top && p.left === left ? p : { top, left }));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (isPickerOpen) placerMenu();
+  }, [isPickerOpen, placerMenu]);
+
+  useEffect(() => {
+    if (!isPickerOpen) return;
+    const repositionner = () => placerMenu();
+    window.addEventListener('scroll', repositionner, true);
+    window.addEventListener('resize', repositionner);
+    return () => {
+      window.removeEventListener('scroll', repositionner, true);
+      window.removeEventListener('resize', repositionner);
+    };
+  }, [isPickerOpen, placerMenu]);
+
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
@@ -40,7 +86,6 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
 
   return (
     <div className="inline-flex items-center gap-1.5 flex-wrap">
-      {/* Grille de cases contiguës noires (identique au fichier PNG) */}
       <div className="inline-flex border border-slate-900 divide-x divide-slate-900 bg-white shadow-2xs">
         {values.map((val, idx) => {
           const isTotalCase = idx === values.length - 1;
@@ -68,10 +113,10 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
         })}
       </div>
 
-      {/* Clic sur le nombre de cases pour choisir combien on en veut (3 à 5) */}
       {showSelector && onChangeNbCases && (
-        <div className="relative" ref={pickerRef}>
+        <div className="inline-flex" ref={pickerRef}>
           <button
+            ref={buttonRef}
             type="button"
             onClick={() => setIsPickerOpen(!isPickerOpen)}
             className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-white hover:bg-slate-100 text-slate-800 text-[10px] font-bold rounded border border-slate-400 shadow-2xs cursor-pointer transition-colors"
@@ -82,11 +127,19 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
           </button>
 
           {isPickerOpen && (
-            <div className="absolute left-0 mt-1 z-30 bg-white border border-slate-300 rounded-lg shadow-lg p-1 min-w-[110px] animate-in fade-in zoom-in-95">
+            <div
+              ref={menuRef}
+              style={
+                menuPos
+                  ? { top: menuPos.top, left: menuPos.left }
+                  : { top: -9999, left: -9999 }
+              }
+              className="fixed z-50 bg-white border border-slate-300 rounded-lg shadow-lg p-1 min-w-[130px] max-h-[45vh] overflow-y-auto animate-in fade-in"
+            >
               <div className="px-2 py-1 text-[10px] font-bold uppercase tracking-wider text-slate-400 border-b border-slate-100">
                 Cases à afficher
               </div>
-              {[3, 4, 5].map((n) => (
+              {[4, 5].map((n) => (
                 <button
                   key={n}
                   type="button"
@@ -109,12 +162,11 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
         </div>
       )}
 
-      {/* Total = valeur de la dernière case (total assigné à l'OF) */}
       <div
         className="text-[10px] font-mono text-slate-500 font-semibold whitespace-nowrap ml-0.5"
         title="La dernière case (à droite) contient le total des pièces assignées à l'OF"
       >
-        Total : <span className="text-slate-900 font-bold">{totalAssigne}</span>
+        Total : <span className="text-slate-900 font-bold">{total ?? totalAssigne}</span>
       </div>
     </div>
   );

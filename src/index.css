@@ -34,9 +34,64 @@
   animation: carte-in 0.2s ease-out;
 }
 
+/* Grande table du Suivi Global : les pulsations (bandes Alerte, jalons en
+   retard) continuent de repaint chaque frame ; on les met en pause pendant
+   que la table défile, le temps de garder un défilement horizontal fluide.
+   La classe est posée/retirée sur le conteneur par un écouteur de scroll. */
+.suivi-table-au-scroll .animate-pulse {
+  animation-play-state: paused !important;
+}
+
+/* Carte déposée dans une nouvelle case : petit « pop » CSS3 à l'atterrissage,
+   à la place de l'ancienne drop animation de @dnd-kit. Le remontage de la
+   carte (clé = id de carte) déclenche l'animation une seule fois par dépôt. */
+@keyframes carte-posee {
+  from {
+    opacity: 0.35;
+    transform: scale(1.06);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.animate-carte-posee {
+  animation: carte-posee 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Case survolée par une carte en cours de glisser : cible de dépôt. */
+.case-cible-depot {
+  outline: 2px solid rgba(59, 130, 246, 0.7);
+  outline-offset: -2px;
+  box-shadow: 0 0 0 1px rgba(59, 130, 246, 0.35);
+  border-radius: 12px;
+}
+
+/* Carte d'origine pendant un glisser : estompée, sa copie suit le curseur. */
+.carte-en-glissement {
+  opacity: 0.4;
+}
+
+/* Clone flottant qui suit le curseur (aucune interaction pointeur). */
+.carte-ghost {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  opacity: 0.92;
+  transform: rotate(1.5deg);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.28);
+  border-radius: 12px;
+}
+
+.carte-ghost * {
+  pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-popover-in,
-  .animate-carte-in {
+  .animate-carte-in,
+  .animate-carte-posee {
     animation: none;
   }
 }

@@ -1,5 +1,5 @@
-import { useState, useEffect, useMemo } from 'react';
-import { CardFormData, CardItem, CardStatus, JalonCatalogue } from './types/card.ts';
+import { useState, useEffect, useMemo, useRef } from 'react';
+import { CardFormData, CardItem, CardStatus, JalonCatalogue, normalizeOFType } from './types/card.ts';
 import { cardApi, jalonApi } from './services/api.ts';
 import { Header } from './components/Header.tsx';
 import { StatsOverview, KpiFilterType } from './components/StatsOverview.tsx';
@@ -7,16 +7,33 @@ import { FilterBar, SortField, SortOrder } from './components/FilterBar.tsx';
 import { CardTable } from './components/CardTable.tsx';
 import { CardModal } from './components/CardModal.tsx';
 import { SuiviGlobalView } from './components/SuiviGlobalView.tsx';
+import { TableauxOFsView } from './components/TableauxOFsView.tsx';
 import { AppPage } from './components/ViewSwitcher.tsx';
 import { JalonCatalogueProvider } from './context/JalonCatalogueContext.tsx';
+import {
+  InspectionsParCarteProvider,
+  InspectionsParCarte,
+} from './context/InspectionsParCarteContext.tsx';
 import { getEtatJalon, PREFIXE_JALON_MANQUANT } from './utils/jalons.ts';
 import { getNowParis } from './utils/dateFrance.ts';
-import { RefreshCw, Download, FileSpreadsheet, Check } from 'lucide-react';
+import { RefreshCw, FileSpreadsheet, Check, Plus } from 'lucide-react';
 
 export default function App() {
-  const [currentPage, setCurrentPage] = useState<AppPage>('point-journalier');
+  // Sur un rechargement, on revient à l'onglet où l'on était : la vue courante
+  // est mémorisée pour cette session (sessionStorage), pas imposée par défaut.
+  const [currentPage, setCurrentPage] = useState<AppPage>(() => {
+    const sauvegarde = sessionStorage.getItem('aic_vue_actuelle_v1');
+    return sauvegarde === 'suivi-global' ||
+      sauvegarde === 'point-journalier' ||
+      sauvegarde === 'tableaux-ofs'
+      ? sauvegarde
+      : 'point-journalier';
+  });
   const [cards, setCards] = useState<CardItem[]>([]);
   const [catalogue, setCatalogue] = useState<JalonCatalogue[]>([]);
+  // Inspection (colonne du Suivi Global) publiée par carte pour la fiche carte.
+  const [inspectionsParCarte, setInspectionsParCarte] =
+    useState<InspectionsParCarte>({});
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('ALL');
@@ -27,17 +44,23 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CardItem | null>(null);
+  // Création demandée depuis le Suivi Global : pré-remplissage de la modale et
+  // rappel vers la case vide qui l'a déclenchée une fois la carte créée.
+  const [createPrefill, setCreatePrefill] = useState<Partial<CardFormData> | null>(null);
+  const onCreateCardRef = useRef<((card: CardItem) => void) | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
   const [isMeetingFilterActive, setIsMeetingFilterActive] = useState(false);
 
-  const fetchCards = async () => {
+  const fetchCards = async (silent = false) => {
     try {
       // Le catalogue d'abord : les jalons affichés en dépendent.
       const [jalons, data] = await Promise.all([jalonApi.getAll(), cardApi.getAll()]);
-      setCatalogue(jalons);
-      setCards(data);
+      // On ne remplace l'état que si le contenu a réellement changé : le polling
+      // passe toutes les quelques secondes et ne doit pas relancer un rendu inutile.
+      setCatalogue((prev) => (JSON.stringify(prev) === JSON.stringify(jalons) ? prev : jalons));
+      setCards((prev) => (JSON.stringify(prev) === JSON.stringify(data) ? prev : data));
     } catch (e) {
-      console.error('Erreur chargement cartes', e);
+      if (!silent) console.error('Erreur chargement cartes', e);
     } finally {
       setLoading(false);
     }
@@ -46,6 +69,19 @@ export default function App() {
   useEffect(() => {
     fetchCards();
   }, []);
+
+  // Synchronisation entre postes : les cartes ajoutées ou modifiées sur un poste
+  // (y compris depuis le Suivi Global) doivent apparaître ici sans rechargement.
+  useEffect(() => {
+    const interval = setInterval(() => {
+      fetchCards(true);
+    }, 4000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    sessionStorage.setItem('aic_vue_actuelle_v1', currentPage);
+  }, [currentPage]);
 
   const showNotification = (msg: string) => {
     setNotification(msg);
@@ -76,11 +112,15 @@ export default function App() {
       // PATCH recalcule un statut ou un reste à produire côté serveur.
       const updated = await cardApi.replace(editingCard.id, formData);
       setCards((prev) => prev.map((c) => (c.id === editingCard.id ? updated : c)));
-      showNotification(`Carte ${updated.nom} mise à jour en réunion à ${timeStr}`);
+      showNotification(`Carte ${updated.modele} mise à jour en réunion à ${timeStr}`);
     } else {
       const created = await cardApi.create(formData);
       setCards((prev) => [created, ...prev]);
-      showNotification(`Nouvelle carte ${created.nom} ajoutée au point de production`);
+      showNotification(`Nouvelle carte ${created.modele} ajoutée au point de production`);
+      // Rappel du Suivi Global : la case vide qui a demandé la création reçoit
+      // la carte créée (affectation dans le tableau après enregistrement).
+      onCreateCardRef.current?.(created);
+      onCreateCardRef.current = null;
     }
   };
 
@@ -92,14 +132,14 @@ export default function App() {
 
       if (updates.statut !== undefined) {
         showNotification(
-          `Statut "${getStatusLabel(updates.statut)}" validé pour ${updated.nom} à ${timeStr}`
+          `Statut "${getStatusLabel(updates.statut)}" validé pour ${updated.modele} à ${timeStr}`
         );
       } else if (updates.quantiteFinie !== undefined) {
         showNotification(
-          `Point enregistré : ${updated.nom} (${updated.quantiteFinie}/${updated.quantiteDemandee}) à ${timeStr}`
+          `Point enregistré : ${updated.modele} (${updated.quantiteFinie}/${updated.quantiteDemandee}) à ${timeStr}`
         );
       } else if (updates.jalons !== undefined) {
-        showNotification(`Jalons mis à jour pour ${updated.nom}`);
+        showNotification(`Jalons mis à jour pour ${updated.modele}`);
       }
     } catch (e) {
       console.error('Erreur mise à jour', e);
@@ -109,18 +149,10 @@ export default function App() {
   const handleDeleteCard = async (id: string) => {
     const card = cards.find((c) => c.id === id);
     if (!card) return;
-    if (window.confirm(`Confirmez-vous la suppression de la carte "${card.nom}" (${card.reference}) ?`)) {
+    if (window.confirm(`Confirmez-vous la suppression de la carte "${card.modele}" (${card.batch}) ?`)) {
       await cardApi.delete(id);
       setCards((prev) => prev.filter((c) => c.id !== id));
-      showNotification(`Carte ${card.nom} supprimée`);
-    }
-  };
-
-  const handleResetData = async () => {
-    if (window.confirm('Voulez-vous réinitialiser les données avec les cartes d’exemple ?')) {
-      const defaults = await cardApi.resetDefaults();
-      setCards(defaults);
-      showNotification('Données réinitialisées (Atelier Textile Haut de Gamme)');
+      showNotification(`Carte ${card.modele} supprimée`);
     }
   };
 
@@ -130,6 +162,20 @@ export default function App() {
   };
 
   const handleOpenCreate = () => {
+    setCreatePrefill(null);
+    setEditingCard(null);
+    setIsModalOpen(true);
+  };
+
+  // Création d'une carte associative déclenchée depuis une case du Suivi Global :
+  // la modale s'ouvre en mode création avec le pré-remplissage voulu, et le
+  // rappel stocké recevra la carte créée pour occuper la case.
+  const handleOpenCreateCard = (
+    prefill: Partial<CardFormData> | null,
+    onCreated: (card: CardItem) => void
+  ) => {
+    setCreatePrefill(prefill);
+    onCreateCardRef.current = onCreated;
     setEditingCard(null);
     setIsModalOpen(true);
   };
@@ -175,10 +221,9 @@ export default function App() {
         if (searchQuery.trim() !== '') {
           const q = searchQuery.toLowerCase().trim();
           const matchClient = card.client.toLowerCase().includes(q);
-          const matchNom = card.nom.toLowerCase().includes(q);
-          const matchRef = card.reference.toLowerCase().includes(q);
+          const matchBatch = card.batch.toLowerCase().includes(q);
           const matchModele = card.modele.toLowerCase().includes(q);
-          if (!matchClient && !matchNom && !matchRef && !matchModele) {
+          if (!matchClient && !matchBatch && !matchModele) {
             return false;
           }
         }
@@ -198,7 +243,7 @@ export default function App() {
         if (flagFilter === 'OK_PROD_PENDING' && card.okProd) return false;
         if (
           flagFilter === 'HAS_SOUS_TRAITANCE' &&
-          (!card.ofs || !card.ofs.some((o) => o.type === 'SOUS_TRAITANCE'))
+          (!card.ofs || !card.ofs.some((o) => normalizeOFType(o.type) === 'O'))
         ) {
           return false;
         }
@@ -261,75 +306,6 @@ export default function App() {
     sortOrder,
   ]);
 
-  // Export CSV for daily point report (formatted for French Excel)
-  const handleExportCSV = () => {
-    const { dateStr, timeStr } = getNowParis();
-
-    // Une colonne par code réellement porté par les cartes exportées : l'export suit
-    // l'ajout de jalons sans intervention. OUI = validé, S40 = planifié, NON = en
-    // attente. Une carte qui ne porte pas le jalon laisse la cellule vide.
-    const enteteJalon = jalonsUtilises.map((j) => `${j.code} (${j.libelle})`);
-    const valeurJalon = (card: CardItem, code: string) => {
-      if (!(card.jalons ?? []).some((j) => j.code === code)) return '';
-      const etat = getEtatJalon(card, code);
-      if (etat.valide) return 'OUI';
-      const semaine = etat.semaine;
-      return semaine != null ? `S${semaine}` : 'NON';
-    };
-
-    const headers = [
-      'Client',
-      'Modèle',
-      'Nom',
-      'Référence (OF)',
-      ...enteteJalon,
-      'Quantité Demandée',
-      'Quantité Finie',
-      'Reste à Produire',
-      'Statut',
-      'Date Dernier Point',
-      'Heure Point',
-      'Décision Réunion Journalière',
-      'Notes Atelier',
-    ];
-
-    const echapper = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const rows = filteredCards.map((c) => [
-      echapper(c.client),
-      echapper(c.modele),
-      echapper(c.nom),
-      echapper(c.reference),
-      ...jalonsUtilises.map((j) => echapper(valeurJalon(c, j.code))),
-      c.quantiteDemandee,
-      c.quantiteFinie,
-      c.resteAProduire,
-      echapper(getStatusLabel(c.statut)),
-      echapper(c.dateDernierPoint),
-      echapper(c.heureDernierPoint),
-      echapper(c.decisionReunion),
-      echapper(c.notes),
-    ]);
-
-    const csvContent =
-      'data:text/csv;charset=utf-8,\uFEFF' +
-      [
-        headers.map((h) => echapper(h)).join(';'),
-        ...rows.map((e) => e.join(';')),
-      ].join('\n');
-
-    const encodedUri = encodeURI(csvContent);
-    const link = document.createElement('a');
-    link.setAttribute('href', encodedUri);
-    link.setAttribute(
-      'download',
-      `point_reunion_journaliere_${dateStr.replace(/\//g, '-')}_${timeStr.replace(':', 'h')}.csv`
-    );
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    showNotification('Export CSV de la réunion généré');
-  };
-
   /** Un jalon a été ajouté ou retiré sur une carte : le catalogue partagé (intitulés)
    *  et les cartes sont rechargés, pour que colonnes, filtres et pastilles suivent. */
   const handleJalonAjoute = async () => {
@@ -339,6 +315,9 @@ export default function App() {
   };
 
   return (
+    <InspectionsParCarteProvider
+      value={{ parCarte: inspectionsParCarte, setParCarte: setInspectionsParCarte }}
+    >
     <JalonCatalogueProvider catalogue={catalogue}>
       <div className="min-h-screen bg-slate-50 flex flex-col text-slate-800">
       {/* Toast Notification */}
@@ -354,18 +333,34 @@ export default function App() {
       {currentPage === 'point-journalier' && (
         <Header
           onOpenCreateModal={handleOpenCreate}
-          onResetData={handleResetData}
           currentPage={currentPage}
           onChangePage={setCurrentPage}
           cardsCount={cards.length}
-          isMeetingFilterActive={isMeetingFilterActive}
-          onToggleMeetingFilter={() => setIsMeetingFilterActive((prev) => !prev)}
-          pendingReviewCount={pendingReviewCount}
         />
       )}
 
       {/* Main Container */}
       {currentPage === 'point-journalier' ? (
+        cards.length === 0 ? (
+          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+            <div className="bg-white rounded-xl border border-slate-200 p-12 text-center shadow-xs">
+              <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
+                <Plus className="w-6 h-6" />
+              </div>
+              <h3 className="text-base font-semibold text-slate-900 mb-1">Aucune carte en cours</h3>
+              <p className="text-xs text-slate-500 max-w-sm mx-auto mb-4">
+                Ajoutez votre première carte de commande pour démarrer le point journalier.
+              </p>
+              <button
+                onClick={handleOpenCreate}
+                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs cursor-pointer"
+              >
+                <Plus className="w-4 h-4 stroke-[2.5]" />
+                Carte
+              </button>
+            </div>
+          </main>
+        ) : (
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <>
             {/* KPI Summary Cards (Surbrillance au survol & Filtrage au clic) */}
@@ -373,6 +368,9 @@ export default function App() {
               cards={cards}
               activeFilter={kpiFilter}
               onSelectFilter={setKpiFilter}
+              isMeetingFilterActive={isMeetingFilterActive}
+              onToggleMeetingFilter={() => setIsMeetingFilterActive((prev) => !prev)}
+              pendingReviewCount={pendingReviewCount}
             />
 
         {/* Bannière de filtrage actif depuis le tableau de bord */}
@@ -418,15 +416,7 @@ export default function App() {
 
           <div className="flex items-center gap-2 self-start sm:self-auto">
             <button
-              onClick={handleExportCSV}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg shadow-xs transition-colors cursor-pointer"
-              title="Exporter le relevé de réunion en CSV"
-            >
-              <Download className="w-3.5 h-3.5 text-slate-500" />
-              <span>Compte-rendu CSV</span>
-            </button>
-            <button
-              onClick={fetchCards}
+              onClick={() => fetchCards()}
               className="p-1.5 text-slate-500 hover:text-slate-800 bg-white hover:bg-slate-100 border border-slate-200 rounded-lg shadow-xs transition-colors cursor-pointer"
               title="Actualiser la liste"
             >
@@ -462,11 +452,26 @@ export default function App() {
         />
           </>
         </main>
-      ) : (
+        )
+      ) : currentPage === 'suivi-global' ? (
         <main className="flex-1 w-full">
           <SuiviGlobalView
-            onBackToPointJournalier={() => setCurrentPage('point-journalier')}
+            onChangePage={setCurrentPage}
             cards={cards}
+            onUpdateCard={handleUpdateCard}
+            onOpenCardModal={(card) => {
+              setEditingCard(card);
+              setIsModalOpen(true);
+            }}
+            onOpenCreateCard={handleOpenCreateCard}
+          />
+        </main>
+      ) : (
+        <main className="flex-1 w-full">
+          <TableauxOFsView
+            cards={cards}
+            onUpdateCard={handleUpdateCard}
+            onChangePage={setCurrentPage}
             onOpenCardModal={(card) => {
               setEditingCard(card);
               setIsModalOpen(true);
@@ -492,13 +497,17 @@ export default function App() {
         onClose={() => {
           setIsModalOpen(false);
           setEditingCard(null);
+          setCreatePrefill(null);
+          onCreateCardRef.current = null;
         }}
         onSubmit={handleCreateOrUpdate}
         initialData={editingCard}
+        createPrefill={editingCard ? null : createPrefill}
         onJalonAjoute={handleJalonAjoute}
       />
       </div>
     </JalonCatalogueProvider>
+    </InspectionsParCarteProvider>
   );
 }
 

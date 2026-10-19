@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { CardItem } from '../types/card.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
 import { getEtatJalon } from '../utils/jalons.ts';
@@ -6,8 +6,9 @@ import {
   Layers,
   CalendarCheck,
   AlertTriangle,
-  CheckCircle2,
+  Users2,
   Filter,
+  ChevronDown,
 } from 'lucide-react';
 
 export type KpiFilterType = 'ALL' | 'RDL' | 'ALERTE';
@@ -16,225 +17,213 @@ interface StatsOverviewProps {
   cards: CardItem[];
   activeFilter?: KpiFilterType;
   onSelectFilter?: (filter: KpiFilterType) => void;
+  isMeetingFilterActive: boolean;
+  onToggleMeetingFilter: () => void;
+  pendingReviewCount: number;
 }
+
+type AccentColor = 'blue' | 'purple' | 'rose' | 'amber';
+
+interface Palette {
+  activeContainer: string;
+  activeIcon: string;
+  idleIcon: string;
+  count: string;
+  label: string;
+}
+
+const PALETTES: Record<AccentColor, Palette> = {
+  blue: {
+    activeContainer: 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/60',
+    activeIcon: 'bg-blue-600 text-white',
+    idleIcon: 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white',
+    count: 'text-blue-950',
+    label: 'text-blue-700',
+  },
+  purple: {
+    activeContainer: 'border-purple-500 ring-2 ring-purple-500/20 bg-purple-50/60',
+    activeIcon: 'bg-purple-600 text-white',
+    idleIcon: 'bg-purple-50 text-purple-600 group-hover:bg-purple-600 group-hover:text-white',
+    count: 'text-purple-950',
+    label: 'text-purple-700',
+  },
+  rose: {
+    activeContainer: 'border-rose-500 ring-2 ring-rose-500/20 bg-rose-50/60',
+    activeIcon: 'bg-rose-600 text-white',
+    idleIcon: 'bg-rose-50 text-rose-600 group-hover:bg-rose-600 group-hover:text-white',
+    count: 'text-rose-950',
+    label: 'text-rose-700',
+  },
+  amber: {
+    activeContainer: 'border-amber-500 ring-2 ring-amber-500/20 bg-amber-50/60',
+    activeIcon: 'bg-amber-500 text-white',
+    idleIcon: 'bg-amber-50 text-amber-600 group-hover:bg-amber-500 group-hover:text-white',
+    count: 'text-amber-950',
+    label: 'text-amber-700',
+  },
+};
+
+interface FilterTileProps {
+  icon: React.ReactNode;
+  count: number;
+  label: string;
+  title: string;
+  active: boolean;
+  color: AccentColor;
+  onClick: () => void;
+}
+
+const FilterTile: React.FC<FilterTileProps> = ({
+  icon,
+  count,
+  label,
+  title,
+  active,
+  color,
+  onClick,
+}) => {
+  const palette = PALETTES[color];
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      aria-pressed={active}
+      className={`group w-28 h-28 shrink-0 rounded-xl border flex flex-col items-center justify-center gap-1 p-1.5 transition-all duration-200 cursor-pointer select-none ${
+        active
+          ? palette.activeContainer
+          : 'border-slate-200/80 bg-white hover:shadow-md hover:-translate-y-0.5 hover:border-slate-300'
+      }`}
+    >
+      <span
+        className={`w-8 h-8 rounded-lg flex items-center justify-center transition-colors ${
+          active ? palette.activeIcon : palette.idleIcon
+        }`}
+      >
+        {icon}
+      </span>
+      <span
+        className={`text-lg font-extrabold leading-none ${
+          active ? palette.count : 'text-slate-900'
+        }`}
+      >
+        {count}
+      </span>
+      <span
+        className={`text-[9px] font-bold uppercase tracking-wider text-center leading-tight ${
+          active ? palette.label : 'text-slate-600'
+        }`}
+      >
+        {label}
+      </span>
+    </button>
+  );
+};
 
 export const StatsOverview: React.FC<StatsOverviewProps> = ({
   cards,
   activeFilter = 'ALL',
   onSelectFilter,
+  isMeetingFilterActive,
+  onToggleMeetingFilter,
+  pendingReviewCount,
 }) => {
+  const [open, setOpen] = useState(false);
   const catalogue = useJalonCatalogue();
+
   const totalCards = cards.length;
-  const enCoursCount = cards.filter((c) => c.statut === 'EN_COURS').length;
-  const termineesCount = cards.filter((c) => c.statut === 'TERMINE').length;
   const bloqueesCount = cards.filter((c) => c.statut === 'BLOQUE').length;
-  const enAttenteCount = cards.filter((c) => c.statut === 'EN_ATTENTE').length;
 
   // RDL : Réunion De Lancement. Le jalon est propre à chaque carte : seuls les
-  // modèles qui le portent comptent, et la carte RDL disparaît du bandeau si plus
-  // aucune carte ne le porte, sinon le décompte resterait figé à zéro.
+  // modèles qui le portent comptent, et le filtre RDL disparaît si plus aucune
+  // carte ne le porte, sinon le décompte resterait figé à zéro.
   const cartesAvecRDL = cards.filter((c) => (c.jalons ?? []).some((j) => j.code === 'RDL'));
   const jalonRDL = catalogue.find((j) => j.code === 'RDL');
   const rdlActif = Boolean(jalonRDL) && cartesAvecRDL.length > 0;
-  const rdlProgrammes = rdlActif ? cartesAvecRDL.filter((c) => getEtatJalon(c, 'RDL').valide).length : 0;
   const rdlAProgrammer = rdlActif
     ? cartesAvecRDL.filter((c) => !getEtatJalon(c, 'RDL').valide && c.statut !== 'TERMINE').length
     : 0;
 
   const handleCardClick = (filter: KpiFilterType) => {
-    if (onSelectFilter) {
-      // Toggle or set
-      if (activeFilter === filter && filter !== 'ALL') {
-        onSelectFilter('ALL');
-      } else {
-        onSelectFilter(filter);
-      }
+    if (!onSelectFilter) return;
+    if (activeFilter === filter && filter !== 'ALL') {
+      onSelectFilter('ALL');
+    } else {
+      onSelectFilter(filter);
     }
   };
 
+  const nbFiltresActifs = (activeFilter !== 'ALL' ? 1 : 0) + (isMeetingFilterActive ? 1 : 0);
+
   return (
-    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
-      {/* 1. Cartes / Modèles en Atelier */}
-      <div
-        onClick={() => handleCardClick('ALL')}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && handleCardClick('ALL')}
-        title="Cliquer pour afficher tous les modèles en atelier"
-        className={`bg-white rounded-xl p-4.5 border transition-all duration-200 cursor-pointer select-none group shadow-xs hover:shadow-lg hover:-translate-y-1 hover:border-blue-400 hover:ring-2 hover:ring-blue-400/25 ${
-          activeFilter === 'ALL'
-            ? 'border-blue-500 ring-2 ring-blue-500/20 bg-blue-50/20 shadow-sm'
-            : 'border-slate-200/80'
-        }`}
+    <div className="mb-6 rounded-2xl border border-slate-200 bg-white shadow-xs overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        title={open ? 'Masquer les filtres' : 'Afficher les filtres'}
+        className="w-full flex items-center justify-between gap-3 px-4 py-3 hover:bg-slate-50 transition-colors cursor-pointer"
       >
-        <div className="flex items-center justify-between text-slate-500 mb-2">
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-700 group-hover:text-blue-700 transition-colors">
-            Cartes / Modèles en Atelier
-          </span>
-          <span
-            className={`p-2 rounded-lg transition-colors ${
-              activeFilter === 'ALL'
-                ? 'bg-blue-600 text-white'
-                : 'bg-blue-50 text-blue-600 group-hover:bg-blue-600 group-hover:text-white'
-            }`}
-          >
-            <Layers className="w-4 h-4" />
-          </span>
-        </div>
-
-        <div className="flex items-baseline justify-between">
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-extrabold text-slate-900 group-hover:text-blue-900 transition-colors">
-              {totalCards}
-            </span>
-            <span className="text-xs text-slate-500">modèles suivis</span>
-          </div>
-
-          {activeFilter === 'ALL' && (
-            <span className="text-[11px] font-semibold text-blue-700 bg-blue-100/70 px-2 py-0.5 rounded-full flex items-center gap-1">
-              <Filter className="w-3 h-3" /> Actif
+        <span className="flex items-center gap-2 text-sm font-bold text-slate-700">
+          <Filter className="w-4 h-4 text-blue-600" />
+          Filtres
+        </span>
+        <span className="flex items-center gap-2">
+          {nbFiltresActifs > 0 && (
+            <span className="text-[10px] font-bold uppercase tracking-wider text-blue-700 bg-blue-50 border border-blue-200 px-2 py-0.5 rounded-full">
+              {nbFiltresActifs} actif{nbFiltresActifs > 1 ? 's' : ''}
             </span>
           )}
-        </div>
-
-        <div className="text-xs text-slate-500 mt-2.5 flex items-center justify-between pt-2 border-t border-slate-100">
-          <span className="flex items-center gap-1 text-blue-700 font-semibold">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
-            {enCoursCount} en cours
-          </span>
-          <span>•</span>
-          <span className="flex items-center gap-1 text-emerald-700 font-semibold">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-            {termineesCount} terminés
-          </span>
-        </div>
-      </div>
-
-      {/* 2. RDL (Réunion De Lancement) — masqué si aucune carte ne porte le jalon */}
-      {rdlActif && (
-        <div
-          onClick={() => handleCardClick('RDL')}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && handleCardClick('RDL')}
-        title="Cliquer pour afficher les cartes concernées par la RDL"
-        className={`bg-white rounded-xl p-4.5 border transition-all duration-200 cursor-pointer select-none group shadow-xs hover:shadow-lg hover:-translate-y-1 hover:border-purple-400 hover:ring-2 hover:ring-purple-400/25 ${
-          activeFilter === 'RDL'
-            ? 'border-purple-500 ring-2 ring-purple-500/20 bg-purple-50/20 shadow-sm'
-            : 'border-slate-200/80'
-        }`}
-      >
-        <div className="flex items-center justify-between text-slate-500 mb-2">
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-700 group-hover:text-purple-700 transition-colors">
-            RDL (Réunion De Lancement)
-          </span>
-          <span
-            className={`p-2 rounded-lg transition-colors ${
-              activeFilter === 'RDL'
-                ? 'bg-purple-600 text-white'
-                : 'bg-purple-50 text-purple-600 group-hover:bg-purple-600 group-hover:text-white'
+          <ChevronDown
+            className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${
+              open ? 'rotate-180' : ''
             }`}
-          >
-            <CalendarCheck className="w-4 h-4" />
-          </span>
-        </div>
+          />
+        </span>
+      </button>
 
-        <div className="flex items-baseline justify-between">
-          <div className="flex items-baseline gap-2">
-            <span className="text-2xl font-extrabold text-purple-950 group-hover:text-purple-900 transition-colors">
-              {rdlProgrammes}
-            </span>
-            <span className="text-xs text-slate-500">RDL validées</span>
-          </div>
-
-          {activeFilter === 'RDL' ? (
-            <span className="text-[11px] font-semibold text-purple-700 bg-purple-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-              <Filter className="w-3 h-3" /> Filtré
-            </span>
-          ) : (
-            rdlAProgrammer > 0 && (
-              <span className="text-xs font-bold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                {rdlAProgrammer} à planifier
-              </span>
-            )
+      {open && (
+        <div className="px-4 pb-4 flex flex-wrap gap-3 animate-popover-in">
+          <FilterTile
+            icon={<Layers className="w-4 h-4" />}
+            count={totalCards}
+            label="Cartes / Modèles"
+            title="Afficher tous les modèles en atelier"
+            active={activeFilter === 'ALL'}
+            color="blue"
+            onClick={() => handleCardClick('ALL')}
+          />
+          {rdlActif && (
+            <FilterTile
+              icon={<CalendarCheck className="w-4 h-4" />}
+              count={rdlAProgrammer}
+              label="RDL"
+              title="Afficher les cartes concernées par la RDL"
+              active={activeFilter === 'RDL'}
+              color="purple"
+              onClick={() => handleCardClick('RDL')}
+            />
           )}
-        </div>
-
-        <div className="text-xs text-slate-500 mt-2.5 flex items-center justify-between pt-2 border-t border-slate-100">
-          <span className="text-purple-900 font-medium">
-            Programmation & découpage des OF
-          </span>
-          <span className="text-[11px] font-semibold text-purple-700 group-hover:underline">
-            Afficher les cartes →
-          </span>
-        </div>
+          <FilterTile
+            icon={<AlertTriangle className="w-4 h-4" />}
+            count={bloqueesCount}
+            label="Alerte et priorité"
+            title="Afficher les cartes avec alertes et priorités"
+            active={activeFilter === 'ALERTE'}
+            color="rose"
+            onClick={() => handleCardClick('ALERTE')}
+          />
+          <FilterTile
+            icon={<Users2 className="w-4 h-4" />}
+            count={pendingReviewCount}
+            label="Réunion"
+            title="Filtrer les cartes nécessitant une décision ou un arbitrage en réunion"
+            active={isMeetingFilterActive}
+            color="amber"
+            onClick={onToggleMeetingFilter}
+          />
         </div>
       )}
-
-      {/* 3. Alerte et priorité (anciennement Points d'Arbitrage Réunion) */}
-      <div
-        onClick={() => handleCardClick('ALERTE')}
-        role="button"
-        tabIndex={0}
-        onKeyDown={(e) => e.key === 'Enter' && handleCardClick('ALERTE')}
-        title="Cliquer pour afficher les cartes avec alertes et priorités"
-        className={`bg-white rounded-xl p-4.5 border transition-all duration-200 cursor-pointer select-none group shadow-xs hover:shadow-lg hover:-translate-y-1 hover:border-rose-400 hover:ring-2 hover:ring-rose-400/25 ${
-          activeFilter === 'ALERTE'
-            ? 'border-rose-500 ring-2 ring-rose-500/20 bg-rose-50/20 shadow-sm'
-            : 'border-slate-200/80'
-        }`}
-      >
-        <div className="flex items-center justify-between text-slate-500 mb-2">
-          <span className="text-xs font-bold uppercase tracking-wider text-slate-700 group-hover:text-rose-700 transition-colors">
-            Alerte et priorité
-          </span>
-          <span
-            className={`p-2 rounded-lg transition-colors ${
-              activeFilter === 'ALERTE'
-                ? 'bg-rose-600 text-white'
-                : 'bg-rose-50 text-rose-600 group-hover:bg-rose-600 group-hover:text-white'
-            }`}
-          >
-            <AlertTriangle className="w-4 h-4" />
-          </span>
-        </div>
-
-        <div className="flex items-baseline justify-between">
-          <div className="flex items-baseline gap-2">
-            <span
-              className={`text-2xl font-extrabold transition-colors ${
-                bloqueesCount > 0 ? 'text-rose-600' : 'text-slate-900'
-              }`}
-            >
-              {bloqueesCount}
-            </span>
-            <span className="text-xs text-slate-500">
-              {bloqueesCount > 1 ? 'alertes actives' : 'alerte active'}
-            </span>
-          </div>
-
-          {activeFilter === 'ALERTE' ? (
-            <span className="text-[11px] font-semibold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full flex items-center gap-1">
-              <Filter className="w-3 h-3" /> Filtré
-            </span>
-          ) : (
-            enAttenteCount > 0 && (
-              <span className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-full">
-                {enAttenteCount} en attente
-              </span>
-            )
-          )}
-        </div>
-
-        <div className="text-xs text-slate-500 mt-2.5 flex items-center justify-between pt-2 border-t border-slate-100">
-          <span className="text-rose-800 font-medium">
-            {bloqueesCount > 0 ? 'Arbitrage immédiat en réunion' : 'Aucun blocage critique'}
-          </span>
-          <span className="text-[11px] font-semibold text-rose-700 group-hover:underline">
-            Voir les alertes →
-          </span>
-        </div>
-      </div>
     </div>
   );
 };

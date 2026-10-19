@@ -8,30 +8,40 @@ import type { JalonCategorie, JalonCatalogue, TypeCarte } from '../types/card.ts
  * Partagé par le premier démarrage de la base (serveur) et par le repli hors ligne
  * du client, pour qu'il n'y ait qu'une seule source de vérité.
  */
+/**
+ * Statut de base ajouté après coup : il est servi par le catalogue partagé à
+ * toutes les cartes (nouvelles comme existantes, via migration de base).
+ */
+export const CODE_TDS_PPS = 'TDS/PPS';
+
 export const CATALOGUE_INITIAL: JalonCatalogue[] = [
   { code: 'DT', libelle: 'Dossier Technique', categorie: 'STATUT', ordre: 10 },
   { code: 'TC', libelle: 'Type Conforme', categorie: 'STATUT', ordre: 20 },
   { code: 'FT', libelle: 'Fiche Technique', categorie: 'STATUT', ordre: 30 },
   { code: 'RDL', libelle: 'Reunion De Lancement', categorie: 'STATUT', ordre: 40 },
+  { code: CODE_TDS_PPS, libelle: 'TDS/PPS', categorie: 'STATUT', ordre: 45 },
 ];
 
 /**
  * Nomenclatures propres à chaque nature de matière. Un code listé ici est une
- * nomenclature verte ; les 4 statuts de `CATALOGUE_INITIAL` complètent la carte.
- * L'ordre est celui d'affichage demandé : R, AC, AF, AI pour le Raphia ;
- * AI, AF, AC pour les Tissus.
+ * nomenclature verte ; les statuts de `CATALOGUE_INITIAL` complètent la carte.
+ * Ordre d'affichage demandé : R, AC, AI, AF pour le Raphia (C reste en fin de
+ * liste) ; le même ordre pour les Tissus, avec T en premier : T, AC, AI, AF.
+ * Les statuts, eux, ne changent pas d'ordre.
  */
 export const NOMENCLATURES_PAR_TYPE: Record<TypeCarte, { code: string; libelle: string }[]> = {
   R: [
     { code: 'R', libelle: 'Relevé de mesures' },
     { code: 'AC', libelle: 'Article Coupe' },
-    { code: 'AF', libelle: 'Article Fini' },
     { code: 'AI', libelle: 'Articles Inclus' },
+    { code: 'AF', libelle: 'Article Fini' },
+    { code: 'C', libelle: 'Cuir' },
   ],
   T: [
+    { code: 'T', libelle: 'Tissus' },
+    { code: 'AC', libelle: 'Article Coupe' },
     { code: 'AI', libelle: 'Articles Inclus' },
     { code: 'AF', libelle: 'Article Fini' },
-    { code: 'AC', libelle: 'Article Coupe' },
   ],
 };
 
@@ -41,6 +51,7 @@ export const STATUTS_COMMUNS: { code: string; libelle: string }[] = [
   { code: 'FT', libelle: 'Fiche Technique' },
   { code: 'TC', libelle: 'Type Conforme' },
   { code: 'DT', libelle: 'Dossier Technique' },
+  { code: CODE_TDS_PPS, libelle: 'TDS/PPS' },
 ];
 
 /** Catalogue complet d'une carte de ce type : statuts puis nomenclatures. */
@@ -75,14 +86,17 @@ export function codesPourType(type: TypeCarte): string[] {
 export const CATEGORIES_PAR_CODE: Record<string, JalonCategorie> = {
   // Nomenclatures — vert
   R: 'NOMENCLATURE',
+  T: 'NOMENCLATURE',
   AC: 'NOMENCLATURE',
   AF: 'NOMENCLATURE',
   AI: 'NOMENCLATURE',
+  C: 'NOMENCLATURE',
   // Statuts — bleu
   DT: 'STATUT',
   TC: 'STATUT',
   RDL: 'STATUT',
   FT: 'STATUT',
+  [CODE_TDS_PPS]: 'STATUT',
 };
 
 export function categorieParCode(code: string): JalonCategorie {
