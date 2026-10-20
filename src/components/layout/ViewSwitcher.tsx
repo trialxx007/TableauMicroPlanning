@@ -1,7 +1,7 @@
 import React from 'react';
 import { ClipboardList, TableProperties, Table2, History } from 'lucide-react';
-import { ongletsAutorises } from '../utils/auth.ts';
-import { useProfil } from '../context/ProfilContext.tsx';
+import { ongletsAutorises } from '@/src/utils/auth.ts';
+import { useProfil } from '@/src/context/ProfilContext.tsx';
 
 export type AppPage = 'point-journalier' | 'suivi-global' | 'tableaux-ofs' | 'historique';
 

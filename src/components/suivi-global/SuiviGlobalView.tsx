@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { CardFormData, CardItem } from '../types/card.ts';
+import { CardFormData, CardItem } from '@/src/types/card.ts';
 import {
   ChaineRow,
   ChaineSlotCard,
@@ -11,30 +11,30 @@ import {
   AlerteChamp,
   TEINTE_ALERTE_DEFAUT,
   normaliserTeinteAlerte,
-} from '../types/suiviGlobal.ts';
-import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS, nouvelleChaineVide } from '../data/mockSuiviGlobal.ts';
-import { CardPickerModal } from './CardPickerModal.tsx';
+} from '@/src/types/suiviGlobal.ts';
+import { CATEGORIES_CONFIG, INITIAL_CHAINE_ROWS, nouvelleChaineVide } from '@/src/data/mockSuiviGlobal.ts';
+import { CardPickerModal } from '@/src/components/point-commande/CardPickerModal.tsx';
 import { ExpeditionModal } from './ExpeditionModal.tsx';
 import { NouvelleChaineModal } from './NouvelleChaineModal.tsx';
 import { InspectionEtatMenu } from './InspectionEtatMenu.tsx';
-import { OfPopover } from './OfPopover.tsx';
-import { AlertePopover } from './AlertePopover.tsx';
-import { useAlertesManuelles } from '../utils/alertesManuelles.ts';
-import { getJalonsCard, type JalonInfo } from '../utils/jalons.ts';
-import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
-import { useGlisserCartes } from '../utils/glisserCarte.ts';
+import { OfPopover } from '@/src/components/point-commande/OfPopover.tsx';
+import { AlertePopover } from '@/src/components/ui/AlertePopover.tsx';
+import { useAlertesManuelles } from '@/src/utils/alertesManuelles.ts';
+import { getJalonsCard, type JalonInfo } from '@/src/utils/jalons.ts';
+import { getNowParis, LIBELLE_FUSEAU } from '@/src/utils/dateFrance.ts';
+import { useGlisserCartes } from '@/src/utils/glisserCarte.ts';
 import {
   blocInspectionVide,
   dateDuJourISO,
   normaliserBloc,
-} from '../utils/inspections.ts';
-import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
-import { useInspectionsParCarte } from '../context/InspectionsParCarteContext.tsx';
-import { ViewSwitcher, AppPage } from './ViewSwitcher.tsx';
-import { SessionBadge } from './SessionBadge.tsx';
-import { Profil } from '../utils/auth.ts';
-import { useLectureSeule } from '../context/ProfilContext.tsx';
-import { suiviGlobalApi, type SuiviGlobalLayoutRow } from '../services/api.ts';
+} from '@/src/utils/inspections.ts';
+import { useJalonCatalogue } from '@/src/context/JalonCatalogueContext.tsx';
+import { useInspectionsParCarte } from '@/src/context/InspectionsParCarteContext.tsx';
+import { ViewSwitcher, AppPage } from '@/src/components/layout/ViewSwitcher.tsx';
+import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
+import { Profil } from '@/src/utils/auth.ts';
+import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
+import { suiviGlobalApi, type SuiviGlobalLayoutRow } from '@/src/services/api.ts';
 import {
   LigneTableSuivi,
   NOMBRE_LANCEMENTS,

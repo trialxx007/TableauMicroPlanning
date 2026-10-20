@@ -1,16 +1,16 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { CardFormData, CardItem, CardStatus, JalonCatalogue, normalizeOFType } from './types/card.ts';
 import { cardApi, jalonApi } from './services/api.ts';
-import { Header } from './components/Header.tsx';
-import { StatsOverview, KpiFilterType } from './components/StatsOverview.tsx';
-import { FilterBar, SortField, SortOrder } from './components/FilterBar.tsx';
-import { CardTable } from './components/CardTable.tsx';
-import { CardModal } from './components/CardModal.tsx';
-import { HistoriqueView } from './components/HistoriqueView.tsx';
-import { SuiviGlobalView } from './components/SuiviGlobalView.tsx';
-import { TableauxOFsView } from './components/TableauxOFsView.tsx';
-import { AppPage } from './components/ViewSwitcher.tsx';
-import { LoginScreen } from './components/LoginScreen.tsx';
+import { Header } from './components/layout/Header.tsx';
+import { StatsOverview, KpiFilterType } from './components/ui/StatsOverview.tsx';
+import { FilterBar, SortField, SortOrder } from './components/ui/FilterBar.tsx';
+import { CardTable } from './components/point-commande/CardTable.tsx';
+import { CardModal } from './components/point-commande/CardModal.tsx';
+import { HistoriqueView } from './components/historique/HistoriqueView.tsx';
+import { SuiviGlobalView } from './components/suivi-global/SuiviGlobalView.tsx';
+import { TableauxOFsView } from './components/point-commande/TableauxOFsView.tsx';
+import { AppPage } from './components/layout/ViewSwitcher.tsx';
+import { LoginScreen } from './components/layout/LoginScreen.tsx';
 import { JalonCatalogueProvider } from './context/JalonCatalogueContext.tsx';
 import { ProfilProvider } from './context/ProfilContext.tsx';
 import {

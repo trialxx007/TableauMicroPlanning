@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { INITIAL_CARDS } from './src/data/mockData.ts';
+import { INITIAL_CARDS } from '../src/data/mockData.ts';
 import {
   CATALOGUE_INITIAL,
   CATEGORIES_PAR_CODE,
@@ -10,14 +10,14 @@ import {
   NOMENCLATURES_PAR_TYPE,
   cataloguePourType,
   categorieParCode,
-} from './src/data/mockJalons.ts';
+} from '../src/data/mockJalons.ts';
 import type {
   CardItem,
   CardJalon,
   JalonCategorie,
   JalonCatalogue,
   JalonCode,
-} from './src/types/card.ts';
+} from '../src/types/card.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,7 +28,7 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
  * par server.ts avant que dotenv n'ait eu l'occasion de lire le .env.
  */
 function dbPath(): string {
-  return process.env.DB_PATH || path.resolve(__dirname, 'data', 'point-commande.db');
+  return process.env.DB_PATH || path.resolve(__dirname, '..', 'data', 'point-commande.db');
 }
 
 let db: DatabaseSync | null = null;

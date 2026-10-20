@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertTriangle, X, Plus, Trash2, Columns, CheckCircle2, RotateCcw } from 'lucide-react';
-import { CardItem } from '../types/card.ts';
+import { CardItem } from '@/src/types/card.ts';
 import {
   getJalonsCard,
   themeJalon,
@@ -9,8 +9,8 @@ import {
   titreCategorie,
   ORDRE_CATEGORIES,
   type JalonInfo,
-} from '../utils/jalons.ts';
-import { getNowParis, getSemaineISO, horodatageBref } from '../utils/dateFrance.ts';
+} from '@/src/utils/jalons.ts';
+import { getNowParis, getSemaineISO, horodatageBref } from '@/src/utils/dateFrance.ts';
 import {
   useAlertesManuelles,
   ecrireAlertesManuelles,
@@ -24,9 +24,9 @@ import {
   ALERTES_COULEURS,
   ALERTES_COULEUR_DEFAUT,
   VISIBILITE_ALERTE_DEFAUT,
-} from '../utils/alertesManuelles.ts';
-import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
-import { useLectureSeule } from '../context/ProfilContext.tsx';
+} from '@/src/utils/alertesManuelles.ts';
+import { useJalonCatalogue } from '@/src/context/JalonCatalogueContext.tsx';
+import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
 
 
 const COULEUR_ALERTE_CLS: Record<AlerteCouleur, { icone: string; fond: string; bordure: string; texte: string }> = {

@@ -1,9 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { OrdreFabrication, SousOrdreFabrication, CardStatus, OFType, OF_TYPES, OF_DESTINATIONS, DestinationOF, normalizeOFType } from '../types/card.ts';
+import { OrdreFabrication, SousOrdreFabrication, CardStatus, OFType, OF_TYPES, OF_DESTINATIONS, DestinationOF, normalizeOFType } from '@/src/types/card.ts';
 import { EnCoursGrid } from './EnCoursCasesSection.tsx';
-import { EditableItemName } from './EditableItemName.tsx';
-import { useInspectionsParCarte } from '../context/InspectionsParCarteContext.tsx';
-import { useLectureSeule } from '../context/ProfilContext.tsx';
+import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
+import { useInspectionsParCarte } from '@/src/context/InspectionsParCarteContext.tsx';
+import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
 import {
   Check,
   ChevronDown,

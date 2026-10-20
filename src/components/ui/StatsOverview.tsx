@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { CardItem } from '../types/card.ts';
-import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
-import { getEtatJalon } from '../utils/jalons.ts';
+import { CardItem } from '@/src/types/card.ts';
+import { useJalonCatalogue } from '@/src/context/JalonCatalogueContext.tsx';
+import { getEtatJalon } from '@/src/utils/jalons.ts';
 import {
   Layers,
   CalendarCheck,

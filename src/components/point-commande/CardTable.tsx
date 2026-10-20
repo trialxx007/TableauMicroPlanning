@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { CardItem, CardStatus, JalonCode } from '../types/card.ts';
+import { CardItem, CardStatus, JalonCode } from '@/src/types/card.ts';
 import {
   getJalonsCard,
   getEtatJalon,
@@ -12,11 +12,11 @@ import {
   titreCategorie,
   okProdAuto,
   type JalonEtat,
-} from '../utils/jalons.ts';
-import { categorieParCode } from '../data/mockJalons.ts';
-import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
-import { useLectureSeule } from '../context/ProfilContext.tsx';
-import { getSemaineISO } from '../utils/dateFrance.ts';
+} from '@/src/utils/jalons.ts';
+import { categorieParCode } from '@/src/data/mockJalons.ts';
+import { useJalonCatalogue } from '@/src/context/JalonCatalogueContext.tsx';
+import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
+import { getSemaineISO } from '@/src/utils/dateFrance.ts';
 import {
   Check,
   X,

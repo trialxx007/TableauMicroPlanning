@@ -5,13 +5,13 @@ import {
   OFType,
   OF_TYPES,
   normalizeOFType,
-} from '../types/card.ts';
-import { AppPage, ViewSwitcher } from './ViewSwitcher.tsx';
-import { SessionBadge } from './SessionBadge.tsx';
-import { Profil } from '../utils/auth.ts';
+} from '@/src/types/card.ts';
+import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
+import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
+import { Profil } from '@/src/utils/auth.ts';
 import { normalizeCases, computeOfQuantiteFinie } from './OFSubTable.tsx';
-import { useLectureSeule } from '../context/ProfilContext.tsx';
-import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
+import { getNowParis, LIBELLE_FUSEAU } from '@/src/utils/dateFrance.ts';
 import { Calendar, Clock, Table2 } from 'lucide-react';
 
 interface TableauxOFsViewProps {

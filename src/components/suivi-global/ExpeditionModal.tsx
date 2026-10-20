@@ -1,13 +1,13 @@
 import React from 'react';
 import { Truck, X, Package } from 'lucide-react';
-import { CardItem } from '../types/card.ts';
-import { useLectureSeule } from '../context/ProfilContext.tsx';
+import { CardItem } from '@/src/types/card.ts';
+import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
 import {
   ChaineSlotCard,
   ExpeditionOF,
   STATUTS_EXPEDITION,
   StatutExpedition,
-} from '../types/suiviGlobal.ts';
+} from '@/src/types/suiviGlobal.ts';
 
 interface ExpeditionModalProps {
   isOpen: boolean;

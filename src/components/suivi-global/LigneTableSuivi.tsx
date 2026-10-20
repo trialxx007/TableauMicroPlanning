@@ -1,12 +1,12 @@
 import React, { useState, useRef } from 'react';
-import { CardItem } from '../types/card.ts';
+import { CardItem } from '@/src/types/card.ts';
 import {
   ChaineRow,
   ChaineSlotCard,
   CategorieConfig,
   InspectionBloc,
   InspectionValeur,
-} from '../types/suiviGlobal.ts';
+} from '@/src/types/suiviGlobal.ts';
 import {
   alerteEnColonne,
   alerteActiveEnColonne,
@@ -20,18 +20,18 @@ import {
   type AlerteCouleur,
   type AlerteManuelle,
   type VisibiliteAlerte,
-} from '../utils/alertesManuelles.ts';
+} from '@/src/utils/alertesManuelles.ts';
 import {
   detailJalon,
   marqueJalon,
   themeJalon,
   type JalonInfo,
-} from '../utils/jalons.ts';
-import { blocInspectionVide, dateCourte } from '../utils/inspections.ts';
-import { getNowParis } from '../utils/dateFrance.ts';
+} from '@/src/utils/jalons.ts';
+import { blocInspectionVide, dateCourte } from '@/src/utils/inspections.ts';
+import { getNowParis } from '@/src/utils/dateFrance.ts';
 import { InspectionCell } from './InspectionCell.tsx';
-import { idSlotCarte } from '../utils/glisserCarte.ts';
-import { useLectureSeule } from '../context/ProfilContext.tsx';
+import { idSlotCarte } from '@/src/utils/glisserCarte.ts';
+import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
 import { AlertTriangle, ArrowLeftRight, Columns, Pencil, Trash2, Truck, X } from 'lucide-react';
 
 /** Ligne du tableau du Suivi Global, mémorisée : en éditant une ligne (inspection,

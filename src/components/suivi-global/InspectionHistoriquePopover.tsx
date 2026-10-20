@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { InspectionBloc } from '../types/suiviGlobal.ts';
-import { dateCourte } from '../utils/inspections.ts';
+import { InspectionBloc } from '@/src/types/suiviGlobal.ts';
+import { dateCourte } from '@/src/utils/inspections.ts';
 
 /** Écart sous l'ancre et marge de sécurité au bord d'écran. */
 const ECART = 6;

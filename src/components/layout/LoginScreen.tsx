@@ -11,7 +11,7 @@ import {
   User,
   ChevronRight,
 } from 'lucide-react';
-import { PROFILS, Profil, ProfilId, motDePasseValide } from '../utils/auth.ts';
+import { PROFILS, Profil, ProfilId, motDePasseValide } from '@/src/utils/auth.ts';
 
 interface LoginScreenProps {
   onConnecter: (profil: Profil) => void;

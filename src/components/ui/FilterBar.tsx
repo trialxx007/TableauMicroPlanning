@@ -1,7 +1,7 @@
 import React from 'react';
 import { Search, Filter, ArrowUpDown } from 'lucide-react';
-import { CardStatus, JalonCatalogue } from '../types/card.ts';
-import { filtreJalonManquant, groupesParCategorie, titreCategorie } from '../utils/jalons.ts';
+import { CardStatus, JalonCatalogue } from '@/src/types/card.ts';
+import { filtreJalonManquant, groupesParCategorie, titreCategorie } from '@/src/utils/jalons.ts';
 
 export type SortField = 'resteAProduire' | 'quantiteDemandee' | 'client' | 'statut' | 'dateCreation';
 export type SortOrder = 'asc' | 'desc';

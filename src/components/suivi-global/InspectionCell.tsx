@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { ChevronDown, History, Plus, Truck, X } from 'lucide-react';
-import { InspectionBloc, InspectionValeur } from '../types/suiviGlobal.ts';
-import { dateCourte } from '../utils/inspections.ts';
+import { InspectionBloc, InspectionValeur } from '@/src/types/suiviGlobal.ts';
+import { dateCourte } from '@/src/utils/inspections.ts';
 import { InspectionHistoriquePopover } from './InspectionHistoriquePopover.tsx';
-import { useLectureSeule } from '../context/ProfilContext.tsx';
+import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
 
 interface InspectionCellProps {
   bloc: InspectionBloc;

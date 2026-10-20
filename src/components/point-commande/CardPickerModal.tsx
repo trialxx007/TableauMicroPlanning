@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { CardItem } from '../types/card.ts';
-import { ChaineSlotCard } from '../types/suiviGlobal.ts';
+import { CardItem } from '@/src/types/card.ts';
+import { ChaineSlotCard } from '@/src/types/suiviGlobal.ts';
 import { Search, X, Check, Package, Trash2, Plus } from 'lucide-react';
 
 interface CardPickerModalProps {

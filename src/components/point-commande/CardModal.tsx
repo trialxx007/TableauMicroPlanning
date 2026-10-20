@@ -12,7 +12,7 @@ import {
   OFType,
   OF_TYPES,
   normalizeOFType,
-} from '../types/card.ts';
+} from '@/src/types/card.ts';
 import { OFSubTable, computeOfQuantiteFinie } from './OFSubTable.tsx';
 import {
   getJalonInfo,
@@ -32,11 +32,11 @@ import {
   CODES_OK_PROD,
   CODE_NOMENCLATURE_R,
   type JalonEtat,
-} from '../utils/jalons.ts';
-import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
-import { jalonApi } from '../services/api.ts';
-import { categorieParCode, CATEGORIES_PAR_CODE, cataloguePourType, NOMENCLATURES_PAR_TYPE } from '../data/mockJalons.ts';
-import { getNowParis, getSemaineISO } from '../utils/dateFrance.ts';
+} from '@/src/utils/jalons.ts';
+import { useJalonCatalogue } from '@/src/context/JalonCatalogueContext.tsx';
+import { jalonApi } from '@/src/services/api.ts';
+import { categorieParCode, CATEGORIES_PAR_CODE, cataloguePourType, NOMENCLATURES_PAR_TYPE } from '@/src/data/mockJalons.ts';
+import { getNowParis, getSemaineISO } from '@/src/utils/dateFrance.ts';
 import {
   X,
   Check,

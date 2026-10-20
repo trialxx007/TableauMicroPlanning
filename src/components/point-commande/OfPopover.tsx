@@ -1,6 +1,6 @@
-﻿import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { X, Factory, User } from 'lucide-react';
-import { CardItem, OF_TYPES, normalizeOFType } from '../types/card.ts';
+import { CardItem, OF_TYPES, normalizeOFType } from '@/src/types/card.ts';
 
 interface OfPopoverProps {
   card: CardItem;

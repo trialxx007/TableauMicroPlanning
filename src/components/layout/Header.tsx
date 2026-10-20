@@ -5,11 +5,11 @@ import {
   CalendarRange,
   Clock,
 } from 'lucide-react';
-import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { getNowParis, LIBELLE_FUSEAU } from '@/src/utils/dateFrance.ts';
 import { ViewSwitcher, AppPage } from './ViewSwitcher.tsx';
 import { SessionBadge } from './SessionBadge.tsx';
-import { Profil } from '../utils/auth.ts';
-import { useLectureSeule } from '../context/ProfilContext.tsx';
+import { Profil } from '@/src/utils/auth.ts';
+import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
 
 interface HeaderProps {
   onOpenCreateModal: () => void;

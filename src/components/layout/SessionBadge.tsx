@@ -1,6 +1,6 @@
 import React from 'react';
 import { LogOut } from 'lucide-react';
-import { Profil } from '../utils/auth.ts';
+import { Profil } from '@/src/utils/auth.ts';
 
 interface SessionBadgeProps {
   profil: Profil;

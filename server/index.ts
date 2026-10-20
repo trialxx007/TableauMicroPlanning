@@ -3,8 +3,8 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { CardItem, CardJalon } from './src/types/card.ts';
-import { normaliserDateJalon, okProdAuto } from './src/utils/jalons.ts';
+import type { CardItem, CardJalon } from '../src/types/card.ts';
+import { normaliserDateJalon, okProdAuto } from '../src/utils/jalons.ts';
 import {
   createJalon,
   deleteCard,
@@ -30,7 +30,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 // PORT, APP_URL et DB_PATH sont lus au démarrage : sans ça, un .env local est ignoré.
-dotenv.config({ path: path.resolve(__dirname, '.env.local') });
+dotenv.config({ path: path.resolve(__dirname, '..', '.env.local') });
 dotenv.config();
 
 const app = express();
@@ -727,12 +727,13 @@ async function start() {
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
+      root: path.resolve(__dirname, '..'),
       server: { middlewareMode: true },
       appType: 'spa',
     });
     app.use(vite.middlewares);
   } else {
-    const distDir = path.resolve(__dirname, 'dist');
+    const distDir = path.resolve(__dirname, '..', 'dist');
     app.use(express.static(distDir));
     // express 4 : '*' est un motif de chemin valide. express 5 exigerait '/*splat'.
     app.get('*', (_req, res) => {

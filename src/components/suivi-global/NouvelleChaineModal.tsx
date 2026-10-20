@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Network, Check } from 'lucide-react';
-import { CATEGORIES_CONFIG } from '../data/mockSuiviGlobal.ts';
+import { CATEGORIES_CONFIG } from '@/src/data/mockSuiviGlobal.ts';
 
 type CategorieChaine = 'BRODERIE_MAIN' | 'CONFECTION';
 

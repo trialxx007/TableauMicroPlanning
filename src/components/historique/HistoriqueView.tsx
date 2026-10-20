@@ -1,9 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { AppPage, ViewSwitcher } from './ViewSwitcher.tsx';
-import { SessionBadge } from './SessionBadge.tsx';
-import { Profil } from '../utils/auth.ts';
-import { historiqueApi, EntreeHistorique } from '../services/api.ts';
-import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
+import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
+import { Profil } from '@/src/utils/auth.ts';
+import { historiqueApi, EntreeHistorique } from '@/src/services/api.ts';
+import { getNowParis, LIBELLE_FUSEAU } from '@/src/utils/dateFrance.ts';
 import { Calendar, Clock, History, RefreshCw, Filter, X } from 'lucide-react';
 
 interface HistoriqueViewProps {
