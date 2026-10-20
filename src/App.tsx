@@ -2,21 +2,19 @@ import { useState, useEffect, useMemo, useRef } from 'react';
 import { CardFormData, CardItem, CardStatus, JalonCatalogue, normalizeOFType } from './types/card.ts';
 import { cardApi, jalonApi } from './services/api.ts';
 import { Header } from './components/layout/Header.tsx';
-import { StatsOverview, KpiFilterType } from './components/ui/StatsOverview.tsx';
-import { FilterBar, SortField, SortOrder } from './components/ui/FilterBar.tsx';
+import { StatsOverview, KpiFilterType } from './components/StatsOverview.tsx';
+import { FilterBar, SortField, SortOrder } from './components/FilterBar.tsx';
 import { CardTable } from './components/point-commande/CardTable.tsx';
 import { CardModal } from './components/point-commande/CardModal.tsx';
-import { HistoriqueView } from './components/historique/HistoriqueView.tsx';
+import { HistoriqueView } from './components/HistoriqueView.tsx';
 import { SuiviGlobalView } from './components/suivi-global/SuiviGlobalView.tsx';
 import { TableauxOFsView } from './components/point-commande/TableauxOFsView.tsx';
+import { DeveloppementView } from './components/DeveloppementView.tsx';
 import { AppPage } from './components/layout/ViewSwitcher.tsx';
 import { LoginScreen } from './components/layout/LoginScreen.tsx';
 import { JalonCatalogueProvider } from './context/JalonCatalogueContext.tsx';
 import { ProfilProvider } from './context/ProfilContext.tsx';
-import {
-  InspectionsParCarteProvider,
-  InspectionsParCarte,
-} from './context/InspectionsParCarteContext.tsx';
+import { InspectionsParCarteProvider, InspectionsParCarte } from './context/InspectionsParCarteContext.tsx';
 import { getEtatJalon, PREFIXE_JALON_MANQUANT } from './utils/jalons.ts';
 import { getNowParis } from './utils/dateFrance.ts';
 import {
@@ -30,20 +28,15 @@ import {
 import { RefreshCw, FileSpreadsheet, Check, Plus } from 'lucide-react';
 
 export default function App() {
-  // Le profil est choisi avant d'entrer (écran d'accès). La session est mémorisée
-  // pour la durée de l'onglet : un rafraîchissement ne redemande pas le mot de passe.
   const [session, setSession] = useState<SessionProfil | null>(() => lireSession());
-  // Sur un rechargement, on revient à l'onglet où l'on était : la vue courante
-  // est mémorisée pour cette session (sessionStorage), pas imposée par défaut.
-  // Si le profil connecté n'a pas accès à cette vue (ex. Production : OFs
-  // seulement), on retombe sur le premier onglet autorisé.
   const [currentPage, setCurrentPage] = useState<AppPage>(() => {
     const sauvegarde = sessionStorage.getItem('aic_vue_actuelle_v1');
     const memoire: AppPage =
       sauvegarde === 'suivi-global' ||
       sauvegarde === 'point-journalier' ||
       sauvegarde === 'tableaux-ofs' ||
-      sauvegarde === 'historique'
+      sauvegarde === 'historique' ||
+      sauvegarde === 'developpement'
         ? sauvegarde
         : 'point-journalier';
     const autorises = session ? ongletsAutorises(session.profil.id) : null;
@@ -51,7 +44,6 @@ export default function App() {
   });
   const [cards, setCards] = useState<CardItem[]>([]);
   const [catalogue, setCatalogue] = useState<JalonCatalogue[]>([]);
-  // Inspection (colonne du Suivi Global) publiée par carte pour la fiche carte.
   const [inspectionsParCarte, setInspectionsParCarte] =
     useState<InspectionsParCarte>({});
   const [loading, setLoading] = useState(true);
@@ -64,8 +56,6 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CardItem | null>(null);
-  // Création demandée depuis le Suivi Global : pré-remplissage de la modale et
-  // rappel vers la case vide qui l'a déclenchée une fois la carte créée.
   const [createPrefill, setCreatePrefill] = useState<Partial<CardFormData> | null>(null);
   const onCreateCardRef = useRef<((card: CardItem) => void) | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
@@ -73,10 +63,7 @@ export default function App() {
 
   const fetchCards = async (silent = false) => {
     try {
-      // Le catalogue d'abord : les jalons affichés en dépendent.
       const [jalons, data] = await Promise.all([jalonApi.getAll(), cardApi.getAll()]);
-      // On ne remplace l'état que si le contenu a réellement changé : le polling
-      // passe toutes les quelques secondes et ne doit pas relancer un rendu inutile.
       setCatalogue((prev) => (JSON.stringify(prev) === JSON.stringify(jalons) ? prev : jalons));
       setCards((prev) => (JSON.stringify(prev) === JSON.stringify(data) ? prev : data));
     } catch (e) {
@@ -90,8 +77,6 @@ export default function App() {
     fetchCards();
   }, []);
 
-  // Synchronisation entre postes : les cartes ajoutées ou modifiées sur un poste
-  // (y compris depuis le Suivi Global) doivent apparaître ici sans rechargement.
   useEffect(() => {
     const interval = setInterval(() => {
       fetchCards(true);
@@ -103,8 +88,6 @@ export default function App() {
     sessionStorage.setItem('aic_vue_actuelle_v1', currentPage);
   }, [currentPage]);
 
-  // À la connexion d'un profil restreint (Production), si la vue courante ne lui
-  // est pas accessible, on bascule sur son premier onglet autorisé.
   useEffect(() => {
     if (!session) return;
     const autorises = ongletsAutorises(session.profil.id);
@@ -120,11 +103,7 @@ export default function App() {
     }, 3200);
   };
 
-  // Le profil « Utilisateur » consulte seulement : tous les points d'écriture
-  // sont neutralisés (création, modification de carte, jalons, chaînes…).
   const lectureSeule = session?.profil.id === 'utilisateur';
-  // La fiche carte (CardModal) est en consultation pour « Utilisateur » et
-  // « Production » : ce dernier ne modifie que les quantités d'OF, pas la fiche.
   const ficheLectureSeule = session?.profil.id === 'utilisateur' || session?.profil.id === 'production';
 
   const getStatusLabel = (s: CardStatus) => {
@@ -146,8 +125,6 @@ export default function App() {
     if (ficheLectureSeule) return;
     const { timeStr } = getNowParis();
     if (editingCard) {
-      // PUT explicite : la modale renvoie la carte entière, on ne veut pas qu'un
-      // PATCH recalcule un statut ou un reste à produire côté serveur.
       const updated = await cardApi.replace(editingCard.id, formData);
       setCards((prev) => prev.map((c) => (c.id === editingCard.id ? updated : c)));
       showNotification(`Carte ${updated.modele} mise à jour en réunion à ${timeStr}`);
@@ -155,8 +132,6 @@ export default function App() {
       const created = await cardApi.create(formData);
       setCards((prev) => [created, ...prev]);
       showNotification(`Nouvelle carte ${created.modele} ajoutée au point de production`);
-      // Rappel du Suivi Global : la case vide qui a demandé la création reçoit
-      // la carte créée (affectation dans le tableau après enregistrement).
       onCreateCardRef.current?.(created);
       onCreateCardRef.current = null;
     }
@@ -208,9 +183,6 @@ export default function App() {
     setIsModalOpen(true);
   };
 
-  // Création d'une carte associative déclenchée depuis une case du Suivi Global :
-  // la modale s'ouvre en mode création avec le pré-remplissage voulu, et le
-  // rappel stocké recevra la carte créée pour occuper la case.
   const handleOpenCreateCard = (
     prefill: Partial<CardFormData> | null,
     onCreated: (card: CardItem) => void
@@ -231,35 +203,28 @@ export default function App() {
     }
   };
 
-  // Count of cards requiring review during meeting
   const pendingReviewCount = useMemo(() => {
     return cards.filter((c) => c.statut === 'BLOQUE' || !c.pointFaitAujourdhui || c.statut === 'EN_ATTENTE').length;
   }, [cards]);
 
-  // Unique clients for filter dropdown
   const uniqueClients = useMemo(() => {
     return Array.from(new Set(cards.map((c) => c.client))).sort();
   }, [cards]);
 
-  // Jalons proposés au filtre : ceux qu'au moins une carte porte. Un jalon ajouté
-  // sur une seule carte n'ouvre donc pas une entrée pour toutes les autres.
   const jalonsUtilises = useMemo(() => {
     const codes = new Set(cards.flatMap((c) => (c.jalons ?? []).map((j) => j.code)));
     return catalogue.filter((j) => codes.has(j.code));
   }, [cards, catalogue]);
 
-  // Filter & sort logic
   const filteredCards = useMemo(() => {
     return cards
       .filter((card) => {
-        // Meeting priority filter: show Bloqué, En attente or non reviewed today
         if (isMeetingFilterActive) {
           if (card.statut !== 'BLOQUE' && card.statut !== 'EN_ATTENTE' && card.pointFaitAujourdhui) {
             return false;
           }
         }
 
-        // Search
         if (searchQuery.trim() !== '') {
           const q = searchQuery.toLowerCase().trim();
           const matchClient = card.client.toLowerCase().includes(q);
@@ -270,17 +235,14 @@ export default function App() {
           }
         }
 
-        // Status
         if (statusFilter !== 'ALL' && card.statut !== statusFilter) {
           return false;
         }
 
-        // Client
         if (selectedClient !== 'ALL' && card.client !== selectedClient) {
           return false;
         }
 
-        // OK Prod, Sous-traitance et jalons (la carte porte ses propres jalons)
         if (flagFilter === 'OK_PROD' && !card.okProd) return false;
         if (flagFilter === 'OK_PROD_PENDING' && card.okProd) return false;
         if (
@@ -289,9 +251,6 @@ export default function App() {
         ) {
           return false;
         }
-        // JALON_MISSING:<CODE> cible un code précis. Un jalon est propre à sa
-        // carte : ne pas le porter n'est pas « en attente », la carte est donc
-        // exclue seulement si elle porte le jalon sans l'avoir validé.
         const codeManquant = flagFilter.startsWith(PREFIXE_JALON_MANQUANT)
           ? flagFilter.slice(PREFIXE_JALON_MANQUANT.length)
           : null;
@@ -299,15 +258,12 @@ export default function App() {
           const porte = (card.jalons ?? []).some((j) => j.code === codeManquant);
           if (porte && !getEtatJalon(card, codeManquant).valide) return false;
         }
-        // « Tous les jalons validés » : tous ceux que la carte porte, et au moins un.
         if (flagFilter === 'ALL_VALIDATED') {
           const ports = card.jalons ?? [];
           if (ports.length === 0 || !ports.every((j) => j.valide)) return false;
         }
 
-        // Filtre cliquable depuis les 3 cartes du bandeau (Cartes / Modèles, RDL, Alerte et priorité)
         if (kpiFilter === 'RDL') {
-          // Le filtre n'a de sens que pour les cartes qui portent le jalon RDL.
           if ((card.jalons ?? []).some((j) => j.code === 'RDL') && !getEtatJalon(card, 'RDL').valide) {
             return false;
           }
@@ -332,9 +288,6 @@ export default function App() {
         }
         return sortOrder === 'asc' ? diff : -diff;
       });
-    // `catalogue` fait partie des dépendances : les filtres RDL et
-    // « tous les jalons validés » en dépendent, ils doivent se recalculer
-    // quand un jalon est ajouté ou retiré.
   }, [
     cards,
     catalogue,
@@ -348,8 +301,6 @@ export default function App() {
     sortOrder,
   ]);
 
-  /** Un jalon a été ajouté ou retiré sur une carte : le catalogue partagé (intitulés)
-   *  et les cartes sont rechargés, pour que colonnes, filtres et pastilles suivent. */
   const handleJalonAjoute = async () => {
     const [jalons, data] = await Promise.all([jalonApi.getAll(), cardApi.getAll()]);
     setCatalogue(jalons);
@@ -365,7 +316,6 @@ export default function App() {
     setSession(null);
   };
 
-  // Tant qu'aucun profil n'est choisi, l'application n'est pas affichée.
   if (!session) {
     return <LoginScreen onConnecter={handleConnexion} />;
   }
@@ -377,7 +327,6 @@ export default function App() {
     >
     <JalonCatalogueProvider catalogue={catalogue}>
       <div className="min-h-screen bg-slate-50 flex flex-col text-slate-800">
-      {/* Toast Notification */}
       {notification && (
         <div className="fixed bottom-5 right-5 z-50 bg-slate-900 text-white px-4 py-2.5 rounded-xl shadow-lg text-xs font-semibold flex items-center gap-2 border border-slate-700 animate-in fade-in slide-in-from-bottom-2">
           <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
@@ -385,8 +334,6 @@ export default function App() {
         </div>
       )}
 
-      {/* En-tête « Point Commande Journalière » : réservé à la vue Point Commande.
-          La vue Suivi Global n'affiche que le sélecteur de vue, placé près du tableau. */}
       {currentPage === 'point-journalier' && (
         <Header
           onOpenCreateModal={handleOpenCreate}
@@ -398,8 +345,6 @@ export default function App() {
         />
       )}
 
-      {/* Main Container. La clé change à chaque vue : le conteneur se remonte et
-          l'animation d'apparition rejoue, donnant un fondu au changement de page. */}
       <div key={currentPage} className="flex-1 flex flex-col animate-page-in">
       {currentPage === 'point-journalier' ? (
         cards.length === 0 ? (
@@ -428,7 +373,6 @@ export default function App() {
         ) : (
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <>
-            {/* KPI Summary Cards (Surbrillance au survol & Filtrage au clic) */}
             <StatsOverview
               cards={cards}
               activeFilter={kpiFilter}
@@ -438,7 +382,6 @@ export default function App() {
               pendingReviewCount={pendingReviewCount}
             />
 
-        {/* Bannière de filtrage actif depuis le tableau de bord */}
         {kpiFilter !== 'ALL' && (
           <div className="mb-4 bg-slate-900 text-white rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs animate-in fade-in">
             <div className="flex items-center gap-2.5 text-xs">
@@ -462,17 +405,16 @@ export default function App() {
               onClick={() => setKpiFilter('ALL')}
               className="text-xs font-semibold text-slate-300 hover:text-white bg-slate-800 hover:bg-slate-700 px-3 py-1.5 rounded-lg transition-colors cursor-pointer self-start sm:self-auto flex items-center gap-1.5"
             >
-              <span>✕ Réinitialiser le filtre (Afficher toutes les cartes)</span>
+              <span>× Réinitialiser le filtre (Afficher toutes les cartes)</span>
             </button>
           </div>
         )}
 
-        {/* Section title & quick actions */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-3">
           <div>
             <h2 className="text-base font-bold text-slate-900 tracking-tight flex items-center gap-2">
               <FileSpreadsheet className="w-5 h-5 text-blue-600" />
-              Tableau de Bord • Réunion Journalière d'Atelier
+              Tableau de Bord — Réunion Journalière d'Atelier
             </h2>
             <p className="text-xs text-slate-500">
               Changement immédiat des statuts, arbitrage des blocages et point des ordres de fabrication textile
@@ -490,7 +432,6 @@ export default function App() {
           </div>
         </div>
 
-        {/* Filter Bar */}
         <FilterBar
           searchQuery={searchQuery}
           onSearchChange={setSearchQuery}
@@ -507,7 +448,6 @@ export default function App() {
           jalonsUtilises={jalonsUtilises}
         />
 
-        {/* Interactive Cards Table */}
         <CardTable
           cards={filteredCards}
           onUpdateCard={handleUpdateCard}
@@ -515,7 +455,7 @@ export default function App() {
           onDeleteCard={handleDeleteCard}
           onOpenCreate={handleOpenCreate}
         />
-          </>
+          </> )
         </main>
         )
       ) : currentPage === 'suivi-global' ? (
@@ -541,7 +481,7 @@ export default function App() {
             onDeconnexion={handleDeconnexion}
           />
         </main>
-      ) : (
+      ) : currentPage === 'tableaux-ofs' ? (
         <main className="flex-1 w-full">
           <TableauxOFsView
             cards={cards}
@@ -555,13 +495,16 @@ export default function App() {
             }}
           />
         </main>
+      ) : (
+        <main className="flex-1 w-full">
+          <DeveloppementView onChangePage={setCurrentPage} />
+        </main>
       )}
       </div>
 
-      {/* Footer */}
       <footer className="mt-auto py-4 border-t border-slate-200 bg-white text-center text-xs text-slate-400">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>Point Commande Journalière • Confection Textile & Haut de Gamme</span>
+          <span>Point Commande Journalière — Confection Textile & Haut de Gamme</span>
           <span className="flex items-center gap-1 text-slate-500 font-medium">
             <Check className="w-3.5 h-3.5 text-emerald-600" />
             Suivi d'Atelier de Fabrication
@@ -569,7 +512,6 @@ export default function App() {
         </div>
       </footer>
 
-      {/* Create / Edit Modal (Representation) */}
       <CardModal
         isOpen={isModalOpen}
         onClose={() => {
@@ -590,4 +532,3 @@ export default function App() {
     </ProfilProvider>
   );
 }
-

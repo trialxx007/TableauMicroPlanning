@@ -1,9 +1,9 @@
 import React from 'react';
-import { ClipboardList, TableProperties, Table2, History } from 'lucide-react';
+import { ClipboardList, TableProperties, Table2, History, SquareKanban } from 'lucide-react';
 import { ongletsAutorises } from '@/src/utils/auth.ts';
 import { useProfil } from '@/src/context/ProfilContext.tsx';
 
-export type AppPage = 'point-journalier' | 'suivi-global' | 'tableaux-ofs' | 'historique';
+export type AppPage = 'point-journalier' | 'suivi-global' | 'tableaux-ofs' | 'historique' | 'developpement';
 
 interface ViewSwitcherProps {
   currentPage: AppPage;
@@ -57,6 +57,15 @@ const TABS: TabConfig[] = [
     activeIcon: 'bg-slate-700 text-white shadow-md shadow-slate-700/30',
     idleIcon: 'bg-slate-100 text-slate-500 group-hover:bg-slate-700 group-hover:text-white',
     activeLabel: 'text-slate-700',
+  },
+  {
+    page: 'developpement',
+    label: 'Développement',
+    icon: <SquareKanban className="w-4 h-4" />,
+    title: 'Tableau kanban du développement : tâches, colonnes et glisser-déposer',
+    activeIcon: 'bg-violet-600 text-white',
+    idleIcon: 'bg-violet-50 text-violet-500 group-hover:bg-violet-600 group-hover:text-white',
+    activeLabel: 'text-violet-700',
   },
 ];
 
