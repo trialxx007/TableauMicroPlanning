@@ -7,8 +7,49 @@
 
 export type ProfilId = 'utilisateur' | 'resp-planning' | 'production' | 'direction';
 
-/** Onglets de l'application (miroir de `AppPage` de ViewSwitcher). */
-export type OngletId = 'point-journalier' | 'suivi-global' | 'tableaux-ofs' | 'historique' | 'developpement';
+export type OngletId =
+  | 'point-journalier'
+  | 'suivi-global'
+  | 'tableaux-ofs'
+  | 'historique'
+  | 'developpement';
+
+/** Miroir exact de `AppPage` (ViewSwitcher) : désynchronisation = onglet perdu. */
+const ONGLETS: readonly OngletId[] = [
+  'point-journalier',
+  'suivi-global',
+  'tableaux-ofs',
+  'historique',
+  'developpement',
+];
+
+/**
+ * Onglets autorisés par profil. Toute vue exportée par `AppPage` doit être
+ * listée ici pour au moins un profil, sinon elle reste inaccessible.
+ * - Production : uniquement les OFs.
+ * - Resp Planning : vues métier + Développement (kanban).
+ * - Direction : tout, y compris l'historique et le Développement.
+ * - Utilisateur : les trois vues métier.
+ */
+const ONGLETS_PAR_PROFIL: Record<ProfilId, readonly OngletId[]> = {
+  utilisateur: ['point-journalier', 'suivi-global', 'tableaux-ofs'],
+  'resp-planning': ['point-journalier', 'suivi-global', 'tableaux-ofs', 'developpement'],
+  production: ['tableaux-ofs'],
+  direction: ['point-journalier', 'suivi-global', 'tableaux-ofs', 'historique', 'developpement'],
+};
+
+export function ongletsAutorises(profilId: ProfilId): OngletId[] {
+  return [...ONGLETS_PAR_PROFIL[profilId]];
+}
+
+/**
+ * Onglets déclarés (AppPage) sans aucun profil autorisé : signale une vue
+ * inaccessible. Utilisé par la vérification automatisée.
+ */
+export function ongletsSansAcces(): OngletId[] {
+  const attribues = new Set(Object.values(ONGLETS_PAR_PROFIL).flat());
+  return ONGLETS.filter((onglet) => !attribues.has(onglet));
+}
 
 export interface Profil {
   id: ProfilId;
@@ -69,19 +110,7 @@ export function profilParId(id: ProfilId): Profil {
   return PROFILS.find((p) => p.id === id) ?? PROFILS[0];
 }
 
-/**
- * Onglets autorisés par profil. Le profil « Production » ne travaille que sur
- * les OFs : il n'a accès qu'à la vue « Tableaux des OFs ». La « Direction »
- * dispose en plus du journal des modifications. Les autres profils ont les
- * trois vues métier.
- */
-export function ongletsAutorises(profilId: ProfilId): OngletId[] {
-  if (profilId === 'production') return ['tableaux-ofs'];
-  if (profilId === 'direction') {
-    return ['point-journalier', 'suivi-global', 'tableaux-ofs', 'historique'];
-  }
-  return ['point-journalier', 'suivi-global', 'tableaux-ofs'];
-}
+
 
 export function motDePasseValide(saisie: string): boolean {
   return saisie.trim() === MOT_DE_PASSE_PROFILS;

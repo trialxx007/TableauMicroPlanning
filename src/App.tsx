@@ -39,7 +39,10 @@ export default function App() {
       sauvegarde === 'developpement'
         ? sauvegarde
         : 'point-journalier';
-    const autorises = session ? ongletsAutorises(session.profil.id) : null;
+    // La session est relue ici, pas au rendu suivant : sinon le premier écran
+    // afficherait un onglet interdit (ex. Production sur « Point Commande »).
+    const sessionInitiale = lireSession();
+    const autorises = sessionInitiale ? ongletsAutorises(sessionInitiale.profil.id) : null;
     return autorises && !autorises.includes(memoire) ? autorises[0] : memoire;
   });
   const [cards, setCards] = useState<CardItem[]>([]);
@@ -89,9 +92,11 @@ export default function App() {
   }, [currentPage]);
 
   useEffect(() => {
+    // La redirection à la connexion est faite par `handleConnexion` : ce garde-fou
+    // ne couvre que la navigation interne (session restaurée ou profil modifié).
     if (!session) return;
     const autorises = ongletsAutorises(session.profil.id);
-    if (!autorises.includes(currentPage)) {
+    if (!autorises.some((onglet) => onglet === currentPage)) {
       setCurrentPage(autorises[0]);
     }
   }, [session, currentPage]);
@@ -309,6 +314,13 @@ export default function App() {
 
   const handleConnexion = (profil: Profil) => {
     setSession(enregistrerSession(profil.id));
+    // Redirection immédiate vers le premier onglet autorisé : sans cela, le profil
+    // Production resterait sur « Point Commande » jusqu'au prochain rendu.
+    const autorises = ongletsAutorises(profil.id);
+    if (autorises.length > 0) {
+      setCurrentPage(autorises[0]);
+      sessionStorage.setItem('aic_vue_actuelle_v1', autorises[0]);
+    }
   };
 
   const handleDeconnexion = () => {
@@ -497,7 +509,11 @@ export default function App() {
         </main>
       ) : (
         <main className="flex-1 w-full">
-          <DeveloppementView onChangePage={setCurrentPage} />
+          <DeveloppementView
+            onChangePage={setCurrentPage}
+            profil={session.profil}
+            onDeconnexion={handleDeconnexion}
+          />
         </main>
       )}
       </div>

@@ -13,12 +13,16 @@ import {
 } from '../types/kanban.ts';
 import { chargerKanban, nouvelId, sauverKanban } from '../utils/kanbanStorage.ts';
 import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
+import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
 import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
 import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { Profil } from '@/src/utils/auth.ts';
 import { Calendar, Check, Clock, GitMerge, GripVertical, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
 
 interface DeveloppementViewProps {
   onChangePage: (page: AppPage) => void;
+  profil: Profil;
+  onDeconnexion: () => void;
 }
 
 /** Élément en cours de glissement (carte ou colonne). */
@@ -49,7 +53,7 @@ function clamp(v: number, min: number, max: number): number {
  * développement propres à cet onglet), glisser-déposer natif, tout persisté
  * dans le localStorage. Indépendante des cartes de production.
  */
-export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePage }) => {
+export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePage, profil, onDeconnexion }) => {
   const [data, setData] = useState<KanbanData>(() => chargerKanban());
   const [drag, setDrag] = useState<DragInfo | null>(null);
   const [colonneCible, setColonneCible] = useState<string | null>(null);
@@ -1406,6 +1410,11 @@ onDragStart={(e) => dragCarte(e, carte.id)}
               {data.cartes.length} tâche{data.cartes.length > 1 ? 's' : ''} • {colonnes.length}{' '}
               colonne{colonnes.length > 1 ? 's' : ''}
             </span>
+            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+          </div>
+
+          <div className="flex md:hidden justify-end items-center">
+            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
           </div>
         </div>
       </div>
