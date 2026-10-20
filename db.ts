@@ -88,7 +88,20 @@ function initSchema(conn: DatabaseSync): void {
       maj_le      TEXT NOT NULL
     );
 
+    -- Journal des modifications (audit). Une ligne par écriture faite depuis
+    -- l'application, avec le profil qui l'a réalisée et l'horodatage : sert
+    -- l'onglet « Historique des modifications » de la Direction.
+    CREATE TABLE IF NOT EXISTS journal_modifications (
+      id      INTEGER PRIMARY KEY AUTOINCREMENT,
+      at      TEXT NOT NULL,
+      profil  TEXT NOT NULL,
+      action  TEXT NOT NULL,
+      cible   TEXT NOT NULL,
+      details TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_card_jalons_card ON card_jalons(card_id);
+    CREATE INDEX IF NOT EXISTS idx_journal_at ON journal_modifications(at DESC);
   `);
 
   // Le classement des jalons par grandeur (vert / bleu) est arrivé après la création
@@ -679,4 +692,105 @@ export function setSuiviGlobalLayout(rows: unknown[]): void {
     INSERT INTO suivi_global_layout (id, data, maj_le) VALUES ('global', ?, ?)
     ON CONFLICT(id) DO UPDATE SET data = excluded.data, maj_le = excluded.maj_le
   `).run(JSON.stringify({ rows }), now());
+}
+
+/* ------------------------------------------------------- journal (audit) */
+
+/** Une entrée du journal des modifications, telle que servie à la Direction. */
+export interface JournalEntree {
+  id: number;
+  /** Horodatage ISO (UTC) de l'écriture. */
+  at: string;
+  /** Identifiant du profil auteur : utilisateur, resp-planning, production, direction. */
+  profil: string;
+  /** Verbe de l'action : carte.creee, carte.modifiee, of.quantite, jalon.ajoute… */
+  action: string;
+  /** Objet visé, lisible : « CRD-005 · Modèle X ». */
+  cible: string;
+  /** Détail optionnel (ancienne → nouvelle valeur, champs touchés…). */
+  details?: string;
+}
+
+/** Ajoute une entrée au journal. Un échec de journalisation ne doit jamais
+ *  faire échouer l'écriture métier : l'erreur est avalée. */
+export function journaliser(entree: {
+  profil: string;
+  action: string;
+  cible: string;
+  details?: string;
+}): void {
+  try {
+    getDb()
+      .prepare(
+        'INSERT INTO journal_modifications (at, profil, action, cible, details) VALUES (?, ?, ?, ?, ?)'
+      )
+      .run(now(), entree.profil, entree.action, entree.cible, entree.details ?? null);
+  } catch (e) {
+    console.error('Erreur journalisation', e);
+  }
+}
+
+/** Filtres de lecture du journal. Tous optionnels. */
+export interface FiltresJournal {
+  profil?: string;
+  /** Borne basse incluse, format AAAA-MM-JJ (fuseau du site). */
+  dateMin?: string;
+  /** Borne haute incluse, format AAAA-MM-JJ (fuseau du site). */
+  dateMax?: string;
+  limit?: number;
+}
+
+/**
+ * Journal antéchronologique (plus récent d'abord). Les bornes de date sont des
+ * jours calendaires sur le fuseau du site : `at` est en UTC, on convertit donc
+ * côté SQL avec le décalage fixe GMT+3 pour comparer des jours locaux.
+ */
+export function listerJournal(filtres: FiltresJournal = {}): JournalEntree[] {
+  const conn = getDb();
+  const conditions: string[] = [];
+  const params: (string | number)[] = [];
+
+  if (filtres.profil) {
+    conditions.push('profil = ?');
+    params.push(filtres.profil);
+  }
+  // date(at, '+3 hours') ramène l'horodatage UTC sur le jour local du site.
+  if (filtres.dateMin) {
+    conditions.push("date(at, '+3 hours') >= date(?)");
+    params.push(filtres.dateMin);
+  }
+  if (filtres.dateMax) {
+    conditions.push("date(at, '+3 hours') <= date(?)");
+    params.push(filtres.dateMax);
+  }
+
+  const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+  const limite = Math.min(Math.max(Number(filtres.limit) || 500, 1), 5000);
+
+  const rows = conn
+    .prepare(
+      `SELECT id, at, profil, action, cible, details FROM journal_modifications ${where} ORDER BY at DESC, id DESC LIMIT ?`
+    )
+    .all(...params, limite) as {
+    id: number;
+    at: string;
+    profil: string;
+    action: string;
+    cible: string;
+    details: string | null;
+  }[];
+
+  return rows.map((r) => ({
+    id: r.id,
+    at: r.at,
+    profil: r.profil,
+    action: r.action,
+    cible: r.cible,
+    ...(r.details != null ? { details: r.details } : {}),
+  }));
+}
+
+/** Vide le journal des modifications (les lignes, pas la table). */
+export function viderJournal(): void {
+  getDb().prepare('DELETE FROM journal_modifications').run();
 }

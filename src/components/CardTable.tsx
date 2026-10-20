@@ -15,6 +15,7 @@ import {
 } from '../utils/jalons.ts';
 import { categorieParCode } from '../data/mockJalons.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
+import { useLectureSeule } from '../context/ProfilContext.tsx';
 import { getSemaineISO } from '../utils/dateFrance.ts';
 import {
   Check,
@@ -78,6 +79,7 @@ export const CardTable: React.FC<CardTableProps> = ({
   onOpenCreate,
 }) => {
   const catalogue = useJalonCatalogue();
+  const lectureSeule = useLectureSeule();
   const [copiedRef, setCopiedRef] = useState<string | null>(null);
   const [editingFinieId, setEditingFinieId] = useState<string | null>(null);
   const [inputFinieValue, setInputFinieValue] = useState<string>('');
@@ -217,14 +219,18 @@ export const CardTable: React.FC<CardTableProps> = ({
           Aucune carte ne correspond aux critères
         </h3>
         <p className="text-xs text-slate-500 max-w-sm mx-auto mb-4">
-          Ajustez vos filtres de recherche ou ajoutez une nouvelle carte de commande au point journalier.
+          {lectureSeule
+            ? 'Aucune carte ne correspond aux filtres de recherche.'
+            : 'Ajustez vos filtres de recherche ou ajoutez une nouvelle carte de commande au point journalier.'}
         </p>
-        <button
-          onClick={onOpenCreate}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs cursor-pointer"
-        >
-          Ajouter une carte
-        </button>
+        {!lectureSeule && (
+          <button
+            onClick={onOpenCreate}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs cursor-pointer"
+          >
+            Ajouter une carte
+          </button>
+        )}
       </div>
     );
   }
@@ -238,36 +244,21 @@ export const CardTable: React.FC<CardTableProps> = ({
               <th className="py-3.5 px-4">Client</th>
               <th className="py-3.5 px-4">Nom</th>
               <th className="py-3.5 px-4">
-                Batch
-                {/* Le RDL a une colonne à lui, hors du bloc des catégories : son
-                    intitulé de groupe est donc rappelé sur sa propre pastille. */}
-                {jalonRDLPresent && (
-                  <span className="ml-1 font-normal normal-case inline-flex items-center gap-1">
-                    & {codeRDL}
-                    <span
-                      className={`w-1.5 h-1.5 rounded-full inline-block ${
-                        enteteRDL?.categorie === 'NOMENCLATURE' ? 'bg-emerald-500' : 'bg-blue-500'
-                      }`}
-                    />
-                  </span>
-                )}
+                <span className="inline-flex items-baseline gap-1.5">
+                  <span>Saison</span>
+                  {jalonRDLPresent && (
+                    <>
+                      <span className="text-slate-300 font-normal">&</span>
+                      <span>{codeRDL}</span>
+                    </>
+                  )}
+                </span>
               </th>
-              <th className="py-3.5 px-4 align-top">
-                {/* Une seule colonne : nomenclatures (vert) en haut, statuts (bleu)
-                    en dessous. Les intitulés complets restent dans l'infobulle. */}
-                <div className="flex flex-col items-center gap-1">
-                  <span className="flex items-center gap-1.5 normal-case tracking-normal">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 inline-block" />
-                    <span className="font-semibold">
-                      Nomenclatures
-                    </span>
-                    <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" />
-                    <span className="font-semibold">
-                      & Statuts
-                    </span>
-                  </span>
+              <th className="py-3.5 px-4">
+                <span className="inline-flex items-center gap-1.5">
+                  <span>Nomenclatures & Statuts</span>
                   <span
-                    className="cursor-help text-slate-400 hover:text-slate-600 flex items-center justify-center gap-1"
+                    className="cursor-help text-slate-400 hover:text-slate-600 normal-case tracking-normal"
                     title={
                       enteteComplet.length > 0
                         ? enteteComplet
@@ -279,9 +270,9 @@ export const CardTable: React.FC<CardTableProps> = ({
                     <HelpCircle className="w-3 h-3" />
                     <span className="sr-only">Détail des nomenclatures et des statuts</span>
                   </span>
-                </div>
+                </span>
               </th>
-              <th className="py-3.5 px-4 text-center">
+              <th className="py-3.5 px-4">
                 <span className="inline-flex items-center gap-1">
                   OK Prod
                   <span
@@ -292,19 +283,19 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </span>
                 </span>
               </th>
-              <th className="py-3.5 px-4 text-right">Qté Demandée</th>
-              <th className="py-3.5 px-4 text-center">Qté Finie (Point)</th>
-              <th className="py-3.5 px-4 text-right">Reste à Produire</th>
-              <th className="py-3.5 px-4 text-center min-w-[140px]">Avancement</th>
-              <th className="py-3.5 px-4 text-center">Statut</th>
-              <th className="py-3.5 px-4 text-right">Actions</th>
+              <th className="py-3.5 px-4">Qté demandée (Point)</th>
+              <th className="py-3.5 px-4">Qté finie</th>
+              <th className="py-3.5 px-4">Reste à produire</th>
+              <th className="py-3.5 px-4">Avancement</th>
+              <th className="py-3.5 px-4">Statut</th>
+              <th className="py-3.5 px-4">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 text-sm">
             {cards.map((card) => {
               const statusInfo = getStatusBadge(card.statut);
               const jalons = jalonsParCarte.get(card.id) ?? [];
-              // RDL a sa propre pastille dans la colonne « Batch », on l'exclut
+              // RDL a sa propre pastille dans la colonne « Saison », on l'exclut
               // donc de la colonne Jalons pour ne pas la montrer deux fois.
               const jRDL = jalons.find((j) => j.code === 'RDL');
               const autresJalons = jalons.filter((j) => j.code !== 'RDL');
@@ -354,9 +345,9 @@ export const CardTable: React.FC<CardTableProps> = ({
 
                   {/* Nom */}
                   <td
-                    onClick={() => onEditCard(card)}
-                    className="py-3.5 px-4 max-w-[220px] cursor-pointer group/cell hover:bg-blue-50/60 transition-colors"
-                    title="Cliquer pour ouvrir la carte et afficher toutes ses informations"
+                    onClick={lectureSeule ? undefined : () => onEditCard(card)}
+                    className={`py-3.5 px-4 max-w-[220px] group/cell ${lectureSeule ? '' : 'cursor-pointer hover:bg-blue-50/60'} transition-colors`}
+                    title={lectureSeule ? card.modele : "Cliquer pour ouvrir la carte et afficher toutes ses informations"}
                   >
                     <div
                       className="font-semibold text-slate-900 group-hover/cell:text-blue-700 transition-colors truncate"
@@ -374,36 +365,37 @@ export const CardTable: React.FC<CardTableProps> = ({
                     )}
                   </td>
 
-                  {/* Batch & RDL */}
+                  {/* Saison & RDL */}
                   <td className="py-3.5 px-4 whitespace-nowrap">
-                    <div
-                      onClick={() => onEditCard(card)}
-                      className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-100/90 hover:bg-blue-100 hover:text-blue-800 text-xs font-mono font-medium text-slate-700 transition-colors cursor-pointer"
-                      title="Cliquer pour ouvrir la carte"
-                    >
-                      <span>{card.batch}</span>
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          handleCopyRef(card.batch);
-                        }}
-                        title="Copier le batch"
-                        className="p-0.5 hover:bg-slate-200/80 rounded transition-colors text-slate-400 hover:text-blue-700 cursor-pointer"
+                    <div className="flex flex-col items-start gap-1">
+                      <div
+                        onClick={lectureSeule ? undefined : () => onEditCard(card)}
+                        className={`inline-flex items-center gap-1.5 px-2 py-1 rounded bg-slate-100/90 text-xs font-mono font-medium text-slate-700 transition-colors ${lectureSeule ? '' : 'hover:bg-blue-100 hover:text-blue-800 cursor-pointer'}`}
+                        title={lectureSeule ? card.batch : "Cliquer pour ouvrir la carte"}
                       >
-                        {copiedRef === card.batch ? (
-                          <CheckCheck className="w-3 h-3 text-emerald-600" />
-                        ) : (
-                          <Copy className="w-3 h-3" />
-                        )}
-                      </button>
-                    </div>
+                        <span>{card.batch}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleCopyRef(card.batch);
+                          }}
+                          title="Copier la saison"
+                          className="p-0.5 hover:bg-slate-200/80 rounded transition-colors text-slate-400 hover:text-blue-700 cursor-pointer"
+                        >
+                          {copiedRef === card.batch ? (
+                            <CheckCheck className="w-3 h-3 text-emerald-600" />
+                          ) : (
+                            <Copy className="w-3 h-3" />
+                          )}
+                        </button>
+                      </div>
 
-                    {/* Jalon de réunion (RDL) — compact au repos, liste box au survol.
-                        Le bloc disparaît si le catalogue ne contient plus de jalon RDL.
-                        L'icône d'alerte est en absolu : le texte ne se décale pas. */}
-                    {jRDL && (
-                      <div className="mt-1 flex justify-center">
+                      {/* Jalon de réunion (RDL) — compact au repos, liste box au
+                          survol. Aligné sur la même marge gauche que la saison. Le
+                          bloc disparaît si le catalogue ne contient plus de jalon RDL.
+                          L'icône d'alerte est en absolu : le texte ne se décale pas. */}
+                      {jRDL && (
                         <span className="group/j relative inline-grid" title={detailRDL}>
                           <span
                             className={`col-start-1 row-start-1 relative z-0 inline-flex items-center justify-center min-w-[64px] px-1.5 py-0.5 rounded border text-[10px] font-semibold ${themeRDL?.pastille ?? ''} ${
@@ -422,6 +414,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                           </span>
                           <select
                             value={jRDL.etat}
+                            disabled={lectureSeule}
                             onChange={(e) =>
                               onUpdateCard(
                                 card.id,
@@ -430,7 +423,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                             }
                             aria-label={`État du jalon ${jRDL.code}`}
                             title={detailRDL}
-                            className={`col-start-1 row-start-1 relative z-10 w-full cursor-pointer rounded border px-1 text-[10px] font-semibold opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto ${themeRDL?.pastille ?? ''}`}
+                            className={`col-start-1 row-start-1 relative z-10 w-full rounded border px-1 text-[10px] font-semibold opacity-0 pointer-events-none ${lectureSeule ? '' : 'cursor-pointer group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto'} ${themeRDL?.pastille ?? ''}`}
                           >
                             <option value="EN_ATTENTE">En attente</option>
                             <option value="SEMAINE">Semaine</option>
@@ -439,8 +432,8 @@ export const CardTable: React.FC<CardTableProps> = ({
                             <option value="VALIDE">Validé</option>
                           </select>
                         </span>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </td>
 
                   {/* Nomenclatures & Statuts — une seule cellule pour tous les jalons hors RDL.
@@ -480,6 +473,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                                   </span>
                                   <select
                                     value={j.etat}
+                                    disabled={lectureSeule}
                                     onChange={(e) =>
                                       onUpdateCard(
                                         card.id,
@@ -488,7 +482,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                                     }
                                     aria-label={`État du jalon ${j.code}`}
                                     title={detail}
-                                    className={`col-start-1 row-start-1 relative z-10 w-full cursor-pointer rounded border px-1 text-[11px] font-bold opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto ${colors}`}
+                                    className={`col-start-1 row-start-1 relative z-10 w-full rounded border px-1 text-[11px] font-bold opacity-0 pointer-events-none ${lectureSeule ? '' : 'cursor-pointer group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto'} ${colors}`}
                                   >
                                     <option value="EN_ATTENTE">En attente</option>
                                     <option value="SEMAINE">Semaine</option>
@@ -535,6 +529,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                                   </span>
                                   <select
                                     value={j.etat}
+                                    disabled={lectureSeule}
                                     onChange={(e) =>
                                       onUpdateCard(
                                         card.id,
@@ -543,7 +538,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                                     }
                                     aria-label={`État du jalon ${j.code}`}
                                     title={detail}
-                                    className={`col-start-1 row-start-1 relative z-10 w-full cursor-pointer rounded border px-1 text-[11px] font-bold opacity-0 pointer-events-none group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto ${colors}`}
+                                    className={`col-start-1 row-start-1 relative z-10 w-full rounded border px-1 text-[11px] font-bold opacity-0 pointer-events-none ${lectureSeule ? '' : 'cursor-pointer group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto'} ${colors}`}
                                   >
                                     <option value="EN_ATTENTE">En attente</option>
                                     <option value="SEMAINE">Semaine</option>
@@ -561,22 +556,24 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* OK Prod */}
-                  <td className="py-3.5 px-4 whitespace-nowrap text-center">
-                    <div className="flex flex-col items-center gap-1">
+                  <td className="py-3.5 px-4 whitespace-nowrap">
+                    <div className="flex flex-col items-start gap-1">
                       {card.okProd ? (
                         <>
                           <button
                             onClick={() =>
-                              autoOkProd ? undefined : onUpdateCard(card.id, { okProd: false })
+                              autoOkProd || lectureSeule ? undefined : onUpdateCard(card.id, { okProd: false })
                             }
-                            disabled={autoOkProd}
+                            disabled={autoOkProd || lectureSeule}
                             title={
                               autoOkProd
                                 ? 'OK Prod auto validé : DT, TC, FT et RDL sont validés'
+                                : lectureSeule
+                                ? 'OK Prod validé en RDL'
                                 : 'OK Prod validé en RDL - Cliquer pour révoquer'
                             }
                             className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-800 border border-emerald-300 transition-colors ${
-                              autoOkProd ? 'cursor-default' : 'hover:bg-emerald-100 cursor-pointer'
+                              autoOkProd || lectureSeule ? 'cursor-default' : 'hover:bg-emerald-100 cursor-pointer'
                             }`}
                           >
                             <CheckCheck className="w-3.5 h-3.5 text-emerald-600" />
@@ -590,6 +587,11 @@ export const CardTable: React.FC<CardTableProps> = ({
                             {ofCount > 0 ? `${ofCount} OF dans la carte` : 'Gérer les OF'}
                           </button>
                         </>
+                      ) : lectureSeule ? (
+                        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-50 text-slate-500 border border-slate-200">
+                          <CheckCheck className="w-3.5 h-3.5 text-slate-400" />
+                          <span>OK Prod en attente</span>
+                        </span>
                       ) : (
                         <button
                           onClick={() =>
@@ -613,9 +615,9 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Qté Demandée */}
-                  <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                  <td className="py-3.5 px-4 whitespace-nowrap">
                     {editingDemandeeId === card.id ? (
-                      <div className="flex items-center justify-end gap-1">
+                      <div className="flex items-center justify-start gap-1">
                         <input
                           type="number"
                           min="1"
@@ -645,9 +647,9 @@ export const CardTable: React.FC<CardTableProps> = ({
                       </div>
                     ) : (
                       <button
-                        onClick={() => handleStartEditDemandee(card)}
-                        className="font-semibold text-slate-900 text-sm hover:text-blue-600 px-2 py-0.5 rounded hover:bg-slate-100 transition-colors cursor-pointer"
-                        title="Cliquer pour modifier la quantité demandée"
+                        onClick={lectureSeule ? undefined : () => handleStartEditDemandee(card)}
+                        className={`font-semibold text-slate-900 text-sm px-2 py-0.5 rounded transition-colors ${lectureSeule ? 'cursor-default' : 'hover:text-blue-600 hover:bg-slate-100 cursor-pointer'}`}
+                        title={lectureSeule ? undefined : "Cliquer pour modifier la quantité demandée"}
                       >
                         {card.quantiteDemandee.toLocaleString('fr-FR')}
                       </button>
@@ -655,9 +657,9 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Qté Finie (Point journalier) */}
-                  <td className="py-3.5 px-4 text-center whitespace-nowrap">
+                  <td className="py-3.5 px-4 whitespace-nowrap">
                     {editingFinieId === card.id ? (
-                      <div className="flex items-center justify-center gap-1">
+                      <div className="flex items-center justify-start gap-1">
                         <input
                           type="number"
                           min="0"
@@ -689,14 +691,14 @@ export const CardTable: React.FC<CardTableProps> = ({
                     ) : (
                       <div className="flex items-center justify-center gap-1">
                         <button
-                          onClick={() => handleStartEditFinie(card)}
-                          className="font-bold text-slate-900 hover:text-blue-600 px-2 py-0.5 rounded hover:bg-slate-100 transition-colors cursor-pointer text-sm"
-                          title="Cliquer pour saisir la quantité finie"
+                          onClick={lectureSeule ? undefined : () => handleStartEditFinie(card)}
+                          className={`font-bold text-slate-900 px-2 py-0.5 rounded transition-colors text-sm ${lectureSeule ? 'cursor-default' : 'hover:text-blue-600 hover:bg-slate-100 cursor-pointer'}`}
+                          title={lectureSeule ? undefined : "Cliquer pour saisir la quantité finie"}
                         >
                           {card.quantiteFinie.toLocaleString('fr-FR')}
                         </button>
 
-                        {!isFinished && (
+                        {!isFinished && !lectureSeule && (
                           <div className="flex items-center opacity-0 group-hover:opacity-100 transition-opacity">
                             <button
                               onClick={() => handleQuickAdd(card, 10)}
@@ -719,7 +721,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Reste à Produire */}
-                  <td className="py-3.5 px-4 text-right whitespace-nowrap">
+                  <td className="py-3.5 px-4 whitespace-nowrap">
                     {isFinished ? (
                       <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                         <Check className="w-3 h-3 stroke-[3]" />
@@ -757,17 +759,18 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Statut & Point Réunion */}
-                  <td className="py-3.5 px-4 text-center whitespace-nowrap">
-                    <div className="flex flex-col items-center gap-1">
+                  <td className="py-3.5 px-4 whitespace-nowrap">
+                    <div className="flex flex-col items-start gap-1">
                       <select
                         value={card.statut}
+                        disabled={lectureSeule}
                         onChange={(e) =>
                           onUpdateCard(card.id, {
                             statut: e.target.value as CardStatus,
                           })
                         }
-                        className={`text-xs font-semibold rounded-lg px-2.5 py-1 border transition-colors cursor-pointer ${statusInfo.bg}`}
-                        title="Modifier le statut de la carte lors de la réunion"
+                        className={`text-xs font-semibold rounded-lg px-2.5 py-1 border transition-colors ${lectureSeule ? '' : 'cursor-pointer'} ${statusInfo.bg}`}
+                        title={lectureSeule ? 'Statut de la carte' : "Modifier le statut de la carte lors de la réunion"}
                       >
                         <option value="EN_COURS">En cours</option>
                         <option value="EN_ATTENTE">En attente</option>
@@ -798,22 +801,26 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Actions */}
-                  <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                    <div className="flex items-center justify-end gap-1.5">
-                      <button
-                        onClick={() => onEditCard(card)}
-                        className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
-                        title="Ouvrir la carte (répartition des OF, détails...)"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        onClick={() => onDeleteCard(card.id)}
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
-                        title="Supprimer la carte"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                  <td className="py-3.5 px-4 whitespace-nowrap">
+                    <div className="flex items-center justify-start gap-1.5">
+                      {!lectureSeule && (
+                        <button
+                          onClick={() => onEditCard(card)}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-md transition-colors cursor-pointer"
+                          title="Ouvrir la carte (répartition des OF, détails...)"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {!lectureSeule && (
+                        <button
+                          onClick={() => onDeleteCard(card.id)}
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                          title="Supprimer la carte"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -856,7 +863,7 @@ export const CardTable: React.FC<CardTableProps> = ({
           ))}
         </div>
         <div className="text-[11px] text-slate-500">
-          💡 Cliquez sur le nom ou le batch d'un modèle pour <strong>ouvrir sa carte</strong>
+          💡 Cliquez sur le nom ou la saison d'un modèle pour <strong>ouvrir sa carte</strong>
         </div>
       </div>
     </div>

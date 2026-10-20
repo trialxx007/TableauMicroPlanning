@@ -31,6 +31,9 @@ import {
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
 import { useInspectionsParCarte } from '../context/InspectionsParCarteContext.tsx';
 import { ViewSwitcher, AppPage } from './ViewSwitcher.tsx';
+import { SessionBadge } from './SessionBadge.tsx';
+import { Profil } from '../utils/auth.ts';
+import { useLectureSeule } from '../context/ProfilContext.tsx';
 import { suiviGlobalApi, type SuiviGlobalLayoutRow } from '../services/api.ts';
 import {
   LigneTableSuivi,
@@ -61,6 +64,8 @@ interface SuiviGlobalViewProps {
     prefillData: Partial<CardFormData> | null,
     onCreatedCallback: (createdCard: CardItem) => void
   ) => void;
+  profil: Profil;
+  onDeconnexion: () => void;
 }
 
 interface ActiveSlotPicker {
@@ -372,7 +377,10 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   onUpdateCard,
   onOpenCardModal,
   onOpenCreateCard,
+  profil,
+  onDeconnexion,
 }) => {
+  const lectureSeule = useLectureSeule();
   const catalogue = useJalonCatalogue();
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
@@ -627,6 +635,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       lancementIndex?: number,
       slotIndex = 0
     ) => {
+      if (lectureSeule) return;
       // Affectation purement manuelle : OK Prod ne déplace jamais une carte ici.
       // Une carte reste unique par groupe (planning / expédition) : si elle est
       // déjà posée ailleurs dans le MÊME groupe, elle en est retirée avant
@@ -665,6 +674,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   // Met à jour l'expédition OF par OF de la carte posée dans la case Expédition.
   const majExpeditionOfs = useCallback(
     (rowId: string, slotIndex: number, expeditionOfs: ExpeditionOF[]) => {
+      if (lectureSeule) return;
       setRows((prev) =>
         prev.map((r) => {
           if (r.id !== rowId) return r;
@@ -685,6 +695,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   // Le modèle reste dans tous les cas dans « Modèle en cours ».
   const handleEnvoyerExpedition = useCallback(
     (rowId: string, blocIndex: number) => {
+      if (lectureSeule) return;
       const ligne = rows.find((r) => r.id === rowId);
       const slot = ligne?.modeleEnCoursCards[blocIndex];
       const cardId = slot?.cardId;
@@ -720,6 +731,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   // « Modèle en cours » et « Expédition ».
   const handleSwapCases = useCallback(
     (from: CoordCase, to: CoordCase) => {
+      if (lectureSeule) return;
       setRows((prev) => {
         const carteFrom = lireCarteEnCase(prev, from);
         const carteTo = lireCarteEnCase(prev, to);
@@ -770,6 +782,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
     blocIndex: number,
     maj: (bloc: InspectionBloc) => InspectionBloc
   ) => {
+    if (lectureSeule) return;
     setRows((prev) =>
       prev.map((r) => {
         if (r.id !== rowId) return r;
@@ -795,6 +808,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
   // --- Renommage d'une chaîne --------------------------------------------
   const renommerChaine = (rowId: string, nouveauNom: string) => {
+    if (lectureSeule) return;
     setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, nom: nouveauNom } : r)));
   };
 
@@ -802,21 +816,23 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   const [nouvelleChaineOuverte, setNouvelleChaineOuverte] = useState(false);
   const creerChaine = useCallback(
     (categorieId: 'BRODERIE_MAIN' | 'CONFECTION', nom: string) => {
+      if (lectureSeule) return;
       const ligne = nouvelleChaineVide(categorieId, nom);
       setRows((prev) => [...prev, ligne]);
     },
-    []
+    [lectureSeule]
   );
 
   // --- Suppression d'une chaîne ------------------------------------------
   const supprimerChaine = useCallback(
     (rowId: string) => {
+      if (lectureSeule) return;
       const ligne = rows.find((r) => r.id === rowId);
       if (!ligne) return;
       if (!window.confirm(`Confirmez-vous la suppression de la chaîne "${ligne.nom}" ?`)) return;
       setRows((prev) => prev.filter((r) => r.id !== rowId));
     },
-    [rows]
+    [rows, lectureSeule]
   );
 
   const majValeur = useCallback(
@@ -905,6 +921,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
   /** Depuis le sélecteur : crée une carte qui occupera la case en attente. */
   const handlePickerCreateNew = useCallback(() => {
+    if (lectureSeule) return;
     if (!activePicker || !onOpenCreateCard) return;
     const { rowId, slotType, lancementIndex, slotIndex } = activePicker;
     const isModeleEnCours = slotType === 'modeleEnCours';
@@ -921,7 +938,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
         slotIndex
       );
     });
-  }, [activePicker, onOpenCreateCard, handleAssignSlotCard]);
+  }, [activePicker, onOpenCreateCard, handleAssignSlotCard, lectureSeule]);
 
   // Currently selected slot for CardPickerModal
   const currentSlotForPicker = (() => {
@@ -976,14 +993,17 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           </div>
 
           {/* Droite : création d'une nouvelle chaîne */}
-          <div className="flex items-center justify-end">
-            <button
-              onClick={() => setNouvelleChaineOuverte(true)}
-              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded-lg shadow-sm hover:shadow transition-all cursor-pointer"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>Nouvelle Chaîne</span>
-            </button>
+          <div className="flex items-center justify-end flex-wrap gap-2.5">
+            {!lectureSeule && (
+              <button
+                onClick={() => setNouvelleChaineOuverte(true)}
+                className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded-lg shadow-sm hover:shadow transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4 stroke-[2.5]" />
+                <span>Nouvelle Chaîne</span>
+              </button>
+            )}
+            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
           </div>
         </div>
       </div>

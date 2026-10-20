@@ -31,6 +31,7 @@ import { blocInspectionVide, dateCourte } from '../utils/inspections.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 import { InspectionCell } from './InspectionCell.tsx';
 import { idSlotCarte } from '../utils/glisserCarte.ts';
+import { useLectureSeule } from '../context/ProfilContext.tsx';
 import { AlertTriangle, ArrowLeftRight, Columns, Pencil, Trash2, Truck, X } from 'lucide-react';
 
 /** Ligne du tableau du Suivi Global, mémorisée : en éditant une ligne (inspection,
@@ -62,6 +63,8 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
     setOfOuvert,
     setMenuEtat,
   } = props;
+
+  const lectureSeule = useLectureSeule();
 
   const slotProps: Omit<SlotCaseProps, 'slotCard' | 'slotType' | 'lancementIndex' | 'slotIndex'> = {
     row,
@@ -148,17 +151,19 @@ export const LigneTableSuivi = React.memo(function LigneTableSuivi(props: LigneT
             <div className="group/ren inline-flex items-center gap-1 max-w-full min-w-0">
               <button
                 type="button"
-                onClick={() => {
+                onClick={lectureSeule ? undefined : () => {
                   annulerChaineRef.current = false;
                   setChaineEdition(true);
                 }}
-                title="Renommer la chaîne"
-                className="inline-flex items-center gap-1.5 cursor-pointer px-1.5 py-0.5 rounded-lg hover:bg-slate-100/80 transition-colors max-w-full min-w-0"
+                title={lectureSeule ? row.nom : 'Renommer la chaîne'}
+                className={`inline-flex items-center gap-1.5 px-1.5 py-0.5 rounded-lg transition-colors max-w-full min-w-0 ${lectureSeule ? 'cursor-default' : 'cursor-pointer hover:bg-slate-100/80'}`}
               >
                 <span className="font-bold text-xs sm:text-sm text-slate-800 truncate">{row.nom}</span>
-                <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover/ren:opacity-100 group-hover/chaine:opacity-100 transition-opacity shrink-0" />
+                {!lectureSeule && (
+                  <Pencil className="w-3 h-3 text-slate-400 opacity-0 group-hover/ren:opacity-100 group-hover/chaine:opacity-100 transition-opacity shrink-0" />
+                )}
               </button>
-              {onSupprimerChaine && (
+              {!lectureSeule && onSupprimerChaine && (
                 <button
                   type="button"
                   onClick={() => onSupprimerChaine(row.id)}
@@ -390,6 +395,7 @@ function SlotCase({
   onAssignerSlot,
   setAlerteOuverte,
 }: SlotCaseProps) {
+  const lectureSeule = useLectureSeule();
   const rangSuffixe = slotIndex === 1 ? ' — 2ᵉ carte' : '';
   const titreSlot =
     slotType === 'modeleEnCours'
@@ -426,12 +432,25 @@ function SlotCase({
       } else {
         onCarteClick(linkedCard);
       }
-    } else {
+    } else if (!lectureSeule) {
       onOuvrirActionSlot(row.id, titreSlot, slotType, lancementIndex, slotIndex);
     }
   };
 
   if (!label) {
+    if (lectureSeule) {
+      return (
+        <div
+          data-case-id={slotId}
+          className={`w-full min-h-[50px] flex items-center justify-center text-[11px] text-slate-300 rounded-xl border border-dashed border-slate-200 p-1 ${
+            autreSlotRempli ? 'flex-none' : 'flex-1'
+          }`}
+          title="Case vide"
+        >
+          —
+        </div>
+      );
+    }
     return (
       <button
         type="button"
@@ -462,8 +481,8 @@ function SlotCase({
       {/* Conteneur unifié : la ring relie la bande Alerte + la carte. Toute la
           carte (bande incluse) est saisissable pour l'échange. */}
       <div
-        data-card-drag=""
-        className={`relative w-full flex flex-col flex-1 min-h-0 select-none touch-none cursor-grab active:cursor-grabbing ${
+        {...(lectureSeule ? {} : { 'data-card-drag': '' })}
+        className={`relative w-full flex flex-col flex-1 min-h-0 ${lectureSeule ? '' : 'select-none touch-none cursor-grab active:cursor-grabbing'} ${
           enAlerte
             ? 'ring-2 ring-rose-300/60 shadow-[0_0_0_1px_rgba(251,113,133,0.5)] rounded-xl'
             : enMarge
@@ -512,11 +531,11 @@ function SlotCase({
           <div
             key={linkedCard?.id ?? 'carte-vide'}
             onClick={handleSlotClick}
-            className="animate-carte-posee flex-1 min-h-0 w-full flex flex-col justify-start items-start select-none touch-none cursor-grab active:cursor-grabbing"
+            className={`animate-carte-posee flex-1 min-h-0 w-full flex flex-col justify-start items-start ${lectureSeule ? '' : 'select-none touch-none cursor-grab active:cursor-grabbing'}`}
             title={
               linkedCard
-                ? `Afficher la fiche identitaire : ${linkedCard.modele} (${linkedCard.batch}). Glissez pour déplacer dans une autre case.`
-                : 'Cliquer pour modifier ou assigner une carte'
+                ? `Afficher la fiche identitaire : ${linkedCard.modele} (${linkedCard.batch}).${lectureSeule ? '' : ' Glissez pour déplacer dans une autre case.'}`
+                : 'Catégorie de carte'
             }
           >
             <div className="flex items-center justify-between gap-2">
@@ -624,28 +643,30 @@ function SlotCase({
           </div>
 
           {/* Hover Quick Action Buttons */}
-          <div className="absolute right-1 top-1 hidden group-hover:flex items-center gap-1 bg-white p-0.5 rounded-md shadow-xs border border-slate-200 z-10">
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onOuvrirPicker(row.id, titreSlot, slotType, lancementIndex, slotIndex);
-              }}
-              title="Changer / Réassigner une autre carte"
-              className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
-            >
-              <ArrowLeftRight className="w-3 h-3" />
-            </button>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                onAssignerSlot(row.id, slotType, null, lancementIndex, slotIndex);
-              }}
-              title="Retirer la carte de cette case"
-              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          </div>
+          {!lectureSeule && (
+            <div className="absolute right-1 top-1 hidden group-hover:flex items-center gap-1 bg-white p-0.5 rounded-md shadow-xs border border-slate-200 z-10">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onOuvrirPicker(row.id, titreSlot, slotType, lancementIndex, slotIndex);
+                }}
+                title="Changer / Réassigner une autre carte"
+                className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
+              >
+                <ArrowLeftRight className="w-3 h-3" />
+              </button>
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAssignerSlot(row.id, slotType, null, lancementIndex, slotIndex);
+                }}
+                title="Retirer la carte de cette case"
+                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -850,6 +871,7 @@ function AlertesCarte({
   label?: string;
 }) {
   const alertesManuelles = useAlertesManuelles();
+  const lectureSeule = useLectureSeule();
   // La colonne n'affiche que les alertes « colonne » encore en cours ; celles
   // de type « popover uniquement » ou archivées (réglées) n'y apparaissent pas.
   const alertes = alertesCarte(alertesManuelles, slotCard?.cardId).filter((a) => alerteActiveEnColonne(a));
@@ -901,14 +923,16 @@ function AlertesCarte({
   return (
     <div className="flex-1 min-w-0 flex flex-col">
       <div className="flex justify-end mb-1">
-        <button
-          type="button"
-          onClick={() => setOuvert((v) => !v)}
-          title="Ajouter une alerte"
-          className="shrink-0 w-4 h-4 rounded-full border border-slate-300 bg-white text-slate-500 hover:text-rose-600 hover:border-rose-300 text-[11px] leading-none cursor-pointer flex items-center justify-center"
-        >
-          +
-        </button>
+        {!lectureSeule && (
+          <button
+            type="button"
+            onClick={() => setOuvert((v) => !v)}
+            title="Ajouter une alerte"
+            className="shrink-0 w-4 h-4 rounded-full border border-slate-300 bg-white text-slate-500 hover:text-rose-600 hover:border-rose-300 text-[11px] leading-none cursor-pointer flex items-center justify-center"
+          >
+            +
+          </button>
+        )}
       </div>
 
       <div className="flex flex-col gap-1 flex-1">
@@ -926,25 +950,29 @@ function AlertesCarte({
             >
               <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
               <span className="break-words flex-1">{a.texte}</span>
-              <label
-                className="shrink-0 opacity-0 group-hover/a:opacity-100 cursor-pointer flex items-center"
-                title="Décocher pour ne plus afficher dans la colonne (reste dans le popover)"
-              >
-                <input
-                  type="checkbox"
-                  checked
-                  onChange={() => basculerVisibilite(a)}
-                  className="accent-blue-600 w-3 h-3 cursor-pointer"
-                />
-              </label>
-              <button
-                type="button"
-                onClick={() => supprimer(a.id)}
-                title="Supprimer"
-                className="shrink-0 opacity-0 group-hover/a:opacity-100 cursor-pointer text-current/60 hover:text-current"
-              >
-                <X className="w-3 h-3" />
-              </button>
+              {!lectureSeule && (
+                <>
+                  <label
+                    className="shrink-0 opacity-0 group-hover/a:opacity-100 cursor-pointer flex items-center"
+                    title="Décocher pour ne plus afficher dans la colonne (reste dans le popover)"
+                  >
+                    <input
+                      type="checkbox"
+                      checked
+                      onChange={() => basculerVisibilite(a)}
+                      className="accent-blue-600 w-3 h-3 cursor-pointer"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => supprimer(a.id)}
+                    title="Supprimer"
+                    className="shrink-0 opacity-0 group-hover/a:opacity-100 cursor-pointer text-current/60 hover:text-current"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </>
+              )}
             </div>
           );
         })}

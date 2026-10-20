@@ -7,7 +7,10 @@ import {
   normalizeOFType,
 } from '../types/card.ts';
 import { AppPage, ViewSwitcher } from './ViewSwitcher.tsx';
+import { SessionBadge } from './SessionBadge.tsx';
+import { Profil } from '../utils/auth.ts';
 import { normalizeCases, computeOfQuantiteFinie } from './OFSubTable.tsx';
+import { useLectureSeule } from '../context/ProfilContext.tsx';
 import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import { Calendar, Clock, Table2 } from 'lucide-react';
 
@@ -16,6 +19,8 @@ interface TableauxOFsViewProps {
   onUpdateCard: (id: string, updates: Partial<CardItem>) => Promise<void>;
   onChangePage: (page: AppPage) => void;
   onOpenCardModal?: (card: CardItem) => void;
+  profil: Profil;
+  onDeconnexion: () => void;
 }
 
 /** Un OF affiché dans les tableaux : ses cases + son type, éditables. */
@@ -81,7 +86,11 @@ const OFRowEditable: React.FC<{
   numero: number;
   onCommitCase: (idx: number, val: number) => void;
   onCommitType: (t: OFType) => void;
-}> = ({ of, numero, onCommitCase, onCommitType }) => {
+  /** Profil Production : quantités modifiables, mais pas le type d'OF. */
+  typeModifiable?: boolean;
+}> = ({ of, numero, onCommitCase, onCommitType, typeModifiable = true }) => {
+  const lectureSeule = useLectureSeule();
+  const typeDesactive = lectureSeule || !typeModifiable;
   const nb = nbCasesBorne(of.nbCases);
   const cases = normalizeCases(of.casesEnCours, nb, of.quantiteDemandee);
   const type = normalizeOFType(of.type);
@@ -100,6 +109,7 @@ const OFRowEditable: React.FC<{
               type="number"
               min={0}
               defaultValue={val}
+              disabled={lectureSeule}
               onBlur={(e) => onCommitCase(idx, parseInt(e.target.value, 10) || 0)}
               onKeyDown={(e) => {
                 if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
@@ -111,7 +121,7 @@ const OFRowEditable: React.FC<{
               }
               className={`w-12 text-center text-[11px] font-bold px-1 py-0.5 rounded border border-slate-300 focus:outline-hidden focus:border-emerald-500 focus:bg-emerald-50 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none ${
                 idx === nb - 1 ? 'bg-slate-100 text-slate-900' : 'bg-white text-slate-700'
-              }`}
+              } ${lectureSeule ? 'cursor-default' : ''}`}
             />
           </React.Fragment>
         ))}
@@ -119,9 +129,10 @@ const OFRowEditable: React.FC<{
 
       <select
         value={type}
+        disabled={typeDesactive}
         onChange={(e) => onCommitType(e.target.value as OFType)}
         title={`Traitant : ${OF_TYPES[type].label}`}
-        className={`text-[11px] font-bold rounded-md px-1.5 py-0.5 border cursor-pointer ${OF_TYPES[type].classe}`}
+        className={`text-[11px] font-bold rounded-md px-1.5 py-0.5 border ${typeDesactive ? 'cursor-default' : 'cursor-pointer'} ${OF_TYPES[type].classe}`}
       >
         {OF_TYPES_AFFICHES.map((t) => (
           <option key={t} value={t} title={OF_TYPES[t].label}>
@@ -142,7 +153,11 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
   onUpdateCard,
   onChangePage,
   onOpenCardModal,
+  profil,
+  onDeconnexion,
 }) => {
+  // Production : seule la quantité des OFs est modifiable, pas leur type.
+  const typeModifiable = profil.id !== 'production';
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
 
@@ -224,7 +239,9 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
             <ViewSwitcher currentPage="tableaux-ofs" onChangePage={onChangePage} />
           </div>
 
-          <div aria-hidden="true" />
+          <div className="flex items-center justify-end">
+            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+          </div>
         </div>
       </div>
 
@@ -326,6 +343,7 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
                                 numero={i + 1}
                                 onCommitCase={(idx, val) => handleCaseCommit(card, i, idx, val)}
                                 onCommitType={(t) => handleTypeCommit(card, i, t)}
+                                typeModifiable={typeModifiable}
                               />
                             ))}
                           </div>

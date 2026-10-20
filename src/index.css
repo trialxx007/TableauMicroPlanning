@@ -1,5 +1,77 @@
 @import "tailwindcss";
 
+/* Fond « nuit d'atelier » de l'écran d'accès : dégradé sombre + fines étoiles
+   bleutées, dans l'esprit des autres projets. Purement décoratif. */
+.starry-surface {
+  background-color: #0f1117;
+  background-image:
+    radial-gradient(1px 1px at 7% 24%, rgba(255, 255, 255, 0.5), transparent 60%),
+    radial-gradient(2px 2px at 14% 71%, rgba(255, 255, 255, 0.6), transparent 55%),
+    radial-gradient(1px 1px at 21% 12%, rgba(255, 255, 255, 0.3), transparent 55%),
+    radial-gradient(1px 1px at 28% 48%, rgba(255, 255, 255, 0.4), transparent 55%),
+    radial-gradient(2px 2px at 33% 86%, rgba(255, 255, 255, 0.5), transparent 55%),
+    radial-gradient(1px 1px at 41% 33%, rgba(255, 255, 255, 0.4), transparent 55%),
+    radial-gradient(2px 2px at 47% 9%, rgba(147, 197, 253, 0.5), transparent 55%),
+    radial-gradient(1px 1px at 53% 63%, rgba(255, 255, 255, 0.5), transparent 55%),
+    radial-gradient(1px 1px at 59% 29%, rgba(255, 255, 255, 0.3), transparent 55%),
+    radial-gradient(2px 2px at 64% 77%, rgba(255, 255, 255, 0.55), transparent 55%),
+    radial-gradient(1px 1px at 71% 41%, rgba(255, 255, 255, 0.4), transparent 55%),
+    radial-gradient(1px 1px at 77% 14%, rgba(196, 181, 253, 0.45), transparent 55%),
+    radial-gradient(2px 2px at 83% 58%, rgba(255, 255, 255, 0.55), transparent 55%),
+    radial-gradient(1px 1px at 88% 34%, rgba(255, 255, 255, 0.35), transparent 55%),
+    radial-gradient(1px 1px at 94% 82%, rgba(147, 197, 253, 0.5), transparent 55%),
+    radial-gradient(1px 1px at 9% 93%, rgba(255, 255, 255, 0.45), transparent 55%),
+    radial-gradient(2px 2px at 38% 58%, rgba(255, 255, 255, 0.5), transparent 55%),
+    radial-gradient(1px 1px at 68% 92%, rgba(255, 255, 255, 0.35), transparent 55%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* Halo bleu/indigo par-dessus les étoiles, pour donner de la profondeur. */
+.starry-surface-glow {
+  background-image:
+    radial-gradient(ellipse 85% 60% at 50% 0%, rgba(13, 42, 94, 0.9) 0%, transparent 62%),
+    radial-gradient(ellipse 60% 45% at 88% 100%, rgba(79, 70, 229, 0.22) 0%, transparent 70%),
+    radial-gradient(ellipse 55% 40% at 6% 100%, rgba(30, 64, 175, 0.2) 0%, transparent 70%);
+  background-repeat: no-repeat;
+  background-attachment: fixed;
+}
+
+/* Apparition douce « qui monte » des blocs de l'écran d'accès. */
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.starry-rise {
+  animation: rise-in 0.6s ease-out both;
+}
+
+/* Changement de vue : l'ancienne page s'efface pendant que la nouvelle monte.
+   La clé du conteneur change avec la vue, ce qui relance l'animation. */
+@keyframes page-in {
+  from {
+    opacity: 0;
+    transform: translateY(10px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-page-in {
+  animation: page-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: opacity, transform;
+}
+
+
 /* Popover d'alerte : apparition en fondu + léger échelle, ancrée sur la bande
    qui l'a déclenchée. Défini ici, Tailwind ne fournissant pas d'utilitaire. */
 @keyframes popover-in {
@@ -32,6 +104,19 @@
 
 .animate-carte-in {
   animation: carte-in 0.2s ease-out;
+}
+
+/* Écran d'accès : secousse du panneau mot de passe sur une saisie erronée. */
+@keyframes erreur-login {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-7px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(3px); }
+}
+
+.animate-erreur-login {
+  animation: erreur-login 0.3s ease-in-out;
 }
 
 /* Grande table du Suivi Global : les pulsations (bandes Alerte, jalons en
@@ -91,7 +176,10 @@
 @media (prefers-reduced-motion: reduce) {
   .animate-popover-in,
   .animate-carte-in,
-  .animate-carte-posee {
+  .animate-carte-posee,
+  .animate-erreur-login,
+  .starry-rise,
+  .animate-page-in {
     animation: none;
   }
 }

@@ -1,18 +1,23 @@
 import React, { useState, useEffect } from 'react';
 import {
-  ClipboardList,
   Plus,
   Calendar,
+  CalendarRange,
   Clock,
 } from 'lucide-react';
 import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import { ViewSwitcher, AppPage } from './ViewSwitcher.tsx';
+import { SessionBadge } from './SessionBadge.tsx';
+import { Profil } from '../utils/auth.ts';
+import { useLectureSeule } from '../context/ProfilContext.tsx';
 
 interface HeaderProps {
   onOpenCreateModal: () => void;
   currentPage: AppPage;
   onChangePage: (page: AppPage) => void;
   cardsCount: number;
+  profil: Profil;
+  onDeconnexion: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -20,9 +25,12 @@ export const Header: React.FC<HeaderProps> = ({
   currentPage,
   onChangePage,
   cardsCount,
+  profil,
+  onDeconnexion,
 }) => {
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
+  const lectureSeule = useLectureSeule();
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -38,7 +46,7 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Left Title & Status */}
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center text-white">
-              <ClipboardList className="w-5 h-5" />
+              <CalendarRange className="w-5 h-5" />
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
@@ -72,13 +80,16 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Right Action Buttons */}
           <div className="flex items-center flex-wrap gap-2.5 md:justify-end">
-            <button
-              onClick={onOpenCreateModal}
-              className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm hover:shadow transition-all cursor-pointer"
-            >
-              <Plus className="w-4 h-4 stroke-[2.5]" />
-              <span>Nouvelle Carte</span>
-            </button>
+            {!lectureSeule && (
+              <button
+                onClick={onOpenCreateModal}
+                className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm hover:shadow transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4 stroke-[2.5]" />
+                <span>Nouvelle Carte</span>
+              </button>
+            )}
+            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
           </div>
         </div>
       </div>

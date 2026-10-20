@@ -1,6 +1,7 @@
 import React from 'react';
 import { Truck, X, Package } from 'lucide-react';
 import { CardItem } from '../types/card.ts';
+import { useLectureSeule } from '../context/ProfilContext.tsx';
 import {
   ChaineSlotCard,
   ExpeditionOF,
@@ -37,6 +38,7 @@ export const ExpeditionModal: React.FC<ExpeditionModalProps> = ({
   slotCard,
   onChange,
 }) => {
+  const lectureSeule = useLectureSeule();
   if (!isOpen) return null;
 
   const expeditionOfs = slotCard.expeditionOfs ?? [];
@@ -110,10 +112,11 @@ export const ExpeditionModal: React.FC<ExpeditionModalProps> = ({
                     <div className="ml-auto flex items-center gap-2">
                       <select
                         value={statut}
+                        disabled={lectureSeule}
                         onChange={(e) =>
                           maj(i, { statutExpedition: e.target.value as StatutExpedition })
                         }
-                        className={`text-[11px] font-semibold px-2 py-1 rounded-lg border cursor-pointer focus:outline-hidden ${couleurStatut(
+                        className={`text-[11px] font-semibold px-2 py-1 rounded-lg border focus:outline-hidden ${lectureSeule ? 'cursor-default' : 'cursor-pointer'} ${couleurStatut(
                           statut
                         )}`}
                       >
@@ -126,8 +129,9 @@ export const ExpeditionModal: React.FC<ExpeditionModalProps> = ({
                       <input
                         type="date"
                         value={ligne?.dateExpedition ?? ''}
+                        disabled={lectureSeule}
                         onChange={(e) => maj(i, { dateExpedition: e.target.value })}
-                        className="text-[11px] font-bold px-2 py-1 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-blue-500"
+                        className={`text-[11px] font-bold px-2 py-1 bg-white border border-slate-300 rounded-lg focus:outline-hidden focus:ring-1 focus:ring-blue-500 ${lectureSeule ? 'cursor-default text-slate-500' : ''}`}
                       />
                     </div>
                   </li>

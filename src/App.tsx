@@ -6,28 +6,48 @@ import { StatsOverview, KpiFilterType } from './components/StatsOverview.tsx';
 import { FilterBar, SortField, SortOrder } from './components/FilterBar.tsx';
 import { CardTable } from './components/CardTable.tsx';
 import { CardModal } from './components/CardModal.tsx';
+import { HistoriqueView } from './components/HistoriqueView.tsx';
 import { SuiviGlobalView } from './components/SuiviGlobalView.tsx';
 import { TableauxOFsView } from './components/TableauxOFsView.tsx';
 import { AppPage } from './components/ViewSwitcher.tsx';
+import { LoginScreen } from './components/LoginScreen.tsx';
 import { JalonCatalogueProvider } from './context/JalonCatalogueContext.tsx';
+import { ProfilProvider } from './context/ProfilContext.tsx';
 import {
   InspectionsParCarteProvider,
   InspectionsParCarte,
 } from './context/InspectionsParCarteContext.tsx';
 import { getEtatJalon, PREFIXE_JALON_MANQUANT } from './utils/jalons.ts';
 import { getNowParis } from './utils/dateFrance.ts';
+import {
+  Profil,
+  SessionProfil,
+  effacerSession,
+  enregistrerSession,
+  lireSession,
+  ongletsAutorises,
+} from './utils/auth.ts';
 import { RefreshCw, FileSpreadsheet, Check, Plus } from 'lucide-react';
 
 export default function App() {
+  // Le profil est choisi avant d'entrer (écran d'accès). La session est mémorisée
+  // pour la durée de l'onglet : un rafraîchissement ne redemande pas le mot de passe.
+  const [session, setSession] = useState<SessionProfil | null>(() => lireSession());
   // Sur un rechargement, on revient à l'onglet où l'on était : la vue courante
   // est mémorisée pour cette session (sessionStorage), pas imposée par défaut.
+  // Si le profil connecté n'a pas accès à cette vue (ex. Production : OFs
+  // seulement), on retombe sur le premier onglet autorisé.
   const [currentPage, setCurrentPage] = useState<AppPage>(() => {
     const sauvegarde = sessionStorage.getItem('aic_vue_actuelle_v1');
-    return sauvegarde === 'suivi-global' ||
+    const memoire: AppPage =
+      sauvegarde === 'suivi-global' ||
       sauvegarde === 'point-journalier' ||
-      sauvegarde === 'tableaux-ofs'
-      ? sauvegarde
-      : 'point-journalier';
+      sauvegarde === 'tableaux-ofs' ||
+      sauvegarde === 'historique'
+        ? sauvegarde
+        : 'point-journalier';
+    const autorises = session ? ongletsAutorises(session.profil.id) : null;
+    return autorises && !autorises.includes(memoire) ? autorises[0] : memoire;
   });
   const [cards, setCards] = useState<CardItem[]>([]);
   const [catalogue, setCatalogue] = useState<JalonCatalogue[]>([]);
@@ -83,12 +103,29 @@ export default function App() {
     sessionStorage.setItem('aic_vue_actuelle_v1', currentPage);
   }, [currentPage]);
 
+  // À la connexion d'un profil restreint (Production), si la vue courante ne lui
+  // est pas accessible, on bascule sur son premier onglet autorisé.
+  useEffect(() => {
+    if (!session) return;
+    const autorises = ongletsAutorises(session.profil.id);
+    if (!autorises.includes(currentPage)) {
+      setCurrentPage(autorises[0]);
+    }
+  }, [session, currentPage]);
+
   const showNotification = (msg: string) => {
     setNotification(msg);
     setTimeout(() => {
       setNotification((prev) => (prev === msg ? null : prev));
     }, 3200);
   };
+
+  // Le profil « Utilisateur » consulte seulement : tous les points d'écriture
+  // sont neutralisés (création, modification de carte, jalons, chaînes…).
+  const lectureSeule = session?.profil.id === 'utilisateur';
+  // La fiche carte (CardModal) est en consultation pour « Utilisateur » et
+  // « Production » : ce dernier ne modifie que les quantités d'OF, pas la fiche.
+  const ficheLectureSeule = session?.profil.id === 'utilisateur' || session?.profil.id === 'production';
 
   const getStatusLabel = (s: CardStatus) => {
     switch (s) {
@@ -106,6 +143,7 @@ export default function App() {
   };
 
   const handleCreateOrUpdate = async (formData: CardFormData) => {
+    if (ficheLectureSeule) return;
     const { timeStr } = getNowParis();
     if (editingCard) {
       // PUT explicite : la modale renvoie la carte entière, on ne veut pas qu'un
@@ -125,6 +163,7 @@ export default function App() {
   };
 
   const handleUpdateCard = async (id: string, updates: Partial<CardItem>) => {
+    if (lectureSeule) return;
     try {
       const { timeStr } = getNowParis();
       const updated = await cardApi.update(id, updates);
@@ -147,6 +186,7 @@ export default function App() {
   };
 
   const handleDeleteCard = async (id: string) => {
+    if (lectureSeule) return;
     const card = cards.find((c) => c.id === id);
     if (!card) return;
     if (window.confirm(`Confirmez-vous la suppression de la carte "${card.modele}" (${card.batch}) ?`)) {
@@ -162,6 +202,7 @@ export default function App() {
   };
 
   const handleOpenCreate = () => {
+    if (ficheLectureSeule) return;
     setCreatePrefill(null);
     setEditingCard(null);
     setIsModalOpen(true);
@@ -174,6 +215,7 @@ export default function App() {
     prefill: Partial<CardFormData> | null,
     onCreated: (card: CardItem) => void
   ) => {
+    if (ficheLectureSeule) return;
     setCreatePrefill(prefill);
     onCreateCardRef.current = onCreated;
     setEditingCard(null);
@@ -314,7 +356,22 @@ export default function App() {
     setCards(data);
   };
 
+  const handleConnexion = (profil: Profil) => {
+    setSession(enregistrerSession(profil.id));
+  };
+
+  const handleDeconnexion = () => {
+    effacerSession();
+    setSession(null);
+  };
+
+  // Tant qu'aucun profil n'est choisi, l'application n'est pas affichée.
+  if (!session) {
+    return <LoginScreen onConnecter={handleConnexion} />;
+  }
+
   return (
+    <ProfilProvider valeur={{ profil: session.profil, lectureSeule }}>
     <InspectionsParCarteProvider
       value={{ parCarte: inspectionsParCarte, setParCarte: setInspectionsParCarte }}
     >
@@ -336,10 +393,14 @@ export default function App() {
           currentPage={currentPage}
           onChangePage={setCurrentPage}
           cardsCount={cards.length}
+          profil={session.profil}
+          onDeconnexion={handleDeconnexion}
         />
       )}
 
-      {/* Main Container */}
+      {/* Main Container. La clé change à chaque vue : le conteneur se remonte et
+          l'animation d'apparition rejoue, donnant un fondu au changement de page. */}
+      <div key={currentPage} className="flex-1 flex flex-col animate-page-in">
       {currentPage === 'point-journalier' ? (
         cards.length === 0 ? (
           <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -349,15 +410,19 @@ export default function App() {
               </div>
               <h3 className="text-base font-semibold text-slate-900 mb-1">Aucune carte en cours</h3>
               <p className="text-xs text-slate-500 max-w-sm mx-auto mb-4">
-                Ajoutez votre première carte de commande pour démarrer le point journalier.
+                {ficheLectureSeule
+                  ? 'Aucune carte à afficher pour le moment.'
+                  : 'Ajoutez votre première carte de commande pour démarrer le point journalier.'}
               </p>
-              <button
-                onClick={handleOpenCreate}
-                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs cursor-pointer"
-              >
-                <Plus className="w-4 h-4 stroke-[2.5]" />
-                Carte
-              </button>
+              {!ficheLectureSeule && (
+                <button
+                  onClick={handleOpenCreate}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg shadow-xs cursor-pointer"
+                >
+                  <Plus className="w-4 h-4 stroke-[2.5]" />
+                  Carte
+                </button>
+              )}
             </div>
           </main>
         ) : (
@@ -459,11 +524,21 @@ export default function App() {
             onChangePage={setCurrentPage}
             cards={cards}
             onUpdateCard={handleUpdateCard}
+            profil={session.profil}
+            onDeconnexion={handleDeconnexion}
             onOpenCardModal={(card) => {
               setEditingCard(card);
               setIsModalOpen(true);
             }}
             onOpenCreateCard={handleOpenCreateCard}
+          />
+        </main>
+      ) : currentPage === 'historique' ? (
+        <main className="flex-1 w-full">
+          <HistoriqueView
+            onChangePage={setCurrentPage}
+            profil={session.profil}
+            onDeconnexion={handleDeconnexion}
           />
         </main>
       ) : (
@@ -472,6 +547,8 @@ export default function App() {
             cards={cards}
             onUpdateCard={handleUpdateCard}
             onChangePage={setCurrentPage}
+            profil={session.profil}
+            onDeconnexion={handleDeconnexion}
             onOpenCardModal={(card) => {
               setEditingCard(card);
               setIsModalOpen(true);
@@ -479,6 +556,7 @@ export default function App() {
           />
         </main>
       )}
+      </div>
 
       {/* Footer */}
       <footer className="mt-auto py-4 border-t border-slate-200 bg-white text-center text-xs text-slate-400">
@@ -504,10 +582,12 @@ export default function App() {
         initialData={editingCard}
         createPrefill={editingCard ? null : createPrefill}
         onJalonAjoute={handleJalonAjoute}
+        lectureSeule={ficheLectureSeule}
       />
       </div>
     </JalonCatalogueProvider>
     </InspectionsParCarteProvider>
+    </ProfilProvider>
   );
 }
 

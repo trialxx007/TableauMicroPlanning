@@ -71,6 +71,8 @@ interface CardModalProps {
    * autres ne sont pas modifiées.
    */
   onJalonAjoute?: () => void | Promise<void>;
+  /** Profil « Utilisateur » : fiche ouverte en consultation, sans écriture. */
+  lectureSeule?: boolean;
 }
 
 type JalonState = {
@@ -148,6 +150,7 @@ export const CardModal: React.FC<CardModalProps> = ({
   initialData,
   createPrefill,
   onJalonAjoute,
+  lectureSeule = false,
 }) => {
   const catalogue = useJalonCatalogue();
   const [client, setClient] = useState('');
@@ -489,7 +492,7 @@ export const CardModal: React.FC<CardModalProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!client.trim() || !batch.trim() || !modele.trim()) {
-      setError('Veuillez renseigner le client, le batch et le nom.');
+      setError('Veuillez renseigner le client, la saison et le nom.');
       return;
     }
 
@@ -699,7 +702,7 @@ export const CardModal: React.FC<CardModalProps> = ({
             <button
               type="button"
               onClick={() => setOkProd(!okProdEffectif)}
-              disabled={autoOkProd}
+              disabled={autoOkProd || lectureSeule}
               title={
                 autoOkProd
                   ? 'OK Prod auto validé : DT, TC, FT et RDL sont validés'
@@ -711,7 +714,7 @@ export const CardModal: React.FC<CardModalProps> = ({
                 okProdEffectif
                   ? 'bg-emerald-50 text-emerald-800 border-emerald-300 hover:bg-emerald-100'
                   : 'bg-emerald-600 text-white border-emerald-700 hover:bg-emerald-700 animate-pulse'
-              } ${autoOkProd ? 'cursor-default' : 'cursor-pointer'}`}
+              } ${autoOkProd || lectureSeule ? 'cursor-default' : 'cursor-pointer'}`}
             >
               <CheckCheck className="w-3.5 h-3.5" />
               <span>
@@ -754,16 +757,17 @@ export const CardModal: React.FC<CardModalProps> = ({
                   required
                   placeholder="ex: Dior"
                   value={client}
+                  disabled={lectureSeule}
                   onChange={(e) => setClient(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:opacity-70 disabled:cursor-default"
                 />
               </div>
 
-              {/* Batch */}
+              {/* Saison */}
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <label className="text-xs font-semibold text-slate-700">
-                    Batch <span className="text-rose-500">*</span>
+                    Saison <span className="text-rose-500">*</span>
                   </label>
                   {batch && (
                     <button
@@ -790,8 +794,9 @@ export const CardModal: React.FC<CardModalProps> = ({
                   required
                   placeholder="ex: OF-2026-001"
                   value={batch}
+                  disabled={lectureSeule}
                   onChange={(e) => setBatch(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 font-mono focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:opacity-70 disabled:cursor-default"
                 />
               </div>
 
@@ -820,8 +825,9 @@ export const CardModal: React.FC<CardModalProps> = ({
                             setTypeCarte(t);
                             setJalons((prev) => basculerType(typeCarte, t, prev));
                           }}
+                          disabled={lectureSeule}
                           aria-pressed={actif}
-                          className="w-full text-left px-3 pt-2 cursor-pointer"
+                          className={`w-full text-left px-3 pt-2 ${lectureSeule ? 'cursor-default' : 'cursor-pointer'}`}
                         >
                           <span className="flex items-center gap-1.5">
                             <span
@@ -843,9 +849,10 @@ export const CardModal: React.FC<CardModalProps> = ({
                                 key={n.code}
                                 type="button"
                                 onClick={() => basculerNomenclature(t, n.code)}
+                                disabled={lectureSeule}
                                 title={`${n.libelle} — ${present ? 'sélectionné' : 'désactivé'}`}
                                 aria-pressed={present}
-                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] font-mono font-semibold transition-colors cursor-pointer ${
+                                className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[11px] font-mono font-semibold transition-colors ${lectureSeule ? 'cursor-default' : 'cursor-pointer'} ${
                                   present
                                     ? 'bg-emerald-50 border-emerald-300 text-emerald-700 hover:bg-emerald-100'
                                     : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-500'
@@ -873,8 +880,9 @@ export const CardModal: React.FC<CardModalProps> = ({
                   required
                   placeholder="ex: Robe Soirée Haute Couture"
                   value={modele}
+                  disabled={lectureSeule}
                   onChange={(e) => setModele(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:opacity-70 disabled:cursor-default"
                 />
               </div>
 
@@ -889,8 +897,9 @@ export const CardModal: React.FC<CardModalProps> = ({
                   min={1}
                   placeholder="ex: 200"
                   value={quantiteDemandee}
+                  disabled={lectureSeule}
                   onChange={(e) => setQuantiteDemandee(Math.max(0, Number(e.target.value)))}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 disabled:opacity-70 disabled:cursor-default"
                 />
               </div>
             </div>
@@ -972,7 +981,7 @@ export const CardModal: React.FC<CardModalProps> = ({
                             </div>
                           )}
                         </div>
-                      ) : (
+                      ) : lectureSeule ? null : (
                         <button
                           type="button"
                           onClick={() => {
@@ -1041,7 +1050,7 @@ export const CardModal: React.FC<CardModalProps> = ({
                           onClick={() => handleSupprimerJalon(jalon.code)}
                           title={`Retirer le jalon ${jalon.code} de cette carte`}
                           aria-label={`Retirer le jalon ${jalon.code} de cette carte`}
-                          className="flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border border-black/10 bg-white/90 text-slate-500 opacity-0 transition-opacity hover:border-rose-300 hover:bg-white hover:text-rose-600 group-hover/j:opacity-100 group-focus-within/j:opacity-100"
+                          className={`flex h-4 w-4 shrink-0 cursor-pointer items-center justify-center rounded-full border border-black/10 bg-white/90 text-slate-500 opacity-0 transition-opacity hover:border-rose-300 hover:bg-white hover:text-rose-600 group-hover/j:opacity-100 group-focus-within/j:opacity-100 ${lectureSeule ? 'hidden' : ''}`}
                         >
                           <X className="w-2.5 h-2.5" />
                         </button>
@@ -1055,9 +1064,10 @@ export const CardModal: React.FC<CardModalProps> = ({
                           <div className="flex flex-col items-center gap-1 border-t border-black/5 px-1 pb-1 pt-1">
                             <select
                               value={jalon.etat}
+                              disabled={lectureSeule}
                               onChange={(e) => setJalonEtat(jalon.code, e.target.value as JalonEtat)}
                               aria-label={`État du jalon ${jalon.code}`}
-                              className={`w-[6.5rem] px-1 py-0.5 text-[11px] font-semibold leading-4 rounded border bg-white cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${theme.controle} ${theme.bordure}`}
+                              className={`w-[6.5rem] px-1 py-0.5 text-[11px] font-semibold leading-4 rounded border bg-white focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${lectureSeule ? 'cursor-default' : 'cursor-pointer'} ${theme.controle} ${theme.bordure}`}
                             >
                               <option value="EN_ATTENTE">En attente</option>
                               <option value="SEMAINE">Semaine</option>
@@ -1074,6 +1084,7 @@ export const CardModal: React.FC<CardModalProps> = ({
                                 max={SEMAINE_MAX}
                                 placeholder="S--"
                                 value={brouillonSemaine[jalon.code] ?? (jalon.semaine ?? '')}
+                                disabled={lectureSeule}
                                 onChange={(e) => saisirSemaine(jalon.code, e.target.value)}
                                 onBlur={() => validerSemaine(jalon.code)}
                                 aria-label={`Semaine cible du jalon ${jalon.code}`}
@@ -1090,6 +1101,7 @@ export const CardModal: React.FC<CardModalProps> = ({
                                 max={SEMAINE_MAX}
                                 placeholder="fin"
                                 value={jalon.semaineFin ?? ''}
+                                disabled={lectureSeule}
                                 onChange={(e) =>
                                   setJalon(jalon.code, {
                                     semaineFin:
@@ -1109,9 +1121,10 @@ export const CardModal: React.FC<CardModalProps> = ({
                               <input
                                 type="date"
                                 value={jalon.date ?? ''}
+                                disabled={lectureSeule}
                                 onChange={(e) => setJalon(jalon.code, { date: e.target.value || null })}
                                 aria-label={`Date cible du jalon ${jalon.code}`}
-                                className={`w-[6.5rem] px-1 py-0.5 text-[11px] font-semibold leading-4 rounded border bg-white cursor-pointer focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${theme.controle} ${theme.bordure}`}
+                                className={`w-[6.5rem] px-1 py-0.5 text-[11px] font-semibold leading-4 rounded border bg-white focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${lectureSeule ? '' : 'cursor-pointer'} ${theme.controle} ${theme.bordure}`}
                               />
                             )}
                           </div>
@@ -1202,7 +1215,7 @@ export const CardModal: React.FC<CardModalProps> = ({
               <span className="flex items-center gap-2">
                 <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-purple-600"></span><span>OF</span></span>
               </span>
-              {!isAddingOF && <button type="button" onClick={() => setIsAddingOF(true)} className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold text-slate-900 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg shadow-2xs transition-colors cursor-pointer"><Plus className="w-3 h-3" /><span>Ajouter un OF</span></button>}
+              {!isAddingOF && !lectureSeule && <button type="button" onClick={() => setIsAddingOF(true)} className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold text-slate-900 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg shadow-2xs transition-colors cursor-pointer"><Plus className="w-3 h-3" /><span>Ajouter un OF</span></button>}
             </div>
             <OFSubTable cardId={initialData?.id || 'NOUVELLE-CARTE'} totalDemandee={quantiteDemandee} onChangeTotalDemandee={setQuantiteDemandee} ofs={ofs} isAddingOF={isAddingOF} onCloseAddOF={() => setIsAddingOF(false)} onUpdateOFs={(newOfs) => { setOfs(newOfs); const totalFinie = newOfs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0); if (newOfs.length > 0) { setQuantiteFinie(totalFinie); } }} />
           </div>
@@ -1217,8 +1230,9 @@ export const CardModal: React.FC<CardModalProps> = ({
               rows={7}
               placeholder="ex: Priorité ligne 2"
               value={notes}
+              disabled={lectureSeule}
               onChange={(e) => setNotes(e.target.value)}
-              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 leading-relaxed focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-y"
+              className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-900 leading-relaxed focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 resize-y disabled:opacity-70 disabled:cursor-default"
             />
           </div>
 
@@ -1231,14 +1245,16 @@ export const CardModal: React.FC<CardModalProps> = ({
             >
               Fermer
             </button>
-            <button
-              type="submit"
-              disabled={isSubmitting}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm transition-all disabled:opacity-50 cursor-pointer"
-            >
-              <Check className="w-3.5 h-3.5" />
-              <span>{initialData ? 'Enregistrer les modifications' : 'Créer la carte'}</span>
-            </button>
+            {!lectureSeule && (
+              <button
+                type="submit"
+                disabled={isSubmitting}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm transition-all disabled:opacity-50 cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>{initialData ? 'Enregistrer les modifications' : 'Créer la carte'}</span>
+              </button>
+            )}
           </div>
         </form>
       </div>

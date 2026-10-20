@@ -3,6 +3,7 @@ import { OrdreFabrication, SousOrdreFabrication, CardStatus, OFType, OF_TYPES, O
 import { EnCoursGrid } from './EnCoursCasesSection.tsx';
 import { EditableItemName } from './EditableItemName.tsx';
 import { useInspectionsParCarte } from '../context/InspectionsParCarteContext.tsx';
+import { useLectureSeule } from '../context/ProfilContext.tsx';
 import {
   Check,
   ChevronDown,
@@ -151,6 +152,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
   // Inspection de la carte (colonne Inspection du Suivi Global) : sert de
   // référence pour afficher l'avancement des contrôles de chaque OF.
   const { parCarte } = useInspectionsParCarte();
+  const lectureSeule = useLectureSeule();
   const [newQuantite, setNewQuantite] = useState<number>(50);
   const [newNbCases, setNewNbCases] = useState<number>(5);
   const [newCases, setNewCases] = useState<number[]>(() => normalizeCases(undefined, 5, 50));
@@ -314,7 +316,10 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
   };
 
   return (
-    <div className="bg-slate-50/90 p-2 rounded-xl border border-slate-200 mt-1 space-y-1.5">
+    <fieldset
+      disabled={lectureSeule}
+      className="bg-slate-50/90 p-2 rounded-xl border border-slate-200 mt-1 space-y-1.5 min-w-0"
+    >
       <div className="flex flex-wrap items-center gap-2 px-2.5 py-1.5 bg-white rounded-lg border border-slate-200 text-[11px] text-slate-600 shadow-2xs">
         <label className="font-semibold text-slate-700 whitespace-nowrap">
           Quantité totale à répartir
@@ -810,6 +815,6 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
           })}
         </div>
       ) : null}
-    </div>
+    </fieldset>
   );
 };

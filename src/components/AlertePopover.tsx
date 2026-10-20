@@ -26,6 +26,7 @@ import {
   VISIBILITE_ALERTE_DEFAUT,
 } from '../utils/alertesManuelles.ts';
 import { useJalonCatalogue } from '../context/JalonCatalogueContext.tsx';
+import { useLectureSeule } from '../context/ProfilContext.tsx';
 
 
 const COULEUR_ALERTE_CLS: Record<AlerteCouleur, { icone: string; fond: string; bordure: string; texte: string }> = {
@@ -65,6 +66,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
   onClose,
 }) => {
   const catalogue = useJalonCatalogue();
+  const lectureSeule = useLectureSeule();
   const panelRef = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState<{
     top: number;
@@ -177,6 +179,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
   const totalAlertes = enRetardATraiter.length + alertesEnCours.length;
 
   const ajouterAlerte = () => {
+    if (lectureSeule) return;
     const texte = saisie.trim();
     if (!texte) return;
     const now = getNowParis();
@@ -195,6 +198,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
   };
 
   const supprimerAlerte = (id: string) => {
+    if (lectureSeule) return;
     ecrireAlertesManuelles({
       ...manuelles,
       [card.id]: alertesManuelles.filter((a) => a.id !== id),
@@ -203,6 +207,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
 
   // Une alerte change de type sans être réécrite : « colonne » ou « popover uniquement ».
   const basculerVisibilite = (a: AlerteManuelle) => {
+    if (lectureSeule) return;
     const nouvelle: VisibiliteAlerte = alerteEnColonne(a) ? 'popover' : 'colonne';
     ecrireAlertesManuelles({
       ...manuelles,
@@ -213,6 +218,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
   // Marque une alerte comme réglée : elle est archivée dans l'historique et
   // n'allume plus la bande ni la colonne.
   const reglerAlerte = (a: AlerteManuelle) => {
+    if (lectureSeule) return;
     const now = getNowParis();
     ecrireAlertesManuelles({
       ...manuelles,
@@ -224,6 +230,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
 
   // Réouvre une alerte réglée : elle revient dans les alertes en cours.
   const rouvrirAlerte = (a: AlerteManuelle) => {
+    if (lectureSeule) return;
     const restauree: AlerteManuelle = { ...a };
     delete restauree.resolueLe;
     ecrireAlertesManuelles({
@@ -235,6 +242,7 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
   // Passe un jalon en validé (= réglé) : la carte est mise à jour (état validé
   // + horodatage), il quitte les retards et entre dans l'historique.
   const validerJalon = (j: JalonInfo) => {
+    if (lectureSeule) return;
     if (!onUpdateCard) return;
     const now = getNowParis();
     onUpdateCard(card.id, {
@@ -372,13 +380,15 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
                                 {echeance}
                               </div>
                             </div>
-                            <button
-                              onClick={() => validerJalon(j)}
-                              title="Marquer comme validé (réglé)"
-                              className="shrink-0 p-1 text-slate-400 hover:text-emerald-600 hover:bg-emerald-100 rounded cursor-pointer"
-                            >
-                              <CheckCircle2 className="w-3.5 h-3.5" />
-                            </button>
+                            {!lectureSeule && (
+                              <button
+                                onClick={() => validerJalon(j)}
+                                title="Marquer comme validé (réglé)"
+                                className="shrink-0 p-1 text-slate-400 hover:text-emerald-600 hover:bg-emerald-100 rounded cursor-pointer"
+                              >
+                                <CheckCircle2 className="w-3.5 h-3.5" />
+                              </button>
+                            )}
                           </li>
                         );
                       })}
@@ -474,36 +484,40 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
                           <div className="text-[10px] text-rose-700/70 mt-0.5">
                             Ajoutée le {a.creeLe}
                           </div>
-                          <label
-                            className="mt-1.5 inline-flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 cursor-pointer select-none hover:text-blue-700 transition-colors"
-                            title="Cocher pour afficher cette alerte dans la colonne Alertes du tableau"
-                          >
-                            <input
-                              type="checkbox"
-                              checked={alerteEnColonne(a)}
-                              onChange={() => basculerVisibilite(a)}
-                              className="accent-blue-600 w-3 h-3 cursor-pointer"
-                            />
-                            <Columns className="w-3 h-3 text-blue-600" />
-                            Colonne Alertes
-                          </label>
+                          {!lectureSeule && (
+                            <label
+                              className="mt-1.5 inline-flex items-center gap-1.5 text-[10px] font-semibold text-slate-500 cursor-pointer select-none hover:text-blue-700 transition-colors"
+                              title="Cocher pour afficher cette alerte dans la colonne Alertes du tableau"
+                            >
+                              <input
+                                type="checkbox"
+                                checked={alerteEnColonne(a)}
+                                onChange={() => basculerVisibilite(a)}
+                                className="accent-blue-600 w-3 h-3 cursor-pointer"
+                              />
+                              <Columns className="w-3 h-3 text-blue-600" />
+                              Colonne Alertes
+                            </label>
+                          )}
                         </div>
-                        <div className="flex flex-col gap-1 shrink-0">
-                          <button
-                            onClick={() => reglerAlerte(a)}
-                            title="Marquer comme réglée"
-                            className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-emerald-100 rounded cursor-pointer"
-                          >
-                            <CheckCircle2 className="w-3.5 h-3.5" />
-                          </button>
-                          <button
-                            onClick={() => supprimerAlerte(a.id)}
-                            title="Supprimer cette alerte"
-                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded cursor-pointer"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
+                        {!lectureSeule && (
+                          <div className="flex flex-col gap-1 shrink-0">
+                            <button
+                              onClick={() => reglerAlerte(a)}
+                              title="Marquer comme réglée"
+                              className="p-1 text-slate-400 hover:text-emerald-600 hover:bg-emerald-100 rounded cursor-pointer"
+                            >
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => supprimerAlerte(a.id)}
+                              title="Supprimer cette alerte"
+                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
                       </li>
                       );
                     })}
@@ -529,22 +543,24 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
                       <span className="shrink-0 text-[10px] font-bold text-slate-400 tabular-nums">
                         {horodatageBref(a.resolueLe) || 'Réglée'}
                       </span>
-                      <div className="flex shrink-0 gap-0.5">
-                        <button
-                          onClick={() => rouvrirAlerte(a)}
-                          title="Rouvrir cette alerte"
-                          className="p-0.5 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded cursor-pointer"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                        </button>
-                        <button
-                          onClick={() => supprimerAlerte(a.id)}
-                          title="Supprimer définitivement"
-                          className="p-0.5 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded cursor-pointer"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
+                      {!lectureSeule && (
+                        <div className="flex shrink-0 gap-0.5">
+                          <button
+                            onClick={() => rouvrirAlerte(a)}
+                            title="Rouvrir cette alerte"
+                            className="p-0.5 text-slate-400 hover:text-blue-600 hover:bg-blue-100 rounded cursor-pointer"
+                          >
+                            <RotateCcw className="w-3 h-3" />
+                          </button>
+                          <button
+                            onClick={() => supprimerAlerte(a.id)}
+                            title="Supprimer définitivement"
+                            className="p-0.5 text-slate-400 hover:text-rose-600 hover:bg-rose-100 rounded cursor-pointer"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -556,73 +572,85 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
 
       {/* Saisie : ancrée en bas du popover, toujours visible quelle que soit
           la longueur de la liste défilante. */}
-      <div className="shrink-0 border-t border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
+      {!lectureSeule && (
+        <div className="shrink-0 border-t border-slate-200 bg-slate-50/70 px-3.5 py-2.5">
 
-        <div className="flex items-center gap-1.5 mb-1.5">
-          <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Visible</span>
-          <label className="inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold text-slate-600 bg-white border border-slate-300 rounded-md cursor-pointer select-none hover:border-blue-300 transition-colors">
-            <input
-              type="checkbox"
-              checked={visibilite === 'colonne'}
-              onChange={() => setVisibilite(visibilite === 'colonne' ? 'popover' : 'colonne')}
-              className="accent-blue-600 w-3.5 h-3.5 cursor-pointer"
-            />
-            <Columns className="w-3 h-3 text-blue-600" />
-            Afficher dans la colonne Alertes
-          </label>
-        </div>
-
-        <div className="flex items-center gap-1.5 mb-1.5">
-          <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Couleur</span>
-          {ALERTES_COULEURS.map((c) => {
-            const cls = COULEUR_ALERTE_CLS[c];
-            const actif = couleur === c;
-            return (
-              <button
-                key={c}
-                type="button"
-                onClick={() => setCouleur(c)}
-                title={c}
-                className={
-                  'w-5 h-5 rounded-full border-2 cursor-pointer transition-transform ' +
-                  (c === 'rouge' ? 'bg-rose-500 ' : c === 'orange' ? 'bg-orange-500 ' : c === 'jaune' ? 'bg-yellow-400 ' : 'bg-emerald-500 ') +
-                  (actif ? 'border-slate-700 scale-110' : 'border-white shadow-sm')
-                }
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Visible</span>
+            <label className="inline-flex items-center gap-1.5 px-2 py-1 text-[10px] font-semibold text-slate-600 bg-white border border-slate-300 rounded-md cursor-pointer select-none hover:border-blue-300 transition-colors">
+              <input
+                type="checkbox"
+                checked={visibilite === 'colonne'}
+                onChange={() => setVisibilite(visibilite === 'colonne' ? 'popover' : 'colonne')}
+                className="accent-blue-600 w-3.5 h-3.5 cursor-pointer"
               />
-            );
-          })}
+              <Columns className="w-3 h-3 text-blue-600" />
+              Afficher dans la colonne Alertes
+            </label>
+          </div>
+
+          <div className="flex items-center gap-1.5 mb-1.5">
+            <span className="text-[10px] font-semibold text-slate-500 uppercase tracking-wide">Couleur</span>
+            {ALERTES_COULEURS.map((c) => {
+              const cls = COULEUR_ALERTE_CLS[c];
+              const actif = couleur === c;
+              return (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setCouleur(c)}
+                  title={c}
+                  className={
+                    'w-5 h-5 rounded-full border-2 cursor-pointer transition-transform ' +
+                    (c === 'rouge' ? 'bg-rose-500 ' : c === 'orange' ? 'bg-orange-500 ' : c === 'jaune' ? 'bg-yellow-400 ' : 'bg-emerald-500 ') +
+                    (actif ? 'border-slate-700 scale-110' : 'border-white shadow-sm')
+                  }
+                />
+              );
+            })}
+          </div>
+          <textarea
+            value={saisie}
+            onChange={(e) => setSaisie(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                ajouterAlerte();
+              }
+            }}
+            rows={2}
+            placeholder="Ajouter une alerte…"
+            className="w-full resize-none text-left align-top text-xs leading-snug text-slate-700 bg-white border border-transparent hover:border-slate-300 rounded-lg px-2.5 py-1.5 focus:border-rose-300 focus:outline-hidden focus:ring-1 focus:ring-rose-300"
+          />
+          <div className="flex items-center justify-between gap-2 mt-1.5">
+            <button
+              onClick={onClose}
+              className="px-2 py-1 text-[11px] font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
+            >
+              Fermer
+            </button>
+            <button
+              onClick={ajouterAlerte}
+              disabled={!saisie.trim()}
+              title="Ajouter l'alerte (Ctrl + Entrée)"
+              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-transparent"
+            >
+              <Plus className="w-3 h-3" />
+              Ajouter
+            </button>
+          </div>
         </div>
-        <textarea
-          value={saisie}
-          onChange={(e) => setSaisie(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-              e.preventDefault();
-              ajouterAlerte();
-            }
-          }}
-          rows={2}
-          placeholder="Ajouter une alerte…"
-          className="w-full resize-none text-left align-top text-xs leading-snug text-slate-700 bg-white border border-transparent hover:border-slate-300 rounded-lg px-2.5 py-1.5 focus:border-rose-300 focus:outline-hidden focus:ring-1 focus:ring-rose-300"
-        />
-        <div className="flex items-center justify-between gap-2 mt-1.5">
+      )}
+      {lectureSeule && (
+        <div className="shrink-0 border-t border-slate-200 bg-slate-50/70 px-3.5 py-2.5 flex justify-end">
           <button
             onClick={onClose}
             className="px-2 py-1 text-[11px] font-semibold text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-md transition-colors cursor-pointer"
           >
             Fermer
           </button>
-          <button
-            onClick={ajouterAlerte}
-            disabled={!saisie.trim()}
-            title="Ajouter l'alerte (Ctrl + Entrée)"
-            className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-slate-400 hover:text-rose-600 hover:bg-rose-50 border border-transparent hover:border-rose-200 rounded-md transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:border-transparent"
-          >
-            <Plus className="w-3 h-3" />
-            Ajouter
-          </button>
         </div>
-      </div>
+      )}
     </div>
   );
 };

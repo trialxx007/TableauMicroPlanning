@@ -3,6 +3,7 @@ import { ChevronDown, History, Plus, Truck, X } from 'lucide-react';
 import { InspectionBloc, InspectionValeur } from '../types/suiviGlobal.ts';
 import { dateCourte } from '../utils/inspections.ts';
 import { InspectionHistoriquePopover } from './InspectionHistoriquePopover.tsx';
+import { useLectureSeule } from '../context/ProfilContext.tsx';
 
 interface InspectionCellProps {
   bloc: InspectionBloc;
@@ -149,6 +150,7 @@ export const InspectionCell: React.FC<InspectionCellProps> = ({
   onEnvoyerExpedition,
   expeditionActive = false,
 }) => {
+  const lectureSeule = useLectureSeule();
   const [dateEnEdition, setDateEnEdition] = useState<string | null>(null);
   const [ancreHistorique, setAncreHistorique] = useState<HTMLElement | null>(null);
 
@@ -196,27 +198,33 @@ export const InspectionCell: React.FC<InspectionCellProps> = ({
         <>
           <button
             type="button"
-            onClick={() => setDateEnEdition(valeur.id)}
-            title="Date d'inspection — cliquer pour modifier"
-            className="font-mono text-[10px] leading-none text-slate-600 hover:text-blue-600 transition-colors shrink-0"
+            onClick={lectureSeule ? undefined : () => setDateEnEdition(valeur.id)}
+            title={lectureSeule ? "Date d'inspection" : "Date d'inspection — cliquer pour modifier"}
+            className={`font-mono text-[10px] leading-none text-slate-600 transition-colors shrink-0 ${lectureSeule ? 'cursor-default' : 'hover:text-blue-600'}`}
           >
             {dateCourte(valeur.date)}
           </button>
           <button
             type="button"
-            onClick={(e) => onBadgeClick(valeur.id, e.currentTarget)}
+            onClick={
+              lectureSeule ? undefined : (e) => onBadgeClick(valeur.id, e.currentTarget)
+            }
             title={
-              valeur.resultat === 'P'
+              lectureSeule
+                ? 'État du contrôle'
+                : valeur.resultat === 'P'
                 ? 'Pass — cliquer pour changer'
                 : valeur.resultat === 'F'
                 ? 'Fail — cliquer pour changer'
                 : 'Cliquer pour choisir Pass ou Fail'
             }
             className={
-              valeur.resultat === 'P' || valeur.resultat === 'F'
+              (valeur.resultat === 'P' || valeur.resultat === 'F'
                 ? badgeClasse(valeur)
-                : 'h-5 shrink-0 min-w-9 px-1.5 rounded text-[12px] font-bold leading-none text-white bg-slate-400 hover:bg-slate-500 inline-flex items-center justify-center transition-colors duration-200'
+                : 'h-5 shrink-0 min-w-9 px-1.5 rounded text-[12px] font-bold leading-none text-white bg-slate-400 inline-flex items-center justify-center') +
+              (lectureSeule ? '' : ' transition-colors duration-200 hover:bg-slate-500')
             }
+            disabled={lectureSeule}
           >
             {valeur.resultat === 'P'
               ? 'Pass'
@@ -224,14 +232,16 @@ export const InspectionCell: React.FC<InspectionCellProps> = ({
               ? 'Fail'
               : '-'}
           </button>
-          <button
-            type="button"
-            onClick={() => onSupprimerValeur(valeur.id)}
-            title="Supprimer ce contrôle"
-            className="opacity-0 group-hover/val:opacity-100 text-slate-400 hover:text-rose-600 transition-opacity shrink-0"
-          >
-            <X className="w-3 h-3" />
-          </button>
+          {!lectureSeule && (
+            <button
+              type="button"
+              onClick={() => onSupprimerValeur(valeur.id)}
+              title="Supprimer ce contrôle"
+              className="opacity-0 group-hover/val:opacity-100 text-slate-400 hover:text-rose-600 transition-opacity shrink-0"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
         </>
       )}
     </span>
@@ -291,16 +301,18 @@ export const InspectionCell: React.FC<InspectionCellProps> = ({
                       <History className="w-3.5 h-3.5" />
                     </button>
                   )}
-                  <AjouterMenu
-                    numOf={numOf}
-                    i100Disponible={i100Disponible}
-                    i100Passe={i100Passe}
-                    onAjouterI50={() => onAjouterValeur('I', 50, ofIndex)}
-                    onAjouterI100={() => onAjouterValeur('I', 100, ofIndex)}
-                    onAjouterCC={() => onAjouterValeur('CC', undefined, ofIndex)}
-                  />
+                  {!lectureSeule && (
+                    <AjouterMenu
+                      numOf={numOf}
+                      i100Disponible={i100Disponible}
+                      i100Passe={i100Passe}
+                      onAjouterI50={() => onAjouterValeur('I', 50, ofIndex)}
+                      onAjouterI100={() => onAjouterValeur('I', 100, ofIndex)}
+                      onAjouterCC={() => onAjouterValeur('CC', undefined, ofIndex)}
+                    />
+                  )}
                   {/* Envoi en expédition (icône camion) : une seule fois, sur le 1er OF. */}
-                  {gi === 0 && onEnvoyerExpedition && (
+                  {gi === 0 && onEnvoyerExpedition && !lectureSeule && (
                     <button
                       type="button"
                       onClick={onEnvoyerExpedition}

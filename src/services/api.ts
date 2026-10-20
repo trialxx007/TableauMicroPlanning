@@ -10,6 +10,36 @@ import { normaliserDateJalon, normaliserSemaine } from '../utils/jalons.ts';
  */
 const STORAGE_KEY = 'point_commande_cards_cache_textile_v6';
 
+/** Clé de session du profil connecté (miroir de `utils/auth.ts`). */
+const SESSION_KEY = 'aic_session_profil_v1';
+
+/**
+ * Identifiant du profil connecté, lu au moment de la requête (jamais mis en
+ * cache : l'utilisateur peut se déconnecter/reconnecter sans recharger le module).
+ * Sert l'en-tête `X-Profil-Id` qui alimente le journal des modifications.
+ */
+function profilCourant(): string {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    if (!raw) return 'inconnu';
+    const parsed: unknown = JSON.parse(raw);
+    const id = (parsed as { profilId?: unknown })?.profilId;
+    return typeof id === 'string' && id ? id : 'inconnu';
+  } catch {
+    return 'inconnu';
+  }
+}
+
+/** En-têtes JSON communs, avec le profil auteur pour le journal côté serveur. */
+function entetesJson(): Record<string, string> {
+  return { 'Content-Type': 'application/json', 'X-Profil-Id': profilCourant() };
+}
+
+/** En-tête seul, pour les requêtes sans corps (DELETE). */
+function enteteProfil(): Record<string, string> {
+  return { 'X-Profil-Id': profilCourant() };
+}
+
 function estCacheCompatible(raw: unknown): raw is CardItem[] {
   return (
     Array.isArray(raw) &&
@@ -64,7 +94,7 @@ export const cardApi = {
     try {
       const res = await fetch('/api/v1/cards', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: entetesJson(),
         body: JSON.stringify(data),
       });
       if (res.ok) {
@@ -129,7 +159,7 @@ export const cardApi = {
     try {
       const res = await fetch(`/api/v1/cards/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: entetesJson(),
         body: JSON.stringify(data),
       });
       const json = await res.json().catch(() => null);
@@ -195,7 +225,7 @@ export const cardApi = {
     try {
       const res = await fetch(`/api/v1/cards/${id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: entetesJson(),
         body: JSON.stringify(data),
       });
       const json = await res.json().catch(() => null);
@@ -240,7 +270,7 @@ export const cardApi = {
 
   async delete(id: string): Promise<void> {
     try {
-      await fetch(`/api/v1/cards/${id}`, { method: 'DELETE' });
+      await fetch(`/api/v1/cards/${id}`, { method: 'DELETE', headers: enteteProfil() });
     } catch {
       // Ignore
     }
@@ -308,7 +338,7 @@ export const jalonApi = {
   ): Promise<JalonCatalogue> {
     const res = await fetch('/api/v1/jalons', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: entetesJson(),
       body: JSON.stringify({ code, libelle, categorie, ...(cardId ? { cardId } : {}) }),
     });
     const json = await res.json().catch(() => ({ success: false }));
@@ -322,7 +352,7 @@ export const jalonApi = {
   async setCategorie(code: string, categorie: JalonCategorie): Promise<JalonCatalogue> {
     const res = await fetch(`/api/v1/jalons/${encodeURIComponent(code)}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: entetesJson(),
       body: JSON.stringify({ categorie }),
     });
     const json = await res.json().catch(() => ({ success: false }));
@@ -336,7 +366,7 @@ export const jalonApi = {
   async removeFromCard(cardId: string, code: string): Promise<void> {
     const res = await fetch(
       `/api/v1/cards/${encodeURIComponent(cardId)}/jalons/${encodeURIComponent(code)}`,
-      { method: 'DELETE' }
+      { method: 'DELETE', headers: enteteProfil() }
     );
     const json = await res.json().catch(() => ({ success: false }));
     if (!res.ok || !json.success) {
@@ -383,7 +413,7 @@ export const suiviGlobalApi = {
     try {
       const res = await fetch('/api/v1/suivi-layout', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: entetesJson(),
         body: JSON.stringify({ rows }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -396,5 +426,61 @@ export const suiviGlobalApi = {
     try {
       localStorage.setItem('suivi_global_rows_v3', JSON.stringify(rows));
     } catch {}
+  },
+};
+
+/* ---------------------------------------------------------- historique (audit) */
+
+/** Une entrée du journal des modifications, telle que servie par l'API. */
+export interface EntreeHistorique {
+  id: number;
+  at: string;
+  profil: string;
+  action: string;
+  cible: string;
+  details?: string;
+}
+
+/** Filtres de lecture de l'historique. Tous optionnels. */
+export interface FiltresHistorique {
+  profil?: string;
+  /** AAAA-MM-JJ (fuseau du site), borne basse incluse. */
+  dateMin?: string;
+  /** AAAA-MM-JJ (fuseau du site), borne haute incluse. */
+  dateMax?: string;
+  limit?: number;
+}
+
+/** Journal des modifications (onglet Direction). */
+export const historiqueApi = {
+  async getAll(filtres: FiltresHistorique = {}): Promise<EntreeHistorique[]> {
+    const params = new URLSearchParams();
+    if (filtres.profil) params.set('profil', filtres.profil);
+    if (filtres.dateMin) params.set('dateMin', filtres.dateMin);
+    if (filtres.dateMax) params.set('dateMax', filtres.dateMax);
+    if (filtres.limit) params.set('limit', String(filtres.limit));
+    const suffixe = params.toString();
+    try {
+      const res = await fetch(`/api/v1/historique${suffixe ? `?${suffixe}` : ''}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) return json.data as EntreeHistorique[];
+    } catch {
+      // Serveur indisponible : l'onglet affichera une liste vide.
+    }
+    return [];
+  },
+
+  /** Vide le journal (supprime les entrées, garde la table). */
+  async vider(): Promise<boolean> {
+    try {
+      const res = await fetch('/api/v1/historique', {
+        method: 'DELETE',
+        headers: enteteProfil(),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
   },
 };

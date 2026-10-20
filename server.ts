@@ -21,6 +21,9 @@ import {
   updateCardData,
   getSuiviGlobalLayout,
   setSuiviGlobalLayout,
+  journaliser,
+  listerJournal,
+  viderJournal,
 } from './db.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -85,6 +88,108 @@ function getCurrentDateTime() {
 // REST API v1
 const apiRouter = express.Router();
 
+/**
+ * Profil auteur d'une requête. Le client pose l'en-tête `X-Profil-Id` à chaque
+ * écriture ; à défaut (curl, tests, anciens clients) on retombe sur
+ * « inconnu » plutôt que de perdre la trace de la modification.
+ */
+function profilDe(req: Request): string {
+  const brut = req.header('X-Profil-Id');
+  const valeur = typeof brut === 'string' ? brut.trim() : '';
+  return valeur || 'inconnu';
+}
+
+/** Libellé lisible d'une carte pour la colonne « cible » du journal. */
+function cibleCarte(card: { id: string; modele?: string; batch?: string }): string {
+  const texte = card.modele || card.batch || '';
+  return texte ? `${card.id} · ${texte}` : card.id;
+}
+
+/**
+ * Détail structuré d'une modification, stocké en JSON dans `details` : une liste
+ * de champs touchés, chacun avec sa valeur avant/après. La clé (`k`) sert à la
+ * fois de libellé technique (pour un rendu coloré par nature de champ côté
+ * Direction) et de clé de comparaison.
+ */
+interface ChampModifie {
+  k: string;
+  a: unknown;
+  b: unknown;
+}
+
+/** Sérialise un détail structuré pour la colonne `details` du journal. */
+function detailler(champs: ChampModifie[], resume: string): string {
+  return JSON.stringify({ v: 1, resume, champs });
+}
+
+/** Vrai si une valeur est « vide » au sens de l'affichage (null, '', undefined). */
+function vide(v: unknown): boolean {
+  return v === null || v === undefined || v === '';
+}
+
+/**
+ * Compare deux cartes champ par champ selon une liste blanche, et renvoie les
+ * champs réellement modifiés. Les jalons sont comparés globalement (un état de
+ * jalon est un objet imbriqué) et résumés par leurs codes.
+ */
+const CHAMPS_CARTE_SUIVIS: { cle: string; lire: (c: CardItem) => unknown }[] = [
+  { cle: 'client', lire: (c) => c.client },
+  { cle: 'batch', lire: (c) => c.batch },
+  { cle: 'modele', lire: (c) => c.modele },
+  { cle: 'typeCarte', lire: (c) => c.typeCarte },
+  { cle: 'quantiteDemandee', lire: (c) => c.quantiteDemandee },
+  { cle: 'quantiteFinie', lire: (c) => c.quantiteFinie },
+  { cle: 'statut', lire: (c) => c.statut },
+  { cle: 'okProd', lire: (c) => Boolean(c.okProd) },
+  { cle: 'decisionReunion', lire: (c) => c.decisionReunion },
+  { cle: 'notes', lire: (c) => c.notes },
+];
+
+function diffCarte(avant: CardItem, apres: CardItem): ChampModifie[] {
+  const champs: ChampModifie[] = [];
+  for (const { cle, lire } of CHAMPS_CARTE_SUIVIS) {
+    const a = lire(avant);
+    const b = lire(apres);
+    if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) {
+      champs.push({ k: cle, a: vide(a) ? null : a, b: vide(b) ? null : b });
+    }
+  }
+
+  // Jalons : on résume par les codes dont l'état (validé/semaine/date) a changé.
+  const etat = (c: CardItem) =>
+    new Map(
+      c.jalons.map((j) => [
+        j.code,
+        JSON.stringify({ v: Boolean(j.valide), s: j.semaine ?? null, d: j.date ?? null }),
+      ])
+    );
+  const avantMap = etat(avant);
+  const apresMap = etat(apres);
+  const codes = new Set([...avantMap.keys(), ...apresMap.keys()]);
+  const codesModifies: string[] = [];
+  for (const code of codes) {
+    if (avantMap.get(code) !== apresMap.get(code)) codesModifies.push(code);
+  }
+  if (codesModifies.length) {
+    champs.push({
+      k: 'jalons',
+      a: codesModifies.filter((c) => avantMap.has(c)).join(', ') || null,
+      b: codesModifies.filter((c) => apresMap.has(c)).join(', ') || null,
+    });
+  }
+
+  // OFs : nombre, et quantités globales (détail trop fin pour être lisible).
+  if ((avant.ofs?.length ?? 0) !== (apres.ofs?.length ?? 0)) {
+    champs.push({ k: 'ofsOrdre', a: avant.ofs?.length ?? 0, b: apres.ofs?.length ?? 0 });
+  } else if (JSON.stringify(avant.ofs) !== JSON.stringify(apres.ofs)) {
+    const somme = (c: CardItem) =>
+      (c.ofs ?? []).reduce((s, o) => s + (Number(o.quantiteFinie) || 0), 0);
+    champs.push({ k: 'ofsQuantite', a: somme(avant), b: somme(apres) });
+  }
+
+  return champs;
+}
+
 /* ------------------------------------------------------------------ jalons */
 
 // Catalogue partagé des jalons : une seule base pour tout le monde. Il porte les
@@ -102,6 +207,13 @@ apiRouter.post('/jalons', (req: Request, res: Response) => {
   try {
     const cardId = typeof req.body?.cardId === 'string' ? req.body.cardId : undefined;
     const created = createJalon(req.body?.code, req.body?.libelle, req.body?.categorie, cardId);
+    const carte = cardId ? getCard(cardId) : undefined;
+    journaliser({
+      profil: profilDe(req),
+      action: 'jalon.ajoute',
+      cible: carte ? cibleCarte(carte) : `catalogue · ${created.code}`,
+      details: `Jalon ${created.code} (${created.libelle})`,
+    });
     res.status(201).json({ success: true, data: created, message: `Jalon ${created.code} ajouté` });
   } catch (err) {
     res.status(400).json({ success: false, error: (err as Error).message });
@@ -112,10 +224,18 @@ apiRouter.patch('/jalons/:code', (req: Request, res: Response) => {
   try {
     // La grandeur est indépendante de l'intitulé : seule celle qui est présente
     // est écrite, l'autre garde sa valeur.
-    const data =
-      req.body?.categorie !== undefined
-        ? setJalonCategorie(req.params.code, req.body.categorie)
-        : renameJalon(req.params.code, req.body?.libelle);
+    const parCategorie = req.body?.categorie !== undefined;
+    const data = parCategorie
+      ? setJalonCategorie(req.params.code, req.body.categorie)
+      : renameJalon(req.params.code, req.body?.libelle);
+    journaliser({
+      profil: profilDe(req),
+      action: parCategorie ? 'jalon.grandeur' : 'jalon.renomme',
+      cible: `catalogue · ${req.params.code}`,
+      details: parCategorie
+        ? `Grandeur → ${data.categorie}`
+        : `Intitulé → ${data.libelle}`,
+    });
     res.json({ success: true, data });
   } catch (err) {
     res.status(400).json({ success: false, error: (err as Error).message });
@@ -126,6 +246,13 @@ apiRouter.patch('/jalons/:code', (req: Request, res: Response) => {
 apiRouter.delete('/cards/:cardId/jalons/:code', (req: Request, res: Response) => {
   try {
     deleteJalonForCard(req.params.cardId, req.params.code);
+    const carte = getCard(req.params.cardId);
+    journaliser({
+      profil: profilDe(req),
+      action: 'jalon.retire',
+      cible: carte ? cibleCarte(carte) : req.params.cardId,
+      details: `Jalon ${req.params.code}`,
+    });
     res.json({ success: true, message: `Jalon ${req.params.code} retiré de la carte` });
   } catch (err) {
     res.status(400).json({ success: false, error: (err as Error).message });
@@ -136,6 +263,11 @@ apiRouter.delete('/cards/:cardId/jalons/:code', (req: Request, res: Response) =>
 apiRouter.delete('/jalons/:code', (req: Request, res: Response) => {
   try {
     deleteJalon(req.params.code);
+    journaliser({
+      profil: profilDe(req),
+      action: 'jalon.supprime',
+      cible: `catalogue · ${req.params.code}`,
+    });
     res.json({ success: true, message: `Jalon ${req.params.code} supprimé` });
   } catch (err) {
     res.status(400).json({ success: false, error: (err as Error).message });
@@ -269,6 +401,13 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
 
   const created = insertCard(newCard);
 
+  journaliser({
+    profil: profilDe(req),
+    action: 'carte.creee',
+    cible: cibleCarte(created),
+    details: `Client ${created.client} · ${created.quantiteDemandee} demandées`,
+  });
+
   res.status(201).json({
     success: true,
     data: created,
@@ -319,6 +458,16 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
       body.decisionReunion !== undefined ? body.decisionReunion : existant.decisionReunion,
     notes: body.notes !== undefined ? body.notes : existant.notes,
   });
+
+  if (updated) {
+    const champs = diffCarte(existant, updated);
+    journaliser({
+      profil: profilDe(req),
+      action: 'carte.modifiee',
+      cible: cibleCarte(updated),
+      details: detailler(champs, champs.length ? '' : 'Fiche mise à jour'),
+    });
+  }
 
   res.json({
     success: true,
@@ -396,6 +545,16 @@ apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
 
   const updated = updateCardData(req.params.id, patch);
 
+  if (updated) {
+    const champs = diffCarte(existing, updated);
+    journaliser({
+      profil: profilDe(req),
+      action: 'carte.modifiee',
+      cible: cibleCarte(updated),
+      details: detailler(champs, champs.length ? '' : 'Point journalier enregistré'),
+    });
+  }
+
   res.json({
     success: true,
     data: updated,
@@ -410,6 +569,12 @@ apiRouter.delete('/cards/:id', (req: Request, res: Response) => {
     return res.status(404).json({ success: false, error: 'Carte non trouvée' });
   }
 
+  journaliser({
+    profil: profilDe(req),
+    action: 'carte.supprimee',
+    cible: cibleCarte(removed),
+  });
+
   res.json({
     success: true,
     data: removed,
@@ -418,8 +583,14 @@ apiRouter.delete('/cards/:id', (req: Request, res: Response) => {
 });
 
 // Reset demo data : rejoue le seed (cartes d'exemple + catalogue initial)
-apiRouter.post('/reset', (_req: Request, res: Response) => {
+apiRouter.post('/reset', (req: Request, res: Response) => {
   resetDatabase();
+
+  journaliser({
+    profil: profilDe(req),
+    action: 'base.reinitialisee',
+    cible: 'données de démonstration',
+  });
 
   res.json({
     success: true,
@@ -455,6 +626,36 @@ apiRouter.get('/stats', (_req: Request, res: Response) => {
     },
 });
 });
+/* ------------------------------------------------------------------ historique */
+
+// Journal des modifications, servi à l'onglet Direction. Filtres optionnels :
+// `profil`, `dateMin`, `dateMax` (AAAA-MM-JJ, fuseau du site), `limit`.
+apiRouter.get('/historique', (req: Request, res: Response) => {
+  try {
+    const { profil, dateMin, dateMax, limit } = req.query;
+    const data = listerJournal({
+      ...(typeof profil === 'string' && profil.trim() ? { profil: profil.trim() } : {}),
+      ...(typeof dateMin === 'string' && dateMin.trim() ? { dateMin: dateMin.trim() } : {}),
+      ...(typeof dateMax === 'string' && dateMax.trim() ? { dateMax: dateMax.trim() } : {}),
+      ...(typeof limit === 'string' && limit.trim() ? { limit: Number(limit) } : {}),
+    });
+    res.json({ success: true, count: data.length, data });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
+// Vide le journal (supprime les entrées, garde la table) : le vidage lui-même
+// n'est pas journalisé, sinon la première entrée réapparaîtrait aussitôt.
+apiRouter.delete('/historique', (_req: Request, res: Response) => {
+  try {
+    viderJournal();
+    res.json({ success: true, message: 'Historique vidé' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
 /* ------------------------------------------------------------------ suivi global layout */
 
 // GET layout partagé
@@ -475,6 +676,11 @@ apiRouter.put('/suivi-layout', (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'rows doit être un tableau' });
     }
     setSuiviGlobalLayout(rows);
+    journaliser({
+      profil: profilDe(req),
+      action: 'suivi.modifie',
+      cible: `Suivi Global · ${rows.length} chaîne${rows.length > 1 ? 's' : ''}`,
+    });
     res.json({ success: true, message: 'Layout Suivi Global sauvegardé' });
   } catch (err) {
     res.status(500).json({ success: false, error: (err as Error).message });
