@@ -12,8 +12,8 @@ import {
   KanbanSection,
 } from '../types/kanban.ts';
 import { chargerKanban, nouvelId, sauverKanban } from '../utils/kanbanStorage.ts';
-import { AppPage, ViewSwitcher } from './ViewSwitcher.tsx';
-import { EditableItemName } from './EditableItemName.tsx';
+import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
+import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
 import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import { Calendar, Check, Clock, GitMerge, GripVertical, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
 

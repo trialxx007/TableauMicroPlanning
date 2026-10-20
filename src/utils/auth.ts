@@ -8,7 +8,7 @@
 export type ProfilId = 'utilisateur' | 'resp-planning' | 'production' | 'direction';
 
 /** Onglets de l'application (miroir de `AppPage` de ViewSwitcher). */
-export type OngletId = 'point-journalier' | 'suivi-global' | 'tableaux-ofs' | 'historique';
+export type OngletId = 'point-journalier' | 'suivi-global' | 'tableaux-ofs' | 'historique' | 'developpement';
 
 export interface Profil {
   id: ProfilId;
