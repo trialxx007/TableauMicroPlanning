@@ -8,6 +8,8 @@ import {
   KanbanCouleurId,
   KanbanData,
   KanbanColonne,
+  KanbanDeplacement,
+  KanbanAttente,
   KanbanPersonne,
   KanbanSection,
 } from '../types/kanban.ts';
@@ -15,9 +17,9 @@ import { chargerKanban, nouvelId, sauverKanban } from '../utils/kanbanStorage.ts
 import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
 import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
 import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
-import { getNowParis, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { dateISOFromDateTime, estDateISO, getDateISOSite, getNowParis, joursEntreDatesISO, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import { Profil } from '@/src/utils/auth.ts';
-import { Calendar, Check, Clock, GitMerge, GripVertical, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Calendar, Check, Clock, GitMerge, GripVertical, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
 
 interface DeveloppementViewProps {
   onChangePage: (page: AppPage) => void;
@@ -37,7 +39,9 @@ interface BrouillonEdition {
   client: string;
   remarques: string;
   couleur: KanbanCouleurId;
-  date?: string;
+  /** Date d'échéance (optionnelle) */
+  dateEcheance?: string;
+  attentes: KanbanAttente[];
 }
 
 function trierParOrdre<T extends { ordre: number }>(items: T[]): T[] {
@@ -46,6 +50,28 @@ function trierParOrdre<T extends { ordre: number }>(items: T[]): T[] {
 
 function clamp(v: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, v));
+}
+
+/** Affiche une date ISO (`YYYY-MM-DD` ou horodatage) au format français. */
+function formatDateFr(valeur: string | null | undefined): string {
+  if (!valeur) return '—';
+  const [annee, mois, jour] = valeur.slice(0, 10).split('-');
+  return annee && mois && jour ? `${jour}/${mois}/${annee}` : valeur;
+}
+
+/** Construit une entrée d'historique de déplacement. */
+function entreeDeplacement(
+  date: string,
+  colonneId: string,
+  sectionId?: string,
+  personneId?: string
+): KanbanDeplacement {
+  return {
+    date,
+    colonneId,
+    ...(sectionId ? { sectionId } : {}),
+    ...(personneId ? { personneId } : {}),
+  };
 }
 
 /**
@@ -76,7 +102,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   const [composerClient, setComposerClient] = useState('');
   const [composerRemarques, setComposerRemarques] = useState('');
   const [composerCouleur, setComposerCouleur] = useState<KanbanCouleurId | null>(null);
-  const [composerDate, setComposerDate] = useState(() => new Date().toISOString().split('T')[0]);
+  const [composerDateEcheance, setComposerDateEcheance] = useState<string>('');
   const [nouvelleColonne, setNouvelleColonne] = useState(false);
   const [nouveauTitre, setNouveauTitre] = useState('');
 
@@ -96,30 +122,34 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   const cartesDe = (colonneId: string): KanbanCarte[] =>
     trierParOrdre(data.cartes.filter((c) => c.colonneId === colonneId));
 
-/**
-   * Vérifie si une carte doit déclencher l'alarme : date d'échéance dépassée de 2 jours
-   * sans que la carte n'ait bougé de sa zone (colonne/section).
-   * Condition : today >= dateEntreeZone + 2 jours ET la date d'échéance (date) est définie.
+  /**
+   * Calcule l'alarme d'une carte. Les anciennes cartes n'ont pas
+   * `dateEntreeZone` : on retombe alors sur leur date de création.
    */
-  const estEnAlarme = (carte: KanbanCarte): boolean => {
-    if (!carte.date || !carte.dateEntreeZone) return false;
-    // Alarme 1 : délai dans la zone actuelle (2j ou 4j selon section BRODERIE MAIN)
+  const getAlarmeInfo = (carte: KanbanCarte): { active: boolean; type: 'zone' | 'global' | null; diffZone: number; seuilZone: number; diffTotal: number; estBroderieMain: boolean; dateEntree: string | null; estDerniereColonne: boolean } => {
     const colonne = data.colonnes.find((c) => c.id === carte.colonneId);
     const section = carte.sectionId ? colonne?.sections?.find((s) => s.id === carte.sectionId) : undefined;
-    const estBroderieMain = section && estSectionBroderieMain(section);
+    const estBroderieMain = Boolean(section && estSectionBroderieMain(section));
     const seuilZone = estBroderieMain ? 4 : 2;
-    const today = new Date();
-    const entree = new Date(carte.dateEntreeZone);
-    const diffZone = Math.floor((today.getTime() - entree.getTime()) / (1000 * 60 * 60 * 24));
-    if (diffZone >= seuilZone) return true;
-    // Alarme 2 : délai global depuis création (12j max pour atteindre la dernière colonne)
+    const dateEntree = estDateISO(carte.dateEntreeZone) ? carte.dateEntreeZone : dateISOFromDateTime(carte.creeLe);
+    const creation = dateISOFromDateTime(carte.creeLe);
+    const diffZone = dateEntree ? joursEntreDatesISO(dateEntree) : 0;
+    const diffTotal = creation ? joursEntreDatesISO(creation) : diffZone;
     const derniereColonne = data.colonnes.reduce((max, c) => (c.ordre > max.ordre ? c : max), data.colonnes[0]);
-    if (carte.colonneId !== derniereColonne.id) {
-      const creation = new Date(carte.creeLe);
-      const diffTotal = Math.floor((today.getTime() - creation.getTime()) / (1000 * 60 * 60 * 24));
-      if (diffTotal >= 12) return true;
+    const estDerniereColonne = Boolean(derniereColonne && carte.colonneId === derniereColonne.id);
+    const inactive = { active: false, type: null as null, diffZone, seuilZone, diffTotal, estBroderieMain, dateEntree, estDerniereColonne };
+
+    if (!dateEntree) return inactive;
+
+    // Alarme 1 : délai dans la zone actuelle (2j ou 4j selon section BRODERIE MAIN).
+    if (diffZone >= seuilZone) {
+      return { active: true, type: 'zone', diffZone, seuilZone, diffTotal, estBroderieMain, dateEntree, estDerniereColonne };
     }
-    return false;
+    // Alarme 2 : délai global depuis création (12j max pour atteindre la dernière colonne).
+    if (!estDerniereColonne && diffTotal >= 12) {
+      return { active: true, type: 'global', diffZone, seuilZone, diffTotal, estBroderieMain, dateEntree, estDerniereColonne };
+    }
+    return inactive;
   };
   const cartesDeSection = (colonne: KanbanColonne, sectionId?: string): KanbanCarte[] => {
     const premiere = colonne.sections?.[0]?.id;
@@ -409,9 +439,11 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             colonneId,
             sectionId: zone,
             date: date || undefined,
-            dateEntreeZone: new Date().toISOString().split('T')[0],
+            dateEntreeZone: getDateISOSite(),
             ordre: prev.cartes.filter((c) => c.colonneId === colonneId && memeZone(c)).length,
             creeLe: new Date().toISOString(),
+            historiqueDeplacements: [entreeDeplacement(getDateISOSite(), colonneId, zone)],
+            attentes: [],
           },
         ],
       };
@@ -438,7 +470,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     sectionId: string | undefined,
     index: number
   ) => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getDateISOSite();
     setData((prev) => {
       const carte = prev.cartes.find((c) => c.id === carteId);
       const colonne = prev.colonnes.find((c) => c.id === colonneId);
@@ -451,11 +483,21 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
         prev.cartes.filter((c) => c.colonneId === colonneId && c.id !== carteId && memeZone(c))
       );
       const position = clamp(index, 0, cibles.length);
-      // Si la carte change de zone, on met à jour dateEntreeZone à aujourd'hui.
       const changeZone = carte.colonneId !== colonneId || carte.sectionId !== zone;
       const ordonnees = [
         ...cibles.slice(0, position),
-        { ...carte, colonneId, sectionId: zone, ...(changeZone ? { dateEntreeZone: today } : {}) },
+        {
+          ...carte,
+          colonneId,
+          sectionId: zone,
+          personneId: undefined,
+          bloc: undefined,
+          dateEntreeZone: changeZone ? today : carte.dateEntreeZone,
+          date: changeZone ? undefined : carte.date,
+          historiqueDeplacements: changeZone
+            ? [...(carte.historiqueDeplacements ?? []), entreeDeplacement(today, colonneId, zone)]
+            : carte.historiqueDeplacements,
+        },
         ...cibles.slice(position),
       ].map((c, i) => ({ ...c, ordre: i }));
       // Les cartes hors zone (autres sections, autres colonnes) ne bougent pas.
@@ -474,7 +516,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     personneId: string,
     index: number
   ) => {
-    const today = new Date().toISOString().split('T')[0];
+    const today = getDateISOSite();
     setData((prev) => {
       const carte = prev.cartes.find((c) => c.id === carteId);
       const colonne = prev.colonnes.find((c) => c.id === colonneId);
@@ -495,7 +537,16 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       const position = clamp(index, 0, cibles.length);
       const ordonnees = [
         ...cibles.slice(0, position),
-        { ...carte, colonneId, sectionId, personneId, bloc: personne.bloc, dateEntreeZone: today },
+        {
+          ...carte,
+          colonneId,
+          sectionId,
+          personneId,
+          bloc: personne.bloc,
+          dateEntreeZone: today,
+          date: undefined,
+          historiqueDeplacements: [...(carte.historiqueDeplacements ?? []), entreeDeplacement(today, colonneId, sectionId, personneId)],
+        },
         ...cibles.slice(position),
       ].map((c, i) => ({ ...c, ordre: i }));
       const hors = prev.cartes.filter(
@@ -679,7 +730,8 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       remarques: carte.remarques ?? '',
       // La couleur affichée sert de défaut : le post-it a toujours une couleur.
       couleur: carte.couleur ?? 'jaune',
-      date: carte.date,
+      dateEcheance: carte.date,
+      attentes: (carte.attentes ?? []).map((a) => ({ ...a })),
     });
   };
 
@@ -693,21 +745,29 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       client: edition.client.trim() || undefined,
       remarques: edition.remarques.trim() || undefined,
       couleur: edition.couleur,
-      date: edition.date || undefined,
+      date: edition.dateEcheance || undefined,
+      attentes: edition.attentes
+        .filter((a) => a.dateEntree)
+        .map((a) => ({
+          id: a.id,
+          libelle: a.libelle?.trim() || undefined,
+          dateEntree: a.dateEntree,
+          ...(a.dateSortie ? { dateSortie: a.dateSortie } : {}),
+        })),
     });
     setEdition(null);
   };
 
   const validerComposer = (colonneId: string, sectionId?: string) => {
     if (!composerNom.trim() || !composerCouleur) return;
-    ajouterCarte(colonneId, sectionId, composerNom, composerEtat, composerTraiteur, composerClient, composerRemarques, composerCouleur, composerDate);
+    ajouterCarte(colonneId, sectionId, composerNom, composerEtat, composerTraiteur, composerClient, composerRemarques, composerCouleur, composerDateEcheance);
     setComposerNom('');
     setComposerEtat('');
     setComposerTraiteur('');
     setComposerClient('');
     setComposerRemarques('');
     setComposerCouleur(null);
-    setComposerDate(new Date().toISOString().split('T')[0]);
+    setComposerDateEcheance('');
   };
 
   const fermerComposer = () => {
@@ -718,7 +778,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     setComposerClient('');
     setComposerRemarques('');
     setComposerCouleur(null);
-    setComposerDate(new Date().toISOString().split('T')[0]);
+    setComposerDateEcheance('');
   };
 
   /** Post-its d'une zone : formes carrées, 2 par ligne, édition sur place. */
@@ -732,6 +792,24 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             key={carte.id}
             className="col-span-2 bg-white rounded-lg border-2 border-violet-400 shadow-sm p-3 space-y-2"
           >
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-bold text-slate-500 uppercase">Date de déplacement</span>
+              <span className="text-xs font-semibold text-slate-700 font-mono">
+                {formatDateFr(getAlarmeInfo(carte).dateEntree ?? carte.dateEntreeZone ?? carte.creeLe)}
+              </span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1">
+              {(carte.historiqueDeplacements ?? []).slice(-6).map((h, i) => {
+                const col = data.colonnes.find((c) => c.id === h.colonneId);
+                const sec = h.sectionId ? col?.sections?.find((s) => s.id === h.sectionId) : undefined;
+                const label = sec ? `${col?.titre ?? h.colonneId} / ${sec.titre}` : (col?.titre ?? h.colonneId);
+                return (
+                  <span key={i} className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-600">
+                    {formatDateFr(h.date)} · {label}
+                  </span>
+                );
+              })}
+            </div>
             <textarea
               autoFocus
               rows={2}
@@ -768,12 +846,17 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
               placeholder="Remarques libres…"
               className="w-full text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 resize-none focus:outline-hidden focus:border-violet-400"
             />
-            <input
-              type="date"
-              value={edition.date ?? ''}
-              onChange={(e) => setEdition({ ...edition, date: e.target.value || undefined })}
-              className="w-full text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-hidden focus:border-violet-400"
-            />
+            <div className="flex items-center gap-2">
+              <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
+                Date d'échéance
+                <input
+                  type="date"
+                  value={edition.dateEcheance ?? ''}
+                  onChange={(e) => setEdition({ ...edition, dateEcheance: e.target.value || undefined })}
+                  className="text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1 focus:outline-hidden focus:border-violet-400 w-auto"
+                />
+              </label>
+            </div>
             <div className="flex items-center gap-1.5 flex-wrap">
               {COULEURS_KANBAN_IDS.map((couleurId) => (
                 <button
@@ -789,6 +872,81 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                       : 'hover:scale-110'
                   } transition-transform cursor-pointer`}
                 />
+              ))}
+            </div>
+            <div className="space-y-1.5 rounded-md border border-slate-200 bg-slate-50 p-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-slate-500 uppercase">Attente</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setEdition({
+                      ...edition,
+                      attentes: [
+                        ...edition.attentes,
+                        { id: `ATT-${Date.now().toString(36).toUpperCase()}`, dateEntree: getDateISOSite() },
+                      ],
+                    })
+                  }
+                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-violet-600 hover:text-violet-700"
+                >
+                  <Plus className="w-3 h-3" />
+                  Ajouter
+                </button>
+              </div>
+              {edition.attentes.length === 0 && (
+                <p className="text-[10px] text-slate-400">Aucune période d’attente</p>
+              )}
+              {edition.attentes.map((attente, index) => (
+                <div key={attente.id} className="flex flex-wrap items-center gap-1.5 rounded-md border border-slate-200 bg-white px-1.5 py-1">
+                  <input
+                    value={attente.libelle ?? ''}
+                    onChange={(e) => {
+                      const attentes = [...edition.attentes];
+                      attentes[index] = { ...attente, libelle: e.target.value };
+                      setEdition({ ...edition, attentes });
+                    }}
+                    placeholder="Motif"
+                    className="w-24 text-[10px] text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 focus:outline-hidden focus:border-violet-400"
+                  />
+                  <label className="flex items-center gap-1 text-[9px] font-bold text-slate-500 uppercase">
+                    Entrée
+                    <input
+                      type="date"
+                      value={attente.dateEntree ?? ''}
+                      onChange={(e) => {
+                        const attentes = [...edition.attentes];
+                        attentes[index] = { ...attente, dateEntree: e.target.value };
+                        setEdition({ ...edition, attentes });
+                      }}
+                      className="text-[10px] text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-1 py-0.5 focus:outline-hidden focus:border-violet-400"
+                    />
+                  </label>
+                  <label className="flex items-center gap-1 text-[9px] font-bold text-slate-500 uppercase">
+                    Sortie
+                    <input
+                      type="date"
+                      value={attente.dateSortie ?? ''}
+                      onChange={(e) => {
+                        const attentes = [...edition.attentes];
+                        attentes[index] = { ...attente, dateSortie: e.target.value || undefined };
+                        setEdition({ ...edition, attentes });
+                      }}
+                      className="text-[10px] text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-1 py-0.5 focus:outline-hidden focus:border-violet-400"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const attentes = edition.attentes.filter((_, i) => i !== index);
+                      setEdition({ ...edition, attentes });
+                    }}
+                    className="ml-auto text-rose-500 hover:text-rose-700"
+                    title="Supprimer"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
               ))}
             </div>
             <div className="flex items-center justify-between pt-0.5">
@@ -825,7 +983,10 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           </div>
         );
       }
-      const alarme = estEnAlarme(carte);
+      const alarmeInfo = getAlarmeInfo(carte);
+      const alarme = alarmeInfo.active;
+      const { diffZone, diffTotal } = alarmeInfo;
+      const dateDeplacementFr = formatDateFr(alarmeInfo.dateEntree ?? carte.dateEntreeZone ?? carte.creeLe);
       const postIt = KANBAN_COULEURS[carte.couleur ?? 'jaune'];
       return (
         <div
@@ -835,19 +996,35 @@ onDragStart={(e) => dragCarte(e, carte.id)}
             onDragEnd={arreterDrag}
             onDragOver={(e) => survolCarte(e, carte, position, zone.sectionId)}
             onClick={() => ouvrirEdition(carte)}
-            title={`${postIt.label} — créée le ${new Date(
+            title={`${postIt.label} — date de déplacement : ${dateDeplacementFr} (créée le ${new Date(
               carte.creeLe
-            ).toLocaleDateString('fr-FR')} — cliquer pour modifier`}
-            className={`group ${postIt.fond} ${postIt.bordure} border rounded-[3px] shadow-sm p-2.5 aspect-square self-start overflow-y-auto cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all ${
-              enDrag ? 'opacity-40' : ''
-            }`}
+            ).toLocaleDateString('fr-FR')}) — dans la zone depuis ${diffZone}j (seuil ${alarmeInfo.seuilZone}j)${alarmeInfo.estDerniereColonne ? ' — dernière colonne' : ''}${alarme ? ` ⚠ ALARME ${alarmeInfo.type === 'zone' ? 'ZONE' : 'GLOBALE'}` : ' — pas en alarme'} — cliquer pour modifier`}
+            className={`group ${postIt.fond} rounded-[3px] p-2.5 aspect-square self-start overflow-y-auto cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all relative ${
+              alarme ? 'border-2 border-red-600 shadow-[0_0_12px_rgba(220,38,38,0.65)]' : `border ${postIt.bordure} shadow-sm`
+            } ${enDrag ? 'opacity-40' : ''}`}
           >
+          {alarme && alarmeInfo.type === 'zone' && (
+            <div className="mb-1.5 flex items-center justify-center gap-1 rounded-sm bg-red-600 px-1.5 py-1 text-[8px] font-extrabold uppercase tracking-wide text-white">
+              <AlertTriangle className="h-3 w-3 shrink-0" />
+              <span>
+                {`Délai zone : ${diffZone}j / ${alarmeInfo.seuilZone}j`}
+              </span>
+            </div>
+          )}
+          {alarme && alarmeInfo.type === 'global' && (
+            <div className="mt-1 flex items-center justify-center gap-1 rounded-sm bg-red-600 px-1 py-0.5 text-[8px] font-extrabold uppercase tracking-wide text-white">
+              <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
+              <span>
+                {`Délai global : ${diffTotal}j / 12j`}
+              </span>
+            </div>
+          )}
           {carte.date && (
             <div className="flex justify-end mb-1">
               <span className={`flex items-center gap-0.5 text-[10px] font-medium whitespace-nowrap ${
                 alarme ? 'text-red-600 animate-pulse' : 'text-slate-600'
               }`}>
-                <Calendar className="w-3 h-3" />
+                <AlertTriangle className="w-3 h-3" />
                 {new Date(carte.date).toLocaleDateString('fr-FR')}
               </span>
             </div>
@@ -886,15 +1063,12 @@ onDragStart={(e) => dragCarte(e, carte.id)}
             Fiche identitaire
           </span>
           <div className="flex items-center gap-2">
-            <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
-              Date
-              <input
-                type="date"
-                value={composerDate}
-                onChange={(e) => setComposerDate(e.target.value)}
-                className="text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1 focus:outline-hidden focus:border-violet-400 w-auto"
-              />
-            </label>
+            <div className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
+              <span>Date de création</span>
+              <span className="text-xs font-semibold text-slate-700 font-mono bg-slate-50 border border-slate-200 rounded-md px-2 py-1">
+                {new Date().toLocaleDateString('fr-FR')}
+              </span>
+            </div>
             <button
               type="button"
               onClick={fermerComposer}
@@ -1009,6 +1183,18 @@ onDragStart={(e) => dragCarte(e, carte.id)}
         </div>
 
         <div>
+          <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
+            Date d'échéance
+            <input
+              type="date"
+              value={composerDateEcheance}
+              onChange={(e) => setComposerDateEcheance(e.target.value)}
+              className="text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1 focus:outline-hidden focus:border-violet-400 w-auto"
+            />
+          </label>
+        </div>
+
+        <div>
           <label className="block text-[10px] font-bold text-slate-500 uppercase mb-1">
             Couleur du post-it
           </label>
@@ -1065,7 +1251,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
           setComposerClient('');
           setComposerRemarques('');
           setComposerCouleur(null);
-          setComposerDate(new Date().toISOString().split('T')[0]);
+          setComposerDateEcheance('');
         }}
         className="col-span-2 w-full inline-flex items-center justify-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-violet-700 hover:bg-white border border-transparent hover:border-slate-200 rounded-lg px-2 py-1.5 transition-colors cursor-pointer"
       >

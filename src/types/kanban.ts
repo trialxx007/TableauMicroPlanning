@@ -91,6 +91,23 @@ export interface KanbanColonne {
   sections?: KanbanSection[];
 }
 
+/** Période d'attente avec date d'entrée/sortie. */
+export interface KanbanAttente {
+  id: string;
+  libelle?: string;
+  dateEntree: string;
+  dateSortie?: string;
+}
+
+/** Une entrée d'historique : arrivée d'une carte dans une colonne/section. */
+export interface KanbanDeplacement {
+  /** Date d'arrivée au format YYYY-MM-DD. */
+  date: string;
+  colonneId: string;
+  sectionId?: string;
+  personneId?: string;
+}
+
 /** Une carte (tâche de développement) placée dans une colonne. */
 export interface KanbanCarte {
   id: string;
@@ -115,6 +132,10 @@ export interface KanbanCarte {
   date?: string;
   /** Date d'entrée dans la colonne/section actuelle (YYYY-MM-DD) pour alarme. */
   dateEntreeZone?: string;
+  /** Historique des entrées dans les colonnes/sections (création incluse). */
+  historiqueDeplacements?: KanbanDeplacement[];
+  /** Périodes d'attente (avec date d'entrée/sortie). */
+  attentes?: KanbanAttente[];
   ordre: number;
   /** Date de création au format ISO. */
   creeLe: string;

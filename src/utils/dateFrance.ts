@@ -8,6 +8,41 @@
 export const FUSEAU_HORAIRE = 'Etc/GMT-3';
 export const LIBELLE_FUSEAU = 'GMT+3';
 
+/** Vrai si la valeur est une date ISO `YYYY-MM-DD` (éventuellement suivie d'une heure). */
+export function estDateISO(valeur: unknown): valeur is string {
+  return typeof valeur === 'string' && /^\d{4}-\d{2}-\d{2}/.test(valeur);
+}
+
+/** Date du jour dans le fuseau du site, au format ISO `YYYY-MM-DD`. */
+export function getDateISOSite(date = new Date()): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: FUSEAU_HORAIRE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(date);
+}
+
+/** Convertit un horodatage ISO en date `YYYY-MM-DD` du fuseau du site. */
+export function dateISOFromDateTime(valeur: string): string | null {
+  const date = new Date(valeur);
+  if (Number.isNaN(date.getTime())) return null;
+  return getDateISOSite(date);
+}
+
+/** Nombre de jours calendaires entre une date `YYYY-MM-DD` et une référence. */
+export function joursEntreDatesISO(depuis: string, jusqua = getDateISOSite()): number {
+  const parse = (valeur: string) => {
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(valeur);
+    if (!m) return null;
+    return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  };
+  const debut = parse(depuis);
+  const fin = parse(jusqua);
+  if (debut === null || fin === null) return 0;
+  return Math.round((fin - debut) / 86400000);
+}
+
 export function getNowParis() {
   const now = new Date();
 

@@ -7,9 +7,11 @@ import {
   KanbanColonne,
   KanbanCouleurId,
   KanbanData,
+  KanbanDeplacement,
   KanbanPersonne,
   KanbanSection,
 } from '../types/kanban.ts';
+import { dateISOFromDateTime, estDateISO, getDateISOSite } from './dateFrance.ts';
 
 /** Clé du localStorage (convention `aic_*` comme la vue courante). */
 const CLE = 'aic_kanban_dev_v1';
@@ -34,6 +36,7 @@ export function kanbanInitial(): KanbanData {
     { id: 'KBC-TERMINE', titre: 'Terminé', ordre: 3, couleur: 'vert' },
   ];
   const maintenant = new Date().toISOString();
+  const dateEntreeZone = getDateISOSite();
   const cartes: KanbanCarte[] = [
     {
       id: nouvelId(),
@@ -46,6 +49,7 @@ export function kanbanInitial(): KanbanData {
       colonneId: 'KBC-BACKLOG',
       ordre: 0,
       creeLe: maintenant,
+      dateEntreeZone,
     },
     {
       id: nouvelId(),
@@ -57,6 +61,7 @@ export function kanbanInitial(): KanbanData {
       colonneId: 'KBC-AFAIRE',
       ordre: 0,
       creeLe: maintenant,
+      dateEntreeZone,
     },
     {
       id: nouvelId(),
@@ -68,6 +73,7 @@ export function kanbanInitial(): KanbanData {
       colonneId: 'KBC-ENCOURS',
       ordre: 0,
       creeLe: maintenant,
+      dateEntreeZone,
     },
     {
       id: nouvelId(),
@@ -79,6 +85,7 @@ export function kanbanInitial(): KanbanData {
       colonneId: 'KBC-TERMINE',
       ordre: 0,
       creeLe: maintenant,
+      dateEntreeZone,
     },
     {
       id: nouvelId(),
@@ -90,9 +97,22 @@ export function kanbanInitial(): KanbanData {
       colonneId: 'KBC-AFAIRE',
       ordre: 1,
       creeLe: maintenant,
+      dateEntreeZone,
     },
   ];
-  return { colonnes, cartes };
+  return {
+    colonnes,
+    cartes: cartes.map((carte) => ({
+      ...carte,
+      historiqueDeplacements: [
+        {
+          date: dateEntreeZone,
+          colonneId: carte.colonneId,
+          ...(carte.sectionId ? { sectionId: carte.sectionId } : {}),
+        },
+      ],
+    })),
+  };
 }
 
 /**
@@ -186,6 +206,49 @@ export function chargerKanban(): KanbanData {
           sectionId = colonne.sections[0].id;
         }
       }
+      const creeLe = typeof k.creeLe === 'string' ? k.creeLe : new Date().toISOString();
+      const dateEntreeZone = estDateISO(k.dateEntreeZone)
+        ? k.dateEntreeZone
+        : dateISOFromDateTime(creeLe) ?? getDateISOSite();
+      // Historique : on valide les entrées existantes, puis on ajoute la zone
+      // courante si elle n'y figure pas déjà (migration des anciennes cartes).
+      const historiqueDeplacements: KanbanDeplacement[] = [];
+      if (Array.isArray(k.historiqueDeplacements)) {
+        for (const h of k.historiqueDeplacements) {
+          if (!h || !estDateISO(h.date) || typeof h.colonneId !== 'string' || !h.colonneId) continue;
+          historiqueDeplacements.push({
+            date: h.date,
+            colonneId: h.colonneId,
+            ...(typeof h.sectionId === 'string' && h.sectionId ? { sectionId: h.sectionId } : {}),
+            ...(typeof h.personneId === 'string' && h.personneId ? { personneId: h.personneId } : {}),
+          });
+        }
+      }
+      const entreeCourante: KanbanDeplacement = {
+        date: dateEntreeZone,
+        colonneId: k.colonneId,
+        ...(sectionId ? { sectionId } : {}),
+        ...(personneId ? { personneId } : {}),
+      };
+      const derniereEntree = historiqueDeplacements[historiqueDeplacements.length - 1];
+      if (
+        !derniereEntree ||
+        derniereEntree.colonneId !== entreeCourante.colonneId ||
+        derniereEntree.sectionId !== entreeCourante.sectionId ||
+        derniereEntree.personneId !== entreeCourante.personneId
+      ) {
+        historiqueDeplacements.push(entreeCourante);
+      }
+      const attentes = Array.isArray((k as any).attentes)
+        ? (k as any).attentes
+            .filter((a: any) => a && estDateISO(a.dateEntree))
+            .map((a: any, i: number) => ({
+              id: typeof a.id === 'string' ? a.id : `ATT-${i}-${Date.now().toString(36)}`,
+              ...(typeof a.libelle === 'string' && a.libelle.trim() ? { libelle: a.libelle.trim() } : {}),
+              dateEntree: a.dateEntree.slice(0, 10),
+              ...(estDateISO(a.dateSortie) ? { dateSortie: a.dateSortie.slice(0, 10) } : {}),
+            }))
+        : undefined;
       cartesValides.push({
         id: k.id,
         titre: k.titre,
@@ -198,9 +261,11 @@ export function chargerKanban(): KanbanData {
         ...(sectionId ? { sectionId } : {}),
         ...(personneId ? { personneId, bloc } : {}),
         date: typeof k.date === 'string' && k.date ? k.date : undefined,
-        dateEntreeZone: typeof k.dateEntreeZone === 'string' && k.dateEntreeZone ? k.dateEntreeZone : undefined,
+        dateEntreeZone,
+        historiqueDeplacements,
+        ...(attentes && attentes.length ? { attentes } : {}),
         ordre: typeof k.ordre === 'number' ? k.ordre : cartesValides.length,
-        creeLe: typeof k.creeLe === 'string' ? k.creeLe : new Date().toISOString(),
+        creeLe,
       });
     }
     if (colonnesValides.length === 0) return kanbanInitial();
