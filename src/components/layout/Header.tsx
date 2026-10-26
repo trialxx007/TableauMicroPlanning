@@ -40,56 +40,56 @@ export const Header: React.FC<HeaderProps> = ({
   }, []);
 
   return (
-    <header className="bg-white border-b border-slate-200 relative z-30 shadow-xs">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5">
-        <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
-          {/* Left Title & Status */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center text-white">
-              <CalendarRange className="w-5 h-5" />
-            </div>
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-                  Point Commande Journalière
+    <header className="relative z-30 border-b border-slate-200 bg-white shadow-xs">
+      <div className="page-container py-4">
+        <div className="flex flex-col gap-4">
+          {/* Brand + actions */}
+          <div className="flex flex-col gap-4 min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-between min-[900px]:gap-6">
+            {/* Brand */}
+            <div className="flex min-w-0 items-center gap-3.5">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-blue-600 text-white">
+                <CalendarRange className="h-6 w-6" />
+              </div>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <h1 className="m-0 whitespace-normal text-[22px] font-medium leading-[1.2] text-slate-900 min-[900px]:overflow-hidden min-[900px]:text-ellipsis min-[900px]:whitespace-nowrap">
+                  Point Commande JournaliA"re
                 </h1>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500">
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <Calendar className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    {fullFrenchDate}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 px-2 py-0.5 font-medium tabular-nums text-slate-900">
+                    <Clock className="h-3.5 w-3.5 shrink-0 text-blue-600" />
+                    <span>{parisTime}</span>
+                    <span className="text-[11px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
+                  </span>
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap">
+                    <span className="font-medium text-slate-900">{cardsCount}</span>
+                    <span className="text-slate-500">{cardsCount > 1 ? 'cartes' : 'carte'}</span>
+                  </span>
+                </div>
               </div>
-              <div className="flex flex-wrap items-center gap-2.5 text-xs sm:text-sm text-slate-500 mt-0.5">
-                <span className="flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  {fullFrenchDate}
-                </span>
-                <span className="text-slate-300">•</span>
-                <span className="flex items-center gap-1 font-semibold text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/60">
-                  <Clock className="w-3.5 h-3.5 text-blue-600" />
-                  {parisTime}
-                  <span className="text-[10px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
-                </span>
-                <span className="text-slate-300">•</span>
-                <span>
-                  <strong>{cardsCount}</strong> {cardsCount > 1 ? 'cartes' : 'carte'}
-                </span>
-              </div>
+            </div>
+
+            {/* Actions */}
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5 min-[900px]:justify-end">
+              {!lectureSeule && (
+                <button
+                  onClick={onOpenCreateModal}
+                  className="inline-flex h-[38px] shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[10px] bg-blue-600 px-4 text-sm font-medium text-white shadow-sm transition-colors duration-150 hover:bg-blue-700 active:bg-blue-800"
+                >
+                  <Plus className="h-4 w-4 stroke-[2.5]" />
+                  <span>Nouvelle Carte</span>
+                </button>
+              )}
+              <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
             </div>
           </div>
 
-          {/* Center View Switcher */}
-          <div className="flex md:justify-center">
+          {/* Tabs */}
+          <div className="min-w-0">
             <ViewSwitcher currentPage={currentPage} onChangePage={onChangePage} />
-          </div>
-
-          {/* Right Action Buttons */}
-          <div className="flex items-center flex-wrap gap-2.5 md:justify-end">
-            {!lectureSeule && (
-              <button
-                onClick={onOpenCreateModal}
-                className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-lg shadow-sm hover:shadow transition-all cursor-pointer"
-              >
-                <Plus className="w-4 h-4 stroke-[2.5]" />
-                <span>Nouvelle Carte</span>
-              </button>
-            )}
-            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
           </div>
         </div>
       </div>

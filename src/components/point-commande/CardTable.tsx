@@ -241,9 +241,9 @@ export const CardTable: React.FC<CardTableProps> = ({
         <table className="w-full text-left border-collapse min-w-[1050px]">
           <thead>
             <tr className="bg-slate-50/80 border-b border-slate-200 text-xs font-semibold text-slate-600 uppercase tracking-wider">
-              <th className="py-3.5 px-4">Client</th>
-              <th className="py-3.5 px-4">Nom</th>
-              <th className="py-3.5 px-4">
+              <th className="px-3.5 py-3">Client</th>
+              <th className="px-3.5 py-3">Nom</th>
+              <th className="px-3.5 py-3">
                 <span className="inline-flex items-baseline gap-1.5">
                   <span>Saison</span>
                   {jalonRDLPresent && (
@@ -254,7 +254,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   )}
                 </span>
               </th>
-              <th className="py-3.5 px-4">
+              <th className="px-3.5 py-3">
                 <span className="inline-flex items-center gap-1.5">
                   <span>Nomenclatures & Statuts</span>
                   <span
@@ -272,7 +272,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </span>
                 </span>
               </th>
-              <th className="py-3.5 px-4">
+              <th className="px-3.5 py-3">
                 <span className="inline-flex items-center gap-1">
                   OK Prod
                   <span
@@ -283,12 +283,12 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </span>
                 </span>
               </th>
-              <th className="py-3.5 px-4">Qté demandée (Point)</th>
-              <th className="py-3.5 px-4">Qté finie</th>
-              <th className="py-3.5 px-4">Reste à produire</th>
-              <th className="py-3.5 px-4">Avancement</th>
-              <th className="py-3.5 px-4">Statut</th>
-              <th className="py-3.5 px-4">Actions</th>
+              <th className="px-3.5 py-3">Qté demandée (Point)</th>
+              <th className="px-3.5 py-3">Qté finie</th>
+              <th className="px-3.5 py-3">Reste à produire</th>
+              <th className="px-3.5 py-3">Avancement</th>
+              <th className="px-3.5 py-3">Statut</th>
+              <th className="px-3.5 py-3">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 text-sm">
@@ -326,10 +326,10 @@ export const CardTable: React.FC<CardTableProps> = ({
               return (
                 <tr
                   key={card.id}
-                  className="hover:bg-slate-50/70 transition-colors group"
+                  className="hover:bg-slate-50/70 transition-colors group [&>td]:align-middle"
                 >
                   {/* Client */}
-                  <td className="py-3.5 px-4 font-medium text-slate-900 whitespace-nowrap">
+                  <td className="px-3.5 py-3 font-medium text-slate-900 whitespace-nowrap">
                     <div className="flex items-center gap-2">
                       <div className="w-7 h-7 rounded-md bg-slate-100 border border-slate-200 flex items-center justify-center text-xs font-bold text-slate-700">
                         {card.client.slice(0, 2).toUpperCase()}
@@ -346,7 +346,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   {/* Nom */}
                   <td
                     onClick={lectureSeule ? undefined : () => onEditCard(card)}
-                    className={`py-3.5 px-4 max-w-[220px] group/cell ${lectureSeule ? '' : 'cursor-pointer hover:bg-blue-50/60'} transition-colors`}
+                    className={`px-3.5 py-3 max-w-[220px] group/cell ${lectureSeule ? '' : 'cursor-pointer hover:bg-blue-50/60'} transition-colors`}
                     title={lectureSeule ? card.modele : "Cliquer pour ouvrir la carte et afficher toutes ses informations"}
                   >
                     <div
@@ -366,7 +366,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Saison & RDL */}
-                  <td className="py-3.5 px-4 whitespace-nowrap">
+                  <td className="px-3.5 py-3 whitespace-nowrap">
                     <div className="flex flex-col items-start gap-1">
                       <div
                         onClick={lectureSeule ? undefined : () => onEditCard(card)}
@@ -436,127 +436,133 @@ export const CardTable: React.FC<CardTableProps> = ({
                     </div>
                   </td>
 
-                  {/* Nomenclatures & Statuts — une seule cellule pour tous les jalons hors RDL.
-                      Les nomenclatures occupent les premières lignes, et un saut de
-                      ligne isole les statuts en dessous, dans la même cellule. */}
-                  <td className="py-3.5 px-4 align-top">
-                    {!aJalons ? (
-                      <span className="text-[11px] text-slate-200">–</span>
-                    ) : (
-                      <div className="flex flex-col gap-1.5 bg-slate-50 p-1 rounded-lg border border-slate-200/60">
-                        {nomenclaturesCarte.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {nomenclaturesCarte.map((j) => {
-                              const colors = themeJalon(j).pastille;
-                              const detail = detailJalon(j);
+                  {/* Nomenclatures & Statuts — two side-by-side columns of compact badges.
+                      Each badge keeps the existing tooltip and select overlay. */}
+                  <td className="px-3.5 py-3 align-middle">
+                    <div className="min-w-[250px]">
+                      {!aJalons ? (
+                        <span className="text-[11px] text-slate-200">–</span>
+                      ) : (
+                        <div className="flex items-stretch gap-2.5">
+                          {nomenclaturesCarte.length > 0 && (
+                            <div className="flex w-28 shrink-0 flex-col gap-1">
+                              {nomenclaturesCarte.map((j) => {
+                                const colors = themeJalon(j).pastille;
+                                const detail = detailJalon(j);
 
-                              return (
-                                <span
-                                  key={j.code}
-                                  className="group/j relative inline-grid shrink-0 w-fit min-w-[4.25rem]"
-                                  title={detail}
-                                >
-                                  {j.enRetard && (
-                                    <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" />
-                                  )}
+                                return (
                                   <span
-                                    className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.9rem,auto)_minmax(2.1rem,auto)] items-stretch overflow-hidden rounded text-[11px] font-bold border ${colors} ${
-                                      j.enRetard ? 'motion-safe:animate-pulse' : ''
-                                    }`}
-                                  >
-                                    <span className="flex items-center justify-center py-0.5 tracking-wide whitespace-nowrap">
-                                      {j.code}
-                                    </span>
-                                    <span className="flex items-center justify-center py-0.5 border-l border-black/10">
-                                      {marqueJalon(j)}
-                                    </span>
-                                  </span>
-                                  <select
-                                    value={j.etat}
-                                    disabled={lectureSeule}
-                                    onChange={(e) =>
-                                      onUpdateCard(
-                                        card.id,
-                                        patchJalonEtat(card, j.code, e.target.value as JalonEtat)
-                                      )
-                                    }
-                                    aria-label={`État du jalon ${j.code}`}
+                                    key={j.code}
+                                    className="group/j relative inline-grid h-6 w-full min-w-0"
                                     title={detail}
-                                    className={`col-start-1 row-start-1 relative z-10 w-full rounded border px-1 text-[11px] font-bold opacity-0 pointer-events-none ${lectureSeule ? '' : 'cursor-pointer group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto'} ${colors}`}
                                   >
-                                    <option value="EN_ATTENTE">En attente</option>
-                                    <option value="SEMAINE">Semaine</option>
-                                    <option value="DATE">Date</option>
-                                    <option value="TBC">TBC</option>
-                                    <option value="VALIDE">Validé</option>
-                                  </select>
-                                </span>
-                              );
-                            })}
-                          </div>
-                        )}
+                                    <span
+                                      className={`col-start-1 row-start-1 flex h-6 min-w-0 items-center justify-between gap-1.5 overflow-hidden whitespace-nowrap rounded-md border px-2 text-xs font-medium ${colors} ${
+                                        j.enRetard ? 'motion-safe:animate-pulse' : ''
+                                      }`}
+                                    >
+                                      <span className="shrink-0 tracking-wide">{j.code}</span>
+                                      <span className="inline-flex min-w-0 items-center gap-1">
+                                        <span className="truncate">{marqueJalon(j)}</span>
+                                        {j.enRetard && (
+                                          <AlertTriangle
+                                            className="h-[13px] w-[13px] shrink-0"
+                                            aria-hidden="true"
+                                          />
+                                        )}
+                                      </span>
+                                    </span>
+                                    <select
+                                      value={j.etat}
+                                      disabled={lectureSeule}
+                                      onChange={(e) =>
+                                        onUpdateCard(
+                                          card.id,
+                                          patchJalonEtat(card, j.code, e.target.value as JalonEtat)
+                                        )
+                                      }
+                                      aria-label={`État du jalon ${j.code}`}
+                                      title={detail}
+                                      className={`col-start-1 row-start-1 relative z-10 h-6 w-full min-w-0 rounded-md border px-2 text-xs font-medium opacity-0 pointer-events-none ${lectureSeule ? '' : 'cursor-pointer group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto'} ${colors}`}
+                                    >
+                                      <option value="EN_ATTENTE">En attente</option>
+                                      <option value="SEMAINE">Semaine</option>
+                                      <option value="DATE">Date</option>
+                                      <option value="TBC">TBC</option>
+                                      <option value="VALIDE">Validé</option>
+                                    </select>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
 
-                        {nomenclaturesCarte.length > 0 && statutsCarte.length > 0 && (
-                          <div className="border-t border-slate-300" aria-hidden="true" />
-                        )}
+                          {nomenclaturesCarte.length > 0 && statutsCarte.length > 0 && (
+                            <div
+                              className="w-px shrink-0 self-stretch bg-slate-200"
+                              aria-hidden="true"
+                            />
+                          )}
 
-                        {statutsCarte.length > 0 && (
-                          <div className="flex flex-wrap gap-1">
-                            {statutsCarte.map((j) => {
-                              const colors = themeJalon(j).pastille;
-                              const detail = detailJalon(j);
+                          {statutsCarte.length > 0 && (
+                            <div className="flex w-28 shrink-0 flex-col gap-1">
+                              {statutsCarte.map((j) => {
+                                const colors = themeJalon(j).pastille;
+                                const detail = detailJalon(j);
 
-                              return (
-                                <span
-                                  key={j.code}
-                                  className="group/j relative inline-grid shrink-0 w-fit min-w-[4.25rem]"
-                                  title={detail}
-                                >
-                                  {j.enRetard && (
-                                    <AlertTriangle className="absolute -top-1 -right-1 z-20 w-3 h-3 text-rose-500 bg-white rounded-full" />
-                                  )}
+                                return (
                                   <span
-                                    className={`col-start-1 row-start-1 relative z-0 inline-grid grid-cols-[minmax(1.9rem,auto)_minmax(2.1rem,auto)] items-stretch overflow-hidden rounded text-[11px] font-bold border ${colors} ${
-                                      j.enRetard ? 'motion-safe:animate-pulse' : ''
-                                    }`}
-                                  >
-                                    <span className="flex items-center justify-center py-0.5 tracking-wide whitespace-nowrap">
-                                      {j.code}
-                                    </span>
-                                    <span className="flex items-center justify-center py-0.5 border-l border-black/10">
-                                      {marqueJalon(j)}
-                                    </span>
-                                  </span>
-                                  <select
-                                    value={j.etat}
-                                    disabled={lectureSeule}
-                                    onChange={(e) =>
-                                      onUpdateCard(
-                                        card.id,
-                                        patchJalonEtat(card, j.code, e.target.value as JalonEtat)
-                                      )
-                                    }
-                                    aria-label={`État du jalon ${j.code}`}
+                                    key={j.code}
+                                    className="group/j relative inline-grid h-6 w-full min-w-0"
                                     title={detail}
-                                    className={`col-start-1 row-start-1 relative z-10 w-full rounded border px-1 text-[11px] font-bold opacity-0 pointer-events-none ${lectureSeule ? '' : 'cursor-pointer group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto'} ${colors}`}
                                   >
-                                    <option value="EN_ATTENTE">En attente</option>
-                                    <option value="SEMAINE">Semaine</option>
-                                    <option value="DATE">Date</option>
-                                    <option value="TBC">TBC</option>
-                                    <option value="VALIDE">Validé</option>
-                                  </select>
-                                </span>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
+                                    <span
+                                      className={`col-start-1 row-start-1 flex h-6 min-w-0 items-center justify-between gap-1.5 overflow-hidden whitespace-nowrap rounded-md border px-2 text-xs font-medium ${colors} ${
+                                        j.enRetard ? 'motion-safe:animate-pulse' : ''
+                                      }`}
+                                    >
+                                      <span className="shrink-0 tracking-wide">{j.code}</span>
+                                      <span className="inline-flex min-w-0 items-center gap-1">
+                                        <span className="truncate">{marqueJalon(j)}</span>
+                                        {j.enRetard && (
+                                          <AlertTriangle
+                                            className="h-[13px] w-[13px] shrink-0"
+                                            aria-hidden="true"
+                                          />
+                                        )}
+                                      </span>
+                                    </span>
+                                    <select
+                                      value={j.etat}
+                                      disabled={lectureSeule}
+                                      onChange={(e) =>
+                                        onUpdateCard(
+                                          card.id,
+                                          patchJalonEtat(card, j.code, e.target.value as JalonEtat)
+                                        )
+                                      }
+                                      aria-label={`État du jalon ${j.code}`}
+                                      title={detail}
+                                      className={`col-start-1 row-start-1 relative z-10 h-6 w-full min-w-0 rounded-md border px-2 text-xs font-medium opacity-0 pointer-events-none ${lectureSeule ? '' : 'cursor-pointer group-hover/j:opacity-100 group-hover/j:pointer-events-auto focus:opacity-100 focus:pointer-events-auto'} ${colors}`}
+                                    >
+                                      <option value="EN_ATTENTE">En attente</option>
+                                      <option value="SEMAINE">Semaine</option>
+                                      <option value="DATE">Date</option>
+                                      <option value="TBC">TBC</option>
+                                      <option value="VALIDE">Validé</option>
+                                    </select>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
                   </td>
 
                   {/* OK Prod */}
-                  <td className="py-3.5 px-4 whitespace-nowrap">
+                  <td className="px-3.5 py-3 whitespace-nowrap">
                     <div className="flex flex-col items-start gap-1">
                       {card.okProd ? (
                         <>
@@ -615,7 +621,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Qté Demandée */}
-                  <td className="py-3.5 px-4 whitespace-nowrap">
+                  <td className="px-3.5 py-3 whitespace-nowrap">
                     {editingDemandeeId === card.id ? (
                       <div className="flex items-center justify-start gap-1">
                         <input
@@ -657,7 +663,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Qté Finie (Point journalier) */}
-                  <td className="py-3.5 px-4 whitespace-nowrap">
+                  <td className="px-3.5 py-3 whitespace-nowrap">
                     {editingFinieId === card.id ? (
                       <div className="flex items-center justify-start gap-1">
                         <input
@@ -721,7 +727,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Reste à Produire */}
-                  <td className="py-3.5 px-4 whitespace-nowrap">
+                  <td className="px-3.5 py-3 whitespace-nowrap">
                     {isFinished ? (
                       <span className="inline-flex items-center gap-1 text-xs font-semibold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
                         <Check className="w-3 h-3 stroke-[3]" />
@@ -735,7 +741,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Avancement */}
-                  <td className="py-3.5 px-4">
+                  <td className="px-3.5 py-3">
                     <div className="w-full min-w-[130px]">
                       <div className="flex items-center justify-between text-xs mb-1">
                         <span className="font-semibold text-slate-700">{progressPct}%</span>
@@ -759,7 +765,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Statut & Point Réunion */}
-                  <td className="py-3.5 px-4 whitespace-nowrap">
+                  <td className="px-3.5 py-3 whitespace-nowrap">
                     <div className="flex flex-col items-start gap-1">
                       <select
                         value={card.statut}
@@ -801,7 +807,7 @@ export const CardTable: React.FC<CardTableProps> = ({
                   </td>
 
                   {/* Actions */}
-                  <td className="py-3.5 px-4 whitespace-nowrap">
+                  <td className="px-3.5 py-3 whitespace-nowrap">
                     <div className="flex items-center justify-start gap-1.5">
                       {!lectureSeule && (
                         <button

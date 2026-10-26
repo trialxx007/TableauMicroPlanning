@@ -1376,45 +1376,48 @@ onDragStart={(e) => dragCarte(e, carte.id)}
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col">
       {/* Bandeau haut : titre, date/heure, sélecteur de vue (même trame que les autres vues) */}
-      <div className="bg-white border-b border-slate-200 relative z-20 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-violet-600 flex items-center justify-center text-white">
-              <SquareKanban className="w-5 h-5" />
-            </div>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-                Développement
-              </h1>
-              <div className="flex flex-wrap items-center gap-2.5 text-xs sm:text-sm text-slate-500 mt-0.5">
-                <span className="flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  {fullFrenchDate}
-                </span>
-                <span className="text-slate-300">•</span>
-                <span className="flex items-center gap-1 font-semibold text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/60">
-                  <Clock className="w-3.5 h-3.5 text-violet-600" />
-                  {parisTime}
-                  <span className="text-[10px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
-                </span>
+      <div className="relative z-20 border-b border-slate-200 bg-white shadow-xs">
+        <div className="w-full px-4 py-4 sm:px-6">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-4 min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-between min-[900px]:gap-6">
+            {/* Brand */}
+            <div className="flex min-w-0 items-center gap-3.5">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white">
+                <SquareKanban className="h-6 w-6" />
+              </div>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <h1 className="m-0 whitespace-normal text-[22px] font-medium leading-[1.2] text-slate-900 min-[900px]:overflow-hidden min-[900px]:text-ellipsis min-[900px]:whitespace-nowrap">
+                  Développement
+                </h1>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500">
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <Calendar className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    {fullFrenchDate}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 px-2 py-0.5 font-medium tabular-nums text-slate-900">
+                    <Clock className="h-3.5 w-3.5 shrink-0 text-violet-600" />
+                    <span>{parisTime}</span>
+                    <span className="text-[11px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="flex md:justify-center">
-            <ViewSwitcher currentPage="developpement" onChangePage={onChangePage} />
-          </div>
+            {/* Actions */}
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5 min-[900px]:justify-end">
+              <span className="hidden whitespace-nowrap text-xs font-semibold text-slate-500 md:inline">
+                {data.cartes.length} tâche{data.cartes.length > 1 ? 's' : ''} • {colonnes.length}{' '}
+                colonne{colonnes.length > 1 ? 's' : ''}
+              </span>
+              <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+            </div>
 
-          <div className="hidden md:flex justify-end items-center gap-2 text-xs text-slate-400">
-            <span className="font-semibold text-slate-500">
-              {data.cartes.length} tâche{data.cartes.length > 1 ? 's' : ''} • {colonnes.length}{' '}
-              colonne{colonnes.length > 1 ? 's' : ''}
-            </span>
-            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
-          </div>
+            </div>
 
-          <div className="flex md:hidden justify-end items-center">
-            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+            {/* Tabs */}
+            <div className="min-w-0">
+              <ViewSwitcher currentPage="developpement" onChangePage={onChangePage} />
+            </div>
           </div>
         </div>
       </div>

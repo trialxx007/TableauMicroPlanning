@@ -210,42 +210,49 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
       {/* Bandeau haut : titre, date/heure, sélecteur de vue */}
-      <div className="bg-white border-b border-slate-200 relative z-20 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-emerald-600 flex items-center justify-center text-white">
-              <Table2 className="w-5 h-5" />
-            </div>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-                Tableaux des OFs
-              </h1>
-              <div className="flex flex-wrap items-center gap-2.5 text-xs sm:text-sm text-slate-500 mt-0.5">
-                <span className="flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  {fullFrenchDate}
-                </span>
-                <span className="text-slate-300">•</span>
-                <span className="flex items-center gap-1 font-semibold text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/60">
-                  <Clock className="w-3.5 h-3.5 text-emerald-600" />
-                  {parisTime}
-                  <span className="text-[10px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
-                </span>
+      <div className="relative z-20 border-b border-slate-200 bg-white shadow-xs">
+        <div className="page-container py-4">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-4 min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-between min-[900px]:gap-6">
+            {/* Brand */}
+            <div className="flex min-w-0 items-center gap-3.5">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-emerald-600 text-white">
+                <Table2 className="h-6 w-6" />
+              </div>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <h1 className="m-0 whitespace-normal text-[22px] font-medium leading-[1.2] text-slate-900 min-[900px]:overflow-hidden min-[900px]:text-ellipsis min-[900px]:whitespace-nowrap">
+                  Tableaux des OFs
+                </h1>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500">
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <Calendar className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    {fullFrenchDate}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 px-2 py-0.5 font-medium tabular-nums text-slate-900">
+                    <Clock className="h-3.5 w-3.5 shrink-0 text-emerald-600" />
+                    <span>{parisTime}</span>
+                    <span className="text-[11px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="flex md:justify-center">
-            <ViewSwitcher currentPage="tableaux-ofs" onChangePage={onChangePage} />
-          </div>
+            {/* Actions */}
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5 min-[900px]:justify-end">
+              <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+            </div>
 
-          <div className="flex items-center justify-end">
-            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+            </div>
+
+            {/* Tabs */}
+            <div className="min-w-0">
+              <ViewSwitcher currentPage="tableaux-ofs" onChangePage={onChangePage} />
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+      <div className="page-container py-6 grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {parClient.length === 0 ? (
           <div className="bg-white rounded-xl border border-slate-200 p-12 text-center shadow-xs">
             <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">

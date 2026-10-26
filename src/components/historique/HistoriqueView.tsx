@@ -15,6 +15,8 @@ interface HistoriqueViewProps {
 /** Un champ modifié, tel que stocké dans le détail structuré du journal. */
 interface ChampModifie {
   k: string;
+  /** Libellé lisible fourni par le serveur (ex. « Jalon DT », « OF1 · Qté finie »). */
+  l?: string;
   a: unknown;
   b: unknown;
 }
@@ -44,8 +46,19 @@ const LIBELLE_CHAMP: Record<string, string> = {
   decisionReunion: 'Décision réunion',
   notes: 'Notes',
   jalons: 'Jalons',
+  jalon: 'Jalon',
   ofsOrdre: 'Nombre d’OFs',
   ofsQuantite: 'Qté finie des OFs',
+  ofQuantiteDemandee: 'Qté confiée',
+  ofQuantiteFinie: 'Qté finie',
+  ofStatut: 'Statut de l’OF',
+  ofDestination: 'Destination',
+  ofType: 'Type de l’OF',
+  ofTraitant: 'Traitant',
+  ofTitre: 'Titre de l’OF',
+  ofAjout: 'OF ajouté',
+  ofSupprime: 'OF supprimé',
+  alerte: 'Alerte',
 };
 
 /**
@@ -58,8 +71,19 @@ const COULEUR_CHAMP: Record<string, string> = {
   statut: 'bg-amber-50 text-amber-700 border-amber-200',
   okProd: 'bg-teal-50 text-teal-700 border-teal-200',
   jalons: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  jalon: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   ofsOrdre: 'bg-violet-50 text-violet-700 border-violet-200',
   ofsQuantite: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200',
+  ofQuantiteDemandee: 'bg-violet-50 text-violet-700 border-violet-200',
+  ofQuantiteFinie: 'bg-fuchsia-50 text-fuchsia-700 border-fuchsia-200',
+  ofStatut: 'bg-amber-50 text-amber-700 border-amber-200',
+  ofDestination: 'bg-sky-50 text-sky-700 border-sky-200',
+  ofType: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+  ofTraitant: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+  ofTitre: 'bg-slate-100 text-slate-700 border-slate-200',
+  ofAjout: 'bg-slate-100 text-slate-700 border-slate-200',
+  ofSupprime: 'bg-slate-100 text-slate-700 border-slate-200',
+  alerte: 'bg-rose-50 text-rose-700 border-rose-200',
   client: 'bg-slate-100 text-slate-700 border-slate-200',
   batch: 'bg-slate-100 text-slate-700 border-slate-200',
   modele: 'bg-slate-100 text-slate-700 border-slate-200',
@@ -76,19 +100,28 @@ function libelleChamp(cle: string): string {
   return LIBELLE_CHAMP[cle] ?? cle;
 }
 
-/** Valeur affichable d'un champ : vide → « — », booléen → Oui/Non, statut brut. */
+const LIBELLE_STATUT: Record<string, string> = {
+  EN_ATTENTE: 'En attente',
+  EN_COURS: 'En cours',
+  TERMINE: 'Terminé',
+  BLOQUE: 'Bloqué',
+};
+
+const LIBELLE_TYPE_OF: Record<string, string> = {
+  I: 'Initiatives',
+  O: 'ONY',
+  L: 'LOI',
+  BDA: 'BDA',
+};
+
+/** Valeur affichable d'un champ : vide → « — », booléen → Oui/Non, codes en clair. */
 function afficherValeur(cle: string, v: unknown): string {
   if (v === null || v === undefined || v === '') return '—';
   if (typeof v === 'boolean') return v ? 'Oui' : 'Non';
-  if (cle === 'statut') {
-    const statuts: Record<string, string> = {
-      EN_ATTENTE: 'En attente',
-      EN_COURS: 'En cours',
-      TERMINE: 'Terminé',
-      BLOQUE: 'Bloqué',
-    };
-    return statuts[String(v)] ?? String(v);
+  if (cle === 'statut' || cle === 'ofStatut') {
+    return LIBELLE_STATUT[String(v)] ?? String(v);
   }
+  if (cle === 'ofType') return LIBELLE_TYPE_OF[String(v)] ?? String(v);
   return String(v);
 }
 
@@ -106,12 +139,12 @@ const TableDetail: React.FC<{ details?: string }> = ({ details }) => {
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {champs.map((c) => (
+      {champs.map((c, i) => (
         <span
-          key={c.k}
+          key={`${c.k}-${i}`}
           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-semibold border ${couleurChamp(c.k)}`}
         >
-          <span className="font-bold">{libelleChamp(c.k)}</span>
+          <span className="font-bold">{c.l ?? libelleChamp(c.k)}</span>
           <span className="font-normal opacity-70">{afficherValeur(c.k, c.a)}</span>
           <span className="opacity-50">→</span>
           <span className="font-bold">{afficherValeur(c.k, c.b)}</span>
@@ -159,6 +192,10 @@ function libelleAction(action: string): string {
     'jalon.renomme': 'Renommage d’un jalon',
     'jalon.grandeur': 'Changement de grandeur d’un jalon',
     'jalon.supprime': 'Suppression d’un jalon',
+    'alerte.ajoutee': 'Ajout d’une alerte',
+    'alerte.reglee': 'Résolution d’une alerte',
+    'alerte.rouverte': 'Réouverture d’une alerte',
+    'alerte.supprimee': 'Suppression d’une alerte',
     'suivi.modifie': 'Modification du Suivi Global',
     'base.reinitialisee': 'Réinitialisation des données',
   };
@@ -209,7 +246,7 @@ export const HistoriqueView: React.FC<HistoriqueViewProps> = ({
   const [erreur, setErreur] = useState<string | null>(null);
 
   // Filtres : profil auteur, bornes de date (locales, AAAA-MM-JJ).
-  const [filtreProfil, setFiltreProfil] = useState<string>('resp-planning');
+  const [filtreProfil, setFiltreProfil] = useState<string>('');
   const [dateMin, setDateMin] = useState('');
   const [dateMax, setDateMax] = useState('');
   // Filtre de jour appliqué côté client : clic sur une date de la liste.
@@ -276,42 +313,49 @@ export const HistoriqueView: React.FC<HistoriqueViewProps> = ({
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
       {/* Bandeau haut : titre, date/heure, sélecteur de vue */}
-      <div className="bg-white border-b border-slate-200 relative z-20 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-slate-700 flex items-center justify-center text-white">
-              <History className="w-5 h-5" />
-            </div>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-                Historique des modifications
-              </h1>
-              <div className="flex flex-wrap items-center gap-2.5 text-xs sm:text-sm text-slate-500 mt-0.5">
-                <span className="flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  {fullFrenchDate}
-                </span>
-                <span className="text-slate-300">•</span>
-                <span className="flex items-center gap-1 font-semibold text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/60">
-                  <Clock className="w-3.5 h-3.5 text-slate-600" />
-                  {parisTime}
-                  <span className="text-[10px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
-                </span>
+      <div className="relative z-20 border-b border-slate-200 bg-white shadow-xs">
+        <div className="page-container py-4">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-4 min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-between min-[900px]:gap-6">
+            {/* Brand */}
+            <div className="flex min-w-0 items-center gap-3.5">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-slate-700 text-white">
+                <History className="h-6 w-6" />
+              </div>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <h1 className="m-0 whitespace-normal text-[22px] font-medium leading-[1.2] text-slate-900 min-[900px]:overflow-hidden min-[900px]:text-ellipsis min-[900px]:whitespace-nowrap">
+                  Historique des modifications
+                </h1>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500">
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <Calendar className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    {fullFrenchDate}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 px-2 py-0.5 font-medium tabular-nums text-slate-900">
+                    <Clock className="h-3.5 w-3.5 shrink-0 text-slate-600" />
+                    <span>{parisTime}</span>
+                    <span className="text-[11px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div className="flex md:justify-center">
-            <ViewSwitcher currentPage="historique" onChangePage={onChangePage} />
-          </div>
+            {/* Actions */}
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5 min-[900px]:justify-end">
+              <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+            </div>
 
-          <div className="flex items-center justify-end">
-            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+            </div>
+
+            {/* Tabs */}
+            <div className="min-w-0">
+              <ViewSwitcher currentPage="historique" onChangePage={onChangePage} />
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="page-container py-6">
         {/* Barre de filtres */}
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 mb-5">
           <div className="flex flex-wrap items-end gap-3">

@@ -14,6 +14,7 @@ import { getNowParis, getSemaineISO, horodatageBref } from '@/src/utils/dateFran
 import {
   useAlertesManuelles,
   ecrireAlertesManuelles,
+  journaliserAlerte,
   alertesCarte,
   alerteEnColonne,
   alerteActive,
@@ -194,15 +195,32 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
       ...manuelles,
       [card.id]: [...alertesManuelles, entree],
     });
+    journaliserAlerte({
+      action: 'alerte.ajoutee',
+      cardId: card.id,
+      modele: card.modele,
+      resume: texte,
+      champs: [{ k: 'alerte', l: 'Alerte ajoutée', a: null, b: texte }],
+    });
     setSaisie('');
   };
 
   const supprimerAlerte = (id: string) => {
     if (lectureSeule) return;
+    const cible = alertesManuelles.find((a) => a.id === id);
     ecrireAlertesManuelles({
       ...manuelles,
       [card.id]: alertesManuelles.filter((a) => a.id !== id),
     });
+    if (cible) {
+      journaliserAlerte({
+        action: 'alerte.supprimee',
+        cardId: card.id,
+        modele: card.modele,
+        resume: cible.texte,
+        champs: [{ k: 'alerte', l: 'Alerte supprimée', a: cible.texte, b: null }],
+      });
+    }
   };
 
   // Une alerte change de type sans être réécrite : « colonne » ou « popover uniquement ».
@@ -226,6 +244,13 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
         x.id === a.id ? { ...x, resolueLe: `${now.dateStr} à ${now.timeStr}` } : x
       ),
     });
+    journaliserAlerte({
+      action: 'alerte.reglee',
+      cardId: card.id,
+      modele: card.modele,
+      resume: a.texte,
+      champs: [{ k: 'alerte', l: 'Alerte réglée', a: a.texte, b: 'Réglée' }],
+    });
   };
 
   // Réouvre une alerte réglée : elle revient dans les alertes en cours.
@@ -236,6 +261,13 @@ export const AlertePopover: React.FC<AlertePopoverProps> = ({
     ecrireAlertesManuelles({
       ...manuelles,
       [card.id]: alertesManuelles.map((x) => (x.id === a.id ? restauree : x)),
+    });
+    journaliserAlerte({
+      action: 'alerte.rouverte',
+      cardId: card.id,
+      modele: card.modele,
+      resume: a.texte,
+      champs: [{ k: 'alerte', l: 'Alerte rouverte', a: 'Réglée', b: a.texte }],
     });
   };
 

@@ -109,6 +109,12 @@ export interface ChaineRow {
   ];
   // Nouvelle colonne Expédition après Prochains Lancements (pile de 2 cartes)
   expeditionCards: [ChaineSlotCard | null, ChaineSlotCard | null];
+  /**
+   * Suivi d'expédition mémorisé par carte (clé = cardId), conservé même après
+   * son retrait de la colonne Expédition : une désactivation involontaire ne
+   * perd pas les dates et statuts déjà saisis, qui reviennent à la réactivation.
+   */
+  expeditionArchive?: Record<string, ExpeditionOF[]>;
 }
 
 export interface CategorieConfig {

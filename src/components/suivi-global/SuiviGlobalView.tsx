@@ -647,25 +647,68 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       setRows((prev) => {
         // Conserve l'expédition OF par OF si la carte était déjà en expédition.
         let aEcrire = slotCard;
-        if (cardId && groupe === 'expedition') {
-          const existant = localiserCarteDansGroupe(prev, cardId, 'expedition');
-          const slotExistant = existant ? lireCarteEnCase(prev, existant) : null;
-          if (slotExistant) {
-            aEcrire = { ...slotExistant };
-          } else if (aEcrire && !aEcrire.expeditionOfs) {
-            // Première mise en expédition : pré-remplit les OF (état + date).
-            aEcrire = {
-              ...aEcrire,
-              expeditionOfs: expeditionOfsDepuisCarte(cardsParId.get(cardId)),
-            };
+        // Suivi mémorisé : une carte retirée de la colonne Expédition garde ses
+        // dates et statuts, restaurés si elle y est remise (clic involontaire).
+        let archiveCarteId: string | undefined;
+        let archiveRowId: string | undefined;
+        let archiveOfs: ExpeditionOF[] | undefined;
+
+        if (groupe === 'expedition') {
+          if (!slotCard) {
+            // Retrait : archive le suivi avant de vider la case.
+            const slotRetire = lireCarteEnCase(prev, { rowId, slotType, slotIndex });
+            if (slotRetire?.cardId && slotRetire.expeditionOfs?.length) {
+              archiveCarteId = slotRetire.cardId;
+              archiveRowId = rowId;
+              archiveOfs = slotRetire.expeditionOfs;
+            }
+          } else if (cardId) {
+            const existant = localiserCarteDansGroupe(prev, cardId, 'expedition');
+            const slotExistant = existant ? lireCarteEnCase(prev, existant) : null;
+            if (slotExistant) {
+              aEcrire = { ...slotExistant };
+            } else if (aEcrire && !aEcrire.expeditionOfs) {
+              // Première mise en expédition : reprend le suivi mémorisé s'il
+              // existe, sinon pré-remplit les OF (état + date).
+              const memorise = prev
+                .map((r) => ({ rowId: r.id, ofs: r.expeditionArchive?.[cardId] }))
+                .find((m) => m.ofs && m.ofs.length > 0);
+              if (memorise?.ofs) {
+                aEcrire = { ...aEcrire, expeditionOfs: memorise.ofs };
+                archiveCarteId = cardId;
+                archiveRowId = memorise.rowId;
+              } else {
+                aEcrire = {
+                  ...aEcrire,
+                  expeditionOfs: expeditionOfsDepuisCarte(cardsParId.get(cardId)),
+                };
+              }
+            }
           }
         }
+
         const retrait = cardId ? retirerCarteDuGroupe(prev, cardId, groupe) : prev;
-        return ecrireCarteEnCase(
+        let next = ecrireCarteEnCase(
           retrait,
           { rowId, slotType, lancementIndex, slotIndex },
           aEcrire
         );
+
+        // Une seule copie de référence : archivée au retrait, consommée à la
+        // remise en expédition.
+        if (archiveRowId && archiveCarteId) {
+          next = next.map((r) => {
+            if (r.id !== archiveRowId) return r;
+            const archive = { ...(r.expeditionArchive ?? {}) };
+            if (archiveOfs) archive[archiveCarteId as string] = archiveOfs;
+            else delete archive[archiveCarteId as string];
+            return Object.keys(archive).length
+              ? { ...r, expeditionArchive: archive }
+              : { ...r, expeditionArchive: undefined };
+          });
+        }
+
+        return next;
       });
     },
     [cardsParId]
@@ -958,58 +1001,59 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
       {/* Top Banner / Actions Bar */}
-      <div className="bg-white border-b border-slate-200 relative z-20 shadow-xs">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-4">
-          {/* Gauche : titre + date & heure, comme le Point Commande Journalière */}
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-lg bg-indigo-600 flex items-center justify-center text-white">
-              <TableProperties className="w-5 h-5" />
-            </div>
-            <div>
-              <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
-                Tableau AIC
-              </h1>
-              <div className="flex flex-wrap items-center gap-2.5 text-xs sm:text-sm text-slate-500 mt-0.5">
-                <span className="flex items-center gap-1.5">
-                  <Calendar className="w-3.5 h-3.5 text-slate-400" />
-                  {fullFrenchDate}
-                </span>
-                <span className="text-slate-300">•</span>
-                <span className="flex items-center gap-1 font-semibold text-slate-700 bg-slate-50 px-1.5 py-0.5 rounded border border-slate-200/60">
-                  <Clock className="w-3.5 h-3.5 text-blue-600" />
-                  {parisTime}
-                  <span className="text-[10px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
-                </span>
+      <div className="relative z-20 border-b border-slate-200 bg-white shadow-xs">
+        <div className="page-container-wide py-4">
+          <div className="flex flex-col gap-4">
+            <div className="flex flex-col gap-4 min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-between min-[900px]:gap-6">
+            {/* Brand */}
+            <div className="flex min-w-0 items-center gap-3.5">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white">
+                <TableProperties className="h-6 w-6" />
+              </div>
+              <div className="flex min-w-0 flex-col gap-1.5">
+                <h1 className="m-0 whitespace-normal text-[22px] font-medium leading-[1.2] text-slate-900 min-[900px]:overflow-hidden min-[900px]:text-ellipsis min-[900px]:whitespace-nowrap">
+                  Tableau AIC
+                </h1>
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500">
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <Calendar className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                    {fullFrenchDate}
+                  </span>
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 px-2 py-0.5 font-medium tabular-nums text-slate-900">
+                    <Clock className="h-3.5 w-3.5 shrink-0 text-indigo-600" />
+                    <span>{parisTime}</span>
+                    <span className="text-[11px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
+                  </span>
+                </div>
               </div>
             </div>
-          </div>
 
-          {/* Centre : sélecteur de vue (Point Commande / Suivi Global) */}
-          <div className="flex md:justify-center">
-            <ViewSwitcher
-              currentPage="suivi-global"
-              onChangePage={onChangePage}
-            />
-          </div>
+            {/* Actions */}
+            <div className="flex min-w-0 flex-wrap items-center gap-2.5 min-[900px]:justify-end">
+              {!lectureSeule && (
+                <button
+                  onClick={() => setNouvelleChaineOuverte(true)}
+                  className="inline-flex h-[38px] shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[10px] bg-indigo-600 px-4 text-sm font-medium text-white shadow-sm transition-colors duration-150 hover:bg-indigo-700 active:bg-indigo-800"
+                >
+                  <Plus className="h-4 w-4 stroke-[2.5]" />
+                  <span>Nouvelle Chaîne</span>
+                </button>
+              )}
+              <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+            </div>
 
-          {/* Droite : création d'une nouvelle chaîne */}
-          <div className="flex items-center justify-end flex-wrap gap-2.5">
-            {!lectureSeule && (
-              <button
-                onClick={() => setNouvelleChaineOuverte(true)}
-                className="inline-flex items-center gap-2 px-3.5 py-2 text-xs sm:text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 rounded-lg shadow-sm hover:shadow transition-all cursor-pointer"
-              >
-                <Plus className="w-4 h-4 stroke-[2.5]" />
-                <span>Nouvelle Chaîne</span>
-              </button>
-            )}
-            <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+            </div>
+
+            {/* Tabs */}
+            <div className="min-w-0">
+              <ViewSwitcher currentPage="suivi-global" onChangePage={onChangePage} />
+            </div>
           </div>
         </div>
       </div>
 
       {/* Main Board Container */}
-      <div className="max-w-[1850px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+      <div className="page-container-wide py-6">
         {/* The Exact Table matching the PNG + Expedition column */}
         <div
           ref={tableScrollRef}

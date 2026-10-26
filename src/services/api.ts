@@ -471,6 +471,23 @@ export const historiqueApi = {
     return [];
   },
 
+  /**
+   * Ajoute une entrée au journal (événements qui vivent côté client, comme les
+   * alertes du Suivi Global). Best-effort : l'absence de serveur ne bloque pas
+   * l'action métier.
+   */
+  async log(entree: { action: string; cible: string; details?: string }): Promise<void> {
+    try {
+      await fetch('/api/v1/historique', {
+        method: 'POST',
+        headers: entetesJson(),
+        body: JSON.stringify(entree),
+      });
+    } catch {
+      // Journalisation best-effort.
+    }
+  },
+
   /** Vide le journal (supprime les entrées, garde la table). */
   async vider(): Promise<boolean> {
     try {

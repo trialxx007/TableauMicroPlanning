@@ -25,46 +25,46 @@ const TABS: TabConfig[] = [
   {
     page: 'point-journalier',
     label: 'Point Commande',
-    icon: <ClipboardList className="w-4 h-4" />,
+    icon: <ClipboardList className="h-[15px] w-[15px]" />,
     title: 'Point Commande Journalière : cartes de la réunion, nomenclatures et statuts',
-    activeIcon: 'bg-blue-600 text-white shadow-md shadow-blue-600/30',
-    idleIcon: 'bg-blue-50 text-blue-500 group-hover:bg-blue-600 group-hover:text-white',
+    activeIcon: 'bg-blue-600 text-white',
+    idleIcon: 'bg-blue-50 text-blue-600',
     activeLabel: 'text-blue-700',
   },
   {
     page: 'suivi-global',
     label: 'Suivi Global',
-    icon: <TableProperties className="w-4 h-4" />,
+    icon: <TableProperties className="h-[15px] w-[15px]" />,
     title: 'Suivi Global des chaînes et prochains lancements',
-    activeIcon: 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30',
-    idleIcon: 'bg-indigo-50 text-indigo-500 group-hover:bg-indigo-600 group-hover:text-white',
+    activeIcon: 'bg-indigo-600 text-white',
+    idleIcon: 'bg-indigo-50 text-indigo-600',
     activeLabel: 'text-indigo-700',
   },
   {
     page: 'tableaux-ofs',
     label: 'Tableaux des OFs',
-    icon: <Table2 className="w-4 h-4" />,
+    icon: <Table2 className="h-[15px] w-[15px]" />,
     title: 'Tableaux des OFs regroupés par client et par modèle de carte',
-    activeIcon: 'bg-emerald-600 text-white shadow-md shadow-emerald-600/30',
-    idleIcon: 'bg-emerald-50 text-emerald-500 group-hover:bg-emerald-600 group-hover:text-white',
+    activeIcon: 'bg-emerald-600 text-white',
+    idleIcon: 'bg-emerald-50 text-emerald-600',
     activeLabel: 'text-emerald-700',
   },
   {
     page: 'historique',
     label: 'Historique',
-    icon: <History className="w-4 h-4" />,
+    icon: <History className="h-[15px] w-[15px]" />,
     title: 'Historique des modifications (Planning, Production) — réservé à la Direction',
-    activeIcon: 'bg-slate-700 text-white shadow-md shadow-slate-700/30',
-    idleIcon: 'bg-slate-100 text-slate-500 group-hover:bg-slate-700 group-hover:text-white',
+    activeIcon: 'bg-slate-700 text-white',
+    idleIcon: 'bg-slate-100 text-slate-500',
     activeLabel: 'text-slate-700',
   },
   {
     page: 'developpement',
     label: 'Développement',
-    icon: <SquareKanban className="w-4 h-4" />,
+    icon: <SquareKanban className="h-[15px] w-[15px]" />,
     title: 'Tableau kanban du développement : tâches, colonnes et glisser-déposer',
     activeIcon: 'bg-violet-600 text-white',
-    idleIcon: 'bg-violet-50 text-violet-500 group-hover:bg-violet-600 group-hover:text-white',
+    idleIcon: 'bg-violet-50 text-violet-600',
     activeLabel: 'text-violet-700',
   },
 ];
@@ -82,7 +82,7 @@ export const ViewSwitcher: React.FC<ViewSwitcherProps> = ({ currentPage, onChang
     <div
       role="tablist"
       aria-label="Choix de l'interface"
-      className="inline-flex items-center gap-1 p-1 bg-slate-100 border border-slate-200 rounded-xl"
+      className="flex w-fit max-w-full items-center gap-0.5 overflow-x-auto rounded-xl border border-slate-200 bg-slate-100 p-1"
     >
       {onglets.map((tab) => {
         const isActive = currentPage === tab.page;
@@ -91,24 +91,23 @@ export const ViewSwitcher: React.FC<ViewSwitcherProps> = ({ currentPage, onChang
             key={tab.page}
             role="tab"
             aria-selected={isActive}
+            aria-label={tab.label}
             onClick={() => onChangePage(tab.page)}
             title={tab.title}
-            className={`group inline-flex items-center gap-1.5 px-3 py-1.5 text-xs sm:text-sm font-semibold rounded-lg transition-all duration-300 ease-out cursor-pointer ${
+            className={`inline-flex flex-none cursor-pointer items-center gap-2 whitespace-nowrap rounded-[9px] border py-1.5 pl-1.5 pr-3 text-sm transition-colors duration-150 ${
               isActive
-                ? 'bg-white shadow-sm ring-1 ring-slate-200'
-                : 'text-slate-500 hover:text-slate-800'
+                ? `border-slate-200 bg-white font-medium shadow-xs ${tab.activeLabel}`
+                : 'border-transparent text-slate-500 hover:bg-slate-200/60'
             }`}
           >
             <span
-              className={`w-7 h-7 shrink-0 rounded-lg flex items-center justify-center transition-all duration-300 ease-out ${
+              className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] transition-colors duration-150 ${
                 isActive ? tab.activeIcon : tab.idleIcon
               }`}
             >
               {tab.icon}
             </span>
-            <span className={`transition-colors duration-300 ${isActive ? tab.activeLabel : ''}`}>
-              {tab.label}
-            </span>
+            <span className="block leading-none">{tab.label}</span>
           </button>
         );
       })}

@@ -456,9 +456,9 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
             const ofCases = normalizeCases(ofItem.casesEnCours, ofNbCases, ofItem.quantiteDemandee);
 
             // Référence d'inspection de cet OF (colonne Inspection du Suivi
-            // Global) : 1 ✓ si I 50 % Pass, 2 ✓ si I 100 % Pass. Le CC ne
-            // compte pas comme un 3e ✓ ; tant qu'il n'est pas passé, on
-            // affiche simplement le libellé « CC » à côté.
+            // Global) : 1 ✓ dès qu'un contrôle est passé, 2 ✓ seulement quand
+            // tout est complet. Le CC ne compte pas comme un 3e ✓ : tant qu'il
+            // reste à faire, on affiche une seule coche et le libellé « CC ».
             const valeursInspection = parCarte[cardId]?.valeurs ?? [];
             const controlePasse = (pct: 50 | 100) =>
               valeursInspection.some(
@@ -468,8 +468,6 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                   (v.pct ?? 50) === pct &&
                   v.resultat === 'P'
               );
-            const nbControlesPasses =
-              (controlePasse(50) ? 1 : 0) + (controlePasse(100) ? 1 : 0);
             // Un contrôle à 100 % doit avoir été saisi (exister) pour que le CC
             // soit envisageable ; avant cela, on n'affiche jamais « CC ».
             const i100Existe = valeursInspection.some(
@@ -482,8 +480,15 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
               (v) =>
                 v.type === 'CC' && (v.ofIndex ?? 0) === index && v.resultat === 'P'
             );
-            // Le CC ne compte pas comme un 3e ✓ : il reste à 2 contrôles, et
-            // tant qu'il n'est pas passé on affiche « CC » à côté des ✓.
+            // La seconde coche n'apparaît qu'une fois tout terminé : I 50 % et
+            // I 100 % validés, et le CC passé lorsqu'il est requis.
+            const toutComplet =
+              controlePasse(50) && controlePasse(100) && (!i100Existe || ccPasse);
+            const nbControlesPasses = toutComplet
+              ? 2
+              : controlePasse(50) || controlePasse(100)
+              ? 1
+              : 0;
             const ccEnAttente = i100Existe && !ccPasse;
 
             return (
@@ -702,45 +707,57 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                           </select>
                         </div>
                         <div className="flex items-center gap-2.5">
-                          <select
-                            value={ofItem.destination ?? ''}
-                            onChange={(e) =>
-                              handleUpdateSingleOF(ofItem.id, {
-                                destination: (e.target.value || undefined) as
-                                  | DestinationOF
-                                  | undefined,
-                              })
-                            }
-                            title={
-                              ofItem.destination
-                                ? `Destination : ${
-                                    OF_DESTINATIONS.find(
+                          {/* Le sélecteur se dimensionne sur le texte affiché : un
+                              calque invisible porte la largeur, le <select> le
+                              recouvre. La liste déroulante reste donc étroite pour
+                              « FR » et s'élargit pour « Destination ». */}
+                          <span className="relative inline-flex shrink-0">
+                            <span
+                              aria-hidden="true"
+                              className="invisible whitespace-nowrap rounded-md border border-transparent pl-2 pr-7 py-0.5 text-[11px] font-bold"
+                            >
+                              {ofItem.destination ?? 'Destination'}
+                            </span>
+                            <select
+                              value={ofItem.destination ?? ''}
+                              onChange={(e) =>
+                                handleUpdateSingleOF(ofItem.id, {
+                                  destination: (e.target.value || undefined) as
+                                    | DestinationOF
+                                    | undefined,
+                                })
+                              }
+                              title={
+                                ofItem.destination
+                                  ? `Destination : ${
+                                      OF_DESTINATIONS.find(
+                                        (d) => d.code === ofItem.destination
+                                      )?.label ?? ofItem.destination
+                                    }`
+                                  : 'Choisir la destination de cet OF'
+                              }
+                              style={{
+                                backgroundImage: CHEVRON_DESTINATION,
+                                backgroundRepeat: 'no-repeat',
+                                backgroundPosition: 'right 6px center',
+                                backgroundSize: '14px',
+                              }}
+                              className={`absolute inset-0 h-full w-full appearance-none text-[11px] font-bold rounded-md border pl-2 pr-7 py-0.5 cursor-pointer shadow-2xs ${
+                                ofItem.destination
+                                  ? OF_DESTINATIONS.find(
                                       (d) => d.code === ofItem.destination
-                                    )?.label ?? ofItem.destination
-                                  }`
-                                : 'Choisir la destination de cet OF'
-                            }
-                            style={{
-                              backgroundImage: CHEVRON_DESTINATION,
-                              backgroundRepeat: 'no-repeat',
-                              backgroundPosition: 'right 6px center',
-                              backgroundSize: '14px',
-                            }}
-                            className={`appearance-none text-[11px] font-bold rounded-md border pl-2 pr-7 py-0.5 cursor-pointer shadow-2xs ${
-                              ofItem.destination
-                                ? OF_DESTINATIONS.find(
-                                    (d) => d.code === ofItem.destination
-                                  )?.classe ?? 'bg-white text-slate-700'
-                                : 'bg-white text-slate-700'
-                            }`}
-                          >
-                            <option value="">Destination</option>
-                            {OF_DESTINATIONS.map((d) => (
-                              <option key={d.code} value={d.code} title={d.label}>
-                                {d.code}
-                              </option>
-                            ))}
-                          </select>
+                                    )?.classe ?? 'bg-white text-slate-700'
+                                  : 'bg-white text-slate-700'
+                              }`}
+                            >
+                              <option value="">Destination</option>
+                              {OF_DESTINATIONS.map((d) => (
+                                <option key={d.code} value={d.code} title={d.label}>
+                                  {d.code}
+                                </option>
+                              ))}
+                            </select>
+                          </span>
                           {(nbControlesPasses > 0 || ccEnAttente) && (
                             <span
                               className={`inline-flex items-center gap-1.5 rounded-full pl-2 py-0.5 ${

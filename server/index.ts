@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { CardItem, CardJalon } from '../src/types/card.ts';
+import type { CardItem, CardJalon, OrdreFabrication } from '../src/types/card.ts';
 import { normaliserDateJalon, okProdAuto } from '../src/utils/jalons.ts';
 import {
   createJalon,
@@ -113,8 +113,23 @@ function cibleCarte(card: { id: string; modele?: string; batch?: string }): stri
  */
 interface ChampModifie {
   k: string;
+  /** Libellé lisible optionnel, prioritaire sur celui déduit de `k`. */
+  l?: string;
   a: unknown;
   b: unknown;
+}
+
+/** État d'un jalon en clair : Validé, S40, date, TBC ou En attente. */
+function etatJalonLisible(j: CardJalon | undefined): string | null {
+  if (!j) return null;
+  if (j.valide) return 'Validé';
+  const morceaux: string[] = [];
+  if (j.tbc) morceaux.push('TBC');
+  if (j.semaine != null) {
+    morceaux.push(`S${j.semaine}${j.semaineFin != null ? `→S${j.semaineFin}` : ''}`);
+  }
+  if (j.date) morceaux.push(j.date);
+  return morceaux.length ? morceaux.join(' · ') : 'En attente';
 }
 
 /** Sérialise un détail structuré pour la colonne `details` du journal. */
@@ -129,8 +144,8 @@ function vide(v: unknown): boolean {
 
 /**
  * Compare deux cartes champ par champ selon une liste blanche, et renvoie les
- * champs réellement modifiés. Les jalons sont comparés globalement (un état de
- * jalon est un objet imbriqué) et résumés par leurs codes.
+ * champs réellement modifiés. Les jalons et les OFs (y compris leurs sous-OF)
+ * sont détaillés un par un, avec un état lisible, pour l'onglet Direction.
  */
 const CHAMPS_CARTE_SUIVIS: { cle: string; lire: (c: CardItem) => unknown }[] = [
   { cle: 'client', lire: (c) => c.client },
@@ -155,37 +170,104 @@ function diffCarte(avant: CardItem, apres: CardItem): ChampModifie[] {
     }
   }
 
-  // Jalons : on résume par les codes dont l'état (validé/semaine/date) a changé.
-  const etat = (c: CardItem) =>
-    new Map(
-      c.jalons.map((j) => [
-        j.code,
-        JSON.stringify({ v: Boolean(j.valide), s: j.semaine ?? null, d: j.date ?? null }),
-      ])
+  // Jalons : un champ par code dont l'état a changé, avec une valeur lisible
+  // (Validé, S40, date, TBC…) pour que la Direction voie le détail exact.
+  const mapJalons = (c: CardItem) => new Map((c.jalons ?? []).map((j) => [j.code, j]));
+  const avantJalons = mapJalons(avant);
+  const apresJalons = mapJalons(apres);
+  const signatureJalon = (j: CardJalon | undefined) =>
+    JSON.stringify(
+      j
+        ? {
+            v: Boolean(j.valide),
+            s: j.semaine ?? null,
+            sf: j.semaineFin ?? null,
+            d: j.date ?? null,
+            t: Boolean(j.tbc),
+          }
+        : null
     );
-  const avantMap = etat(avant);
-  const apresMap = etat(apres);
-  const codes = new Set([...avantMap.keys(), ...apresMap.keys()]);
-  const codesModifies: string[] = [];
-  for (const code of codes) {
-    if (avantMap.get(code) !== apresMap.get(code)) codesModifies.push(code);
-  }
-  if (codesModifies.length) {
-    champs.push({
-      k: 'jalons',
-      a: codesModifies.filter((c) => avantMap.has(c)).join(', ') || null,
-      b: codesModifies.filter((c) => apresMap.has(c)).join(', ') || null,
-    });
+  const codesJalons = new Set([...avantJalons.keys(), ...apresJalons.keys()]);
+  for (const code of codesJalons) {
+    const a = avantJalons.get(code);
+    const b = apresJalons.get(code);
+    if (signatureJalon(a) !== signatureJalon(b)) {
+      champs.push({
+        k: 'jalon',
+        l: `Jalon ${code}`,
+        a: etatJalonLisible(a),
+        b: etatJalonLisible(b),
+      });
+    }
   }
 
-  // OFs : nombre, et quantités globales (détail trop fin pour être lisible).
-  if ((avant.ofs?.length ?? 0) !== (apres.ofs?.length ?? 0)) {
-    champs.push({ k: 'ofsOrdre', a: avant.ofs?.length ?? 0, b: apres.ofs?.length ?? 0 });
-  } else if (JSON.stringify(avant.ofs) !== JSON.stringify(apres.ofs)) {
-    const somme = (c: CardItem) =>
-      (c.ofs ?? []).reduce((s, o) => s + (Number(o.quantiteFinie) || 0), 0);
-    champs.push({ k: 'ofsQuantite', a: somme(avant), b: somme(apres) });
+  // OFs : détail par OF (quantités, statut, destination, traitant) pour savoir
+  // ce que la production a changé et de combien. Les sous-OF sont suivis par
+  // leur code, séparément.
+  const ofsAvant = avant.ofs ?? [];
+  const ofsApres = apres.ofs ?? [];
+  if (ofsAvant.length !== ofsApres.length) {
+    champs.push({ k: 'ofsOrdre', a: ofsAvant.length, b: ofsApres.length });
   }
+  const labelOF = (of: OrdreFabrication, index: number) => of.codeOF || `OF${index + 1}`;
+  const normaliser = (v: unknown) => (vide(v) ? null : v);
+  const comparerOF = (cle: string, label: string, av: unknown, ap: unknown) => {
+    const a = normaliser(av);
+    const b = normaliser(ap);
+    if (JSON.stringify(a) === JSON.stringify(b)) return;
+    champs.push({ k: cle, l: label, a, b });
+  };
+  const avantParId = new Map(ofsAvant.map((o) => [o.id, o]));
+  ofsApres.forEach((of, i) => {
+    const a = avantParId.get(of.id);
+    const label = labelOF(of, i);
+    if (!a) {
+      champs.push({ k: 'ofAjout', l: `OF ${label}`, a: null, b: 'Ajouté' });
+      return;
+    }
+    comparerOF('ofQuantiteDemandee', `OF ${label} · Qté confiée`, a.quantiteDemandee, of.quantiteDemandee);
+    comparerOF('ofQuantiteFinie', `OF ${label} · Qté finie`, a.quantiteFinie, of.quantiteFinie);
+    comparerOF('ofStatut', `OF ${label} · Statut`, a.statut, of.statut);
+    comparerOF('ofDestination', `OF ${label} · Destination`, a.destination, of.destination);
+    comparerOF('ofType', `OF ${label} · Type`, a.type, of.type);
+    comparerOF('ofTraitant', `OF ${label} · Traitant`, a.nomExecutant, of.nomExecutant);
+    comparerOF('ofTitre', `OF ${label} · Titre`, a.titre, of.titre);
+
+    const sousAvant = new Map((a.sousOfs ?? []).map((s) => [s.id, s]));
+    (of.sousOfs ?? []).forEach((s, j) => {
+      const sa = sousAvant.get(s.id);
+      const labelSous = s.codeSousOF || `${label}.${j + 1}`;
+      if (!sa) {
+        champs.push({ k: 'ofAjout', l: `Sous-OF ${labelSous}`, a: null, b: 'Ajouté' });
+        return;
+      }
+      comparerOF(
+        'ofQuantiteDemandee',
+        `Sous-OF ${labelSous} · Qté confiée`,
+        sa.quantiteDemandee,
+        s.quantiteDemandee
+      );
+      comparerOF(
+        'ofQuantiteFinie',
+        `Sous-OF ${labelSous} · Qté finie`,
+        sa.quantiteFinie,
+        s.quantiteFinie
+      );
+      comparerOF('ofType', `Sous-OF ${labelSous} · Type`, sa.type, s.type);
+      comparerOF(
+        'ofTraitant',
+        `Sous-OF ${labelSous} · Traitant`,
+        sa.nomExecutant,
+        s.nomExecutant
+      );
+    });
+  });
+  const idsApres = new Set(ofsApres.map((o) => o.id));
+  ofsAvant.forEach((of, i) => {
+    if (!idsApres.has(of.id)) {
+      champs.push({ k: 'ofSupprime', l: `OF ${labelOF(of, i)}`, a: 'Présent', b: null });
+    }
+  });
 
   return champs;
 }
@@ -627,6 +709,30 @@ apiRouter.get('/stats', (_req: Request, res: Response) => {
 });
 });
 /* ------------------------------------------------------------------ historique */
+
+// Événement envoyé par le client (ex. ajout / résolution d'une alerte, qui vit
+// dans le localStorage). Le serveur complète le profil auteur et l'horodatage.
+apiRouter.post('/historique', (req: Request, res: Response) => {
+  try {
+    const action = typeof req.body?.action === 'string' ? req.body.action.trim() : '';
+    const cible = typeof req.body?.cible === 'string' ? req.body.cible.trim() : '';
+    const details = typeof req.body?.details === 'string' ? req.body.details : undefined;
+    if (!action || !cible) {
+      return res
+        .status(400)
+        .json({ success: false, error: 'action et cible sont obligatoires' });
+    }
+    journaliser({
+      profil: profilDe(req),
+      action,
+      cible,
+      ...(details ? { details } : {}),
+    });
+    res.status(201).json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
 
 // Journal des modifications, servi à l'onglet Direction. Filtres optionnels :
 // `profil`, `dateMin`, `dateMax` (AAAA-MM-JJ, fuseau du site), `limit`.

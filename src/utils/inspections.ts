@@ -145,3 +145,120 @@ export function blocEnTexte(bloc: InspectionBloc): string {
   });
   return [...valeurs, bloc.commentaire].filter(Boolean).join(' | ');
 }
+
+/**
+ * Return the inspection step that is currently in progress for one OF.
+ *
+ * The existing visual order is respected: I controls first, then CC. A step
+ * before the latest completed step is superseded (for example an old pending
+ * I 50% left before a later I 50% Pass), so it is ignored. A pending step is
+ * only eligible when the existing rules consider it unlocked:
+ * - I 50% is always available;
+ * - I 100% needs a passed I 50%;
+ * - CC needs a passed I 100%.
+ *
+ * When every step is finished, `null` means "all done". A final Fail is kept
+ * so the UI can still show the failed step instead of a success message.
+ */
+export function getCurrentInspectionStep(
+  bloc: InspectionBloc,
+  ofIndex: number
+): InspectionValeur | null {
+  const inspections = bloc.valeurs.filter(
+    (v) => v.type === 'I' && (v.ofIndex ?? 0) === ofIndex
+  );
+  const cartons = bloc.valeurs.filter(
+    (v) => v.type === 'CC' && (v.ofIndex ?? 0) === ofIndex
+  );
+  const ordered = [...inspections, ...cartons];
+  if (ordered.length === 0) return null;
+
+  const hasPassed50 = inspections.some(
+    (v) => (v.pct ?? 50) === 50 && v.resultat === 'P'
+  );
+  const hasPassed100 = inspections.some(
+    (v) => (v.pct ?? 50) === 100 && v.resultat === 'P'
+  );
+
+  const isUnlocked = (v: InspectionValeur): boolean => {
+    if (v.type === 'I') {
+      return (v.pct ?? 50) === 50 || hasPassed50;
+    }
+    return hasPassed100;
+  };
+
+  let lastCompleted = -1;
+  ordered.forEach((v, index) => {
+    if (v.resultat === 'P' || v.resultat === 'F') lastCompleted = index;
+  });
+
+  const current = ordered
+    .slice(lastCompleted + 1)
+    .find((v) => v.resultat === null && isUnlocked(v));
+  if (current) return current;
+
+  const last = ordered[ordered.length - 1];
+  return last?.resultat === 'F' ? last : null;
+}
+
+/** True when the CC of one OF has been explicitly marked as Pass. */
+export function hasPassedCc(
+  bloc: InspectionBloc | undefined,
+  ofIndex: number
+): boolean {
+  return Boolean(
+    bloc?.valeurs.some(
+      (v) =>
+        v.type === 'CC' &&
+        (v.ofIndex ?? 0) === ofIndex &&
+        v.resultat === 'P'
+    )
+  );
+}
+
+export interface InspectionAdd {
+  type: 'I' | 'CC';
+  pct?: 50 | 100;
+}
+
+/**
+ * Return the controls that can still be added for one OF.
+ *
+ * The menu follows the existing progression instead of always showing every
+ * control: no new I once a CC exists, no I 50% after a passed I 50%, and no
+ * I 100% before a passed I 50%. A pending step is not offered twice; the user
+ * can set its Pass/Fail from the existing row.
+ */
+export function getAvailableInspectionAdds(
+  bloc: InspectionBloc,
+  ofIndex: number
+): InspectionAdd[] {
+  const inspections = bloc.valeurs.filter(
+    (v) => v.type === 'I' && (v.ofIndex ?? 0) === ofIndex
+  );
+  const cartons = bloc.valeurs.filter(
+    (v) => v.type === 'CC' && (v.ofIndex ?? 0) === ofIndex
+  );
+
+  if (cartons.length > 0) return [];
+
+  const hasPassed100 = inspections.some(
+    (v) => (v.pct ?? 50) === 100 && v.resultat === 'P'
+  );
+  if (hasPassed100) return [{ type: 'CC' }];
+
+  const hasPassed50 = inspections.some(
+    (v) => (v.pct ?? 50) === 50 && v.resultat === 'P'
+  );
+  if (hasPassed50) {
+    const hasPending100 = inspections.some(
+      (v) => (v.pct ?? 50) === 100 && v.resultat === null
+    );
+    return hasPending100 ? [] : [{ type: 'I', pct: 100 }];
+  }
+
+  const hasPending50 = inspections.some(
+    (v) => (v.pct ?? 50) === 50 && v.resultat === null
+  );
+  return hasPending50 ? [] : [{ type: 'I', pct: 50 }];
+}

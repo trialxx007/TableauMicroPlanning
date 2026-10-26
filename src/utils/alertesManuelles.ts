@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { historiqueApi } from '../services/api.ts';
 
 export type AlerteCouleur = 'rouge' | 'orange' | 'jaune' | 'vert';
 
@@ -52,6 +53,41 @@ export function alerteActiveEnColonne(a: AlerteManuelle): boolean {
 
 /** Clé de persistance des alertes manuelles, par carte. */
 export const STORAGE_KEY_ALERTES = 'alertes_manuelles_v1';
+
+/** Action d'alerte consignée au journal de la Direction. */
+export type ActionJournalAlerte =
+  | 'alerte.ajoutee'
+  | 'alerte.reglee'
+  | 'alerte.rouverte'
+  | 'alerte.supprimee';
+
+interface ChampJournalAlerte {
+  k: string;
+  l?: string;
+  a: unknown;
+  b: unknown;
+}
+
+/**
+ * Consigne un changement d'alerte dans l'historique partagé. Les alertes vivent
+ * dans le localStorage du poste : ce POST est le seul lien vers le journal
+ * serveur que lit la Direction. Best-effort, jamais bloquant.
+ */
+export function journaliserAlerte(params: {
+  action: ActionJournalAlerte;
+  cardId: string;
+  modele?: string;
+  resume: string;
+  champs: ChampJournalAlerte[];
+}): void {
+  void historiqueApi.log({
+    action: params.action,
+    cible: params.modele
+      ? `${params.cardId} · ${params.modele}`
+      : params.cardId,
+    details: JSON.stringify({ v: 1, resume: params.resume, champs: params.champs }),
+  });
+}
 
 /** Événement maison émis à chaque écriture : réveille les abonnés du poste. */
 const EVENEMENT_MAJ = 'alertes-manuelles-changed';

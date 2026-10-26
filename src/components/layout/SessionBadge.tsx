@@ -7,22 +7,33 @@ interface SessionBadgeProps {
   onDeconnexion: () => void;
 }
 
-/** Pastille du profil connecté + bouton de déconnexion, posée dans chaque en-tête. */
+/** Current profile pill with avatar, role label and logout action, used in every header. */
 export const SessionBadge: React.FC<SessionBadgeProps> = ({ profil, onDeconnexion }) => {
+  const initial = profil.role.trim().charAt(0).toUpperCase() || '?';
+
   return (
-    <div className="inline-flex items-center gap-2 pl-3 pr-1.5 py-1 rounded-full bg-slate-50 border border-slate-200">
-      <span className="w-2 h-2 rounded-full bg-emerald-500" aria-hidden="true" />
-      <span className="text-xs font-semibold text-slate-600 whitespace-nowrap">
-        {profil.role}
+    <div className="inline-flex shrink-0 items-center gap-[10px] whitespace-nowrap rounded-full border border-slate-200 bg-slate-50 py-[5px] pl-[7px] pr-[5px] text-sm font-medium text-slate-700 shadow-xs">
+      <span className="relative flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-600 text-[13px] font-semibold text-white">
+        {initial}
+        <span
+          className="absolute bottom-0 right-0 h-[9px] w-[9px] rounded-full border-2 border-slate-50 bg-emerald-500"
+          aria-hidden="true"
+        />
       </span>
+
+      <span className="whitespace-nowrap">{profil.role}</span>
+
       <button
         type="button"
         onClick={onDeconnexion}
-        title="Se déconnecter"
         aria-label="Se déconnecter"
-        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-full transition-colors cursor-pointer"
+        className="group inline-flex h-7 shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-full border border-slate-200 bg-white pl-2.5 pr-3 text-[13px] font-medium text-slate-600 transition-colors duration-150 hover:border-red-200 hover:bg-red-50 hover:text-red-600 focus-visible:border-red-200 focus-visible:bg-red-50 focus-visible:text-red-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-red-600"
       >
-        <LogOut className="w-3.5 h-3.5" />
+        <LogOut
+          className="h-4 w-4 shrink-0 transition-transform duration-200 group-hover:translate-x-0.5 group-focus-visible:translate-x-0.5"
+          aria-hidden="true"
+        />
+        <span>Déconnexion</span>
       </button>
     </div>
   );

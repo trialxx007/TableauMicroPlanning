@@ -15,6 +15,7 @@ import {
   ALERTES_COULEUR_DEFAUT,
   ALERTES_COULEURS,
   ecrireAlertesManuelles,
+  journaliserAlerte,
   useAlertesManuelles,
   VISIBILITE_ALERTE_DEFAUT,
   type AlerteCouleur,
@@ -27,7 +28,7 @@ import {
   themeJalon,
   type JalonInfo,
 } from '@/src/utils/jalons.ts';
-import { blocInspectionVide, dateCourte } from '@/src/utils/inspections.ts';
+import { blocInspectionVide, dateCourte, hasPassedCc } from '@/src/utils/inspections.ts';
 import { getNowParis } from '@/src/utils/dateFrance.ts';
 import { InspectionCell } from './InspectionCell.tsx';
 import { idSlotCarte } from '@/src/utils/glisserCarte.ts';
@@ -404,6 +405,11 @@ function SlotCase({
       ? `Expédition${rangSuffixe} (${row.nom})`
       : `Prochain Lancement #${(lancementIndex || 0) + 1}${rangSuffixe} (${row.nom})`;
   const linkedCard = slotCard?.cardId ? cardsParId.get(slotCard.cardId) : undefined;
+  const indexInspection = linkedCard
+    ? row.modeleEnCoursCards.findIndex((s) => s?.cardId === linkedCard.id)
+    : -1;
+  const blocInspection =
+    indexInspection >= 0 ? row.inspections[indexInspection] : undefined;
   const label = linkedCard ? linkedCard.modele : slotCard?.customLabel;
   const subLabel = linkedCard ? `${linkedCard.batch} • ${linkedCard.client}` : null;
   const jalonsCarte = linkedCard ? (jalonInfosParCarte.get(linkedCard.id) ?? []) : [];
@@ -608,10 +614,14 @@ function SlotCase({
                   const statut = ligne?.statutExpedition ?? 'A_EXPEDIER';
                   const date = ligne?.dateExpedition;
                   const livre = statut === 'LIVRE';
+                  const attenteCc =
+                    statut === 'A_EXPEDIER' && !hasPassedCc(blocInspection, i);
                   const libelleStatut = livre
                     ? 'Livré'
                     : statut === 'EN_TRANSIT'
                     ? 'En transit'
+                    : attenteCc
+                    ? 'Attente CC'
                     : 'À envoyer';
                   return (
                     <div
@@ -619,9 +629,13 @@ function SlotCase({
                       className={`flex items-center gap-1.5 w-full rounded px-1 py-0.5 text-[11px] leading-none ${
                         livre
                           ? 'bg-emerald-100 text-emerald-800'
+                          : attenteCc
+                          ? 'bg-amber-100 text-amber-800'
                           : 'bg-slate-100 text-slate-600'
                       }`}
-                      title={`OF${i + 1} — ${libelleStatut}${date ? ` — ${dateCourte(date)}` : ''}`}
+                      title={`OF${i + 1} — ${
+                        attenteCc ? 'En attente du CC (Carton Check)' : libelleStatut
+                      }${date ? ` — ${dateCourte(date)}` : ''}`}
                     >
                       <span className="font-black text-[12px] text-slate-800 shrink-0">
                         OF{i + 1}
@@ -896,16 +910,33 @@ function AlertesCarte({
       ...alertesManuelles,
       [slotCard.cardId]: [...alertesCarte(alertesManuelles, slotCard.cardId), entree],
     });
+    journaliserAlerte({
+      action: 'alerte.ajoutee',
+      cardId: slotCard.cardId,
+      modele: slotCard.customLabel,
+      resume: t,
+      champs: [{ k: 'alerte', l: 'Alerte ajoutée', a: null, b: t }],
+    });
     setTexte('');
     setOuvert(false);
   };
 
   const supprimer = (id: string) => {
     if (!slotCard?.cardId) return;
+    const cible = alertesCarte(alertesManuelles, slotCard.cardId).find((a) => a.id === id);
     ecrireAlertesManuelles({
       ...alertesManuelles,
       [slotCard.cardId]: alertesCarte(alertesManuelles, slotCard.cardId).filter((a) => a.id !== id),
     });
+    if (cible) {
+      journaliserAlerte({
+        action: 'alerte.supprimee',
+        cardId: slotCard.cardId,
+        modele: slotCard.customLabel,
+        resume: cible.texte,
+        champs: [{ k: 'alerte', l: 'Alerte supprimée', a: cible.texte, b: null }],
+      });
+    }
   };
 
   // Bascule « colonne » / « popover uniquement » depuis la colonne elle-même.

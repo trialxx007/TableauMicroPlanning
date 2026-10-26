@@ -1,5 +1,35 @@
 @import "tailwindcss";
 
+/* Shared content width for each page header and its main content. */
+.page-container,
+.page-container-wide {
+  width: 100%;
+  margin-inline: auto;
+  padding-inline: 1rem;
+}
+
+.page-container {
+  max-width: 80rem;
+}
+
+.page-container-wide {
+  max-width: 115.625rem;
+}
+
+@media (min-width: 640px) {
+  .page-container,
+  .page-container-wide {
+    padding-inline: 1.5rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .page-container,
+  .page-container-wide {
+    padding-inline: 2rem;
+  }
+}
+
 /* Fond « nuit d'atelier » de l'écran d'accès : dégradé sombre + fines étoiles
    bleutées, dans l'esprit des autres projets. Purement décoratif. */
 .starry-surface {

@@ -360,7 +360,7 @@ export default function App() {
       <div key={currentPage} className="flex-1 flex flex-col animate-page-in">
       {currentPage === 'point-journalier' ? (
         cards.length === 0 ? (
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <main className="flex-1 page-container py-6">
             <div className="bg-white rounded-xl border border-slate-200 p-12 text-center shadow-xs">
               <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
                 <Plus className="w-6 h-6" />
@@ -383,7 +383,7 @@ export default function App() {
             </div>
           </main>
         ) : (
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <main className="flex-1 page-container py-6">
           <>
             <StatsOverview
               cards={cards}
