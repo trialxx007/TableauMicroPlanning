@@ -1,6 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   COULEURS_KANBAN_IDS,
+  estColonneBroderie,
+  estColonneBrodeuse,
+  estColonneLaboConfection,
+  estSectionBrodeuse,
   estSectionBroderieMain,
   KANBAN_COULEURS,
   KanbanBloc,
@@ -13,13 +17,13 @@ import {
   KanbanPersonne,
   KanbanSection,
 } from '../types/kanban.ts';
-import { chargerKanban, nouvelId, sauverKanban } from '../utils/kanbanStorage.ts';
+import { chargerKanban, KanbanEnvironnement, nouvelId, sauverKanban } from '../utils/kanbanStorage.ts';
 import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
 import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
 import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
 import { dateISOFromDateTime, estDateISO, getDateISOSite, getNowParis, joursEntreDatesISO, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import { Profil } from '@/src/utils/auth.ts';
-import { AlertTriangle, Calendar, Check, Clock, GitMerge, GripVertical, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Calendar, Check, Clock, Copy, GitMerge, GripVertical, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
 
 interface DeveloppementViewProps {
   onChangePage: (page: AppPage) => void;
@@ -37,10 +41,13 @@ interface BrouillonEdition {
   etat: string;
   traiteur: string;
   client: string;
+  commercial: string;
   remarques: string;
   couleur: KanbanCouleurId;
   /** Date d'échéance (optionnelle) */
   dateEcheance?: string;
+  /** Date d'expédition (optionnelle) */
+  dateExpedition?: string;
   attentes: KanbanAttente[];
 }
 
@@ -80,7 +87,24 @@ function entreeDeplacement(
  * dans le localStorage. Indépendante des cartes de production.
  */
 export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePage, profil, onDeconnexion }) => {
-  const [data, setData] = useState<KanbanData>(() => chargerKanban());
+  const estDirecteur = profil.id === 'direction';
+  const [board, setBoard] = useState<{ environnement: KanbanEnvironnement; data: KanbanData }>(
+    {
+      environnement: 'developpement',
+      data: chargerKanban(),
+    }
+  );
+  const data = board.data;
+  const environnement = board.environnement;
+  const setData: React.Dispatch<React.SetStateAction<KanbanData>> = (maj) => {
+    setBoard((prev) => ({
+      ...prev,
+      data:
+        typeof maj === 'function'
+          ? (maj as (d: KanbanData) => KanbanData)(prev.data)
+          : maj,
+    }));
+  };
   const [drag, setDrag] = useState<DragInfo | null>(null);
   const [colonneCible, setColonneCible] = useState<string | null>(null);
   /** Où déposer la carte : `colonneId` (+ `sectionId` si la colonne est scindée, `personneId` pour BRODERIE MAIN). */
@@ -100,11 +124,15 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   const [composerEtat, setComposerEtat] = useState('');
   const [composerTraiteur, setComposerTraiteur] = useState('');
   const [composerClient, setComposerClient] = useState('');
+  const [composerCommercial, setComposerCommercial] = useState('');
   const [composerRemarques, setComposerRemarques] = useState('');
   const [composerCouleur, setComposerCouleur] = useState<KanbanCouleurId | null>(null);
   const [composerDateEcheance, setComposerDateEcheance] = useState<string>('');
+  const [composerDateExpedition, setComposerDateExpedition] = useState<string>('');
   const [nouvelleColonne, setNouvelleColonne] = useState(false);
   const [nouveauTitre, setNouveauTitre] = useState('');
+  const [copieOk, setCopieOk] = useState<string | null>(null);
+  const [ongletDirection, setOngletDirection] = useState<'alerte' | 'attente' | 'encours'>('alerte');
 
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
@@ -114,9 +142,40 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     return () => clearInterval(timer);
   }, []);
 
+  // Évite de réécrire le localStorage au simple montage (ou après un HMR) :
+  // on ne sauvegarde que lorsque les données ont réellement changé.
+  const derniereSauvegarde = useRef(JSON.stringify(board.data));
+
   useEffect(() => {
-    sauverKanban(data);
-  }, [data]);
+    // L'environnement Direction est une vue du tableau Développement : les
+    // modifications faites depuis les onglets Direction sont persistées dans
+    // la même sauvegarde.
+    const serialise = JSON.stringify(board.data);
+    if (serialise === derniereSauvegarde.current) return;
+    sauverKanban(board.data);
+    derniereSauvegarde.current = serialise;
+  }, [board.data]);
+
+  useEffect(() => {
+    if (!estDirecteur && board.environnement === 'direction') {
+      setBoard({ environnement: 'developpement', data: chargerKanban() });
+    }
+  }, [estDirecteur, board.environnement]);
+
+  const changerEnvironnement = (env: KanbanEnvironnement) => {
+    if (env === 'direction' && !estDirecteur) return;
+    if (env === board.environnement) return;
+    setEdition(null);
+    setComposerOuverte(null);
+    setDrag(null);
+    setColonneCible(null);
+    setInsertion(null);
+    setInsertionColonne(null);
+    setRangeeCible(null);
+    setNouvelleColonne(false);
+    // Les deux environnements partagent les mêmes cartes : seul l'affichage change.
+    setBoard((prev) => ({ ...prev, environnement: env }));
+  };
 
   const colonnes = useMemo(() => trierParOrdre(data.colonnes), [data.colonnes]);
   const cartesDe = (colonneId: string): KanbanCarte[] =>
@@ -151,6 +210,102 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     }
     return inactive;
   };
+
+  /**
+   * Alerte d'attente :
+   * - « orange » à partir de la moitié du délai (date d'entrée → date de sortie),
+   *   calculée en date calendaire avec arrondi inférieur,
+   * - « rouge » une fois la date de sortie dépassée.
+   * `jours` = jours restants avant la sortie (orange) ou jours de retard (rouge).
+   */
+  const getAlerteAttente = (
+    carte: KanbanCarte
+  ): { niveau: 'orange' | 'rouge'; attente: KanbanAttente; jours: number } | null => {
+    let alerte: { niveau: 'orange' | 'rouge'; attente: KanbanAttente; jours: number } | null = null;
+    for (const attente of carte.attentes ?? []) {
+      if (!estDateISO(attente.dateSortie)) continue;
+      // Date de sortie dépassée : alerte rouge, même sans date d'entrée exploitable.
+      const joursAvantSortie = -joursEntreDatesISO(attente.dateSortie);
+      if (joursAvantSortie < 0) {
+        const jours = -joursAvantSortie;
+        if (!alerte || alerte.niveau !== 'rouge' || jours > alerte.jours) {
+          alerte = { niveau: 'rouge', attente, jours };
+        }
+        continue;
+      }
+      // Alerte orange à partir de la moitié du délai (entrée → sortie).
+      if (!estDateISO(attente.dateEntree)) continue;
+      const duree = joursEntreDatesISO(attente.dateEntree, attente.dateSortie);
+      if (duree < 0) continue;
+      const ecoules = joursEntreDatesISO(attente.dateEntree);
+      if (ecoules >= Math.floor(duree / 2)) {
+        const jours = duree - ecoules;
+        if (!alerte || (alerte.niveau === 'orange' && jours < alerte.jours)) {
+          alerte = { niveau: 'orange', attente, jours };
+        }
+      }
+    }
+    return alerte;
+  };
+
+  /** Répartit une carte dans les 3 onglets de l'environnement Direction. */
+  const categorieDirection = (carte: KanbanCarte): 'alerte' | 'attente' | 'encours' => {
+    const alerteAttente = getAlerteAttente(carte);
+    const alarme = getAlarmeInfo(carte).active;
+    const echeanceAtteinte =
+      estDateISO(carte.date) && joursEntreDatesISO(carte.date) >= 0;
+    if (alarme || alerteAttente?.niveau === 'rouge' || echeanceAtteinte) {
+      return 'alerte';
+    }
+    const attenteEnCours = (carte.attentes ?? []).some((a) => {
+      if (!estDateISO(a.dateSortie)) return true;
+      return -joursEntreDatesISO(a.dateSortie) >= 0;
+    });
+    const etapeAttente = (carte.etat ?? '').trim().toUpperCase().includes('ATTENTE');
+    if (alerteAttente?.niveau === 'orange' || attenteEnCours || etapeAttente) {
+      return 'attente';
+    }
+    return 'encours';
+  };
+
+  /**
+   * Score d'urgence pour trier l'onglet ALERTE :
+   * attente dépassée > échéance atteinte > retard global > retard de zone.
+   * À catégorie égale, le nombre de jours de retard départage.
+   */
+  const urgenceDirection = (carte: KanbanCarte): number => {
+    const alerteAttente = getAlerteAttente(carte);
+    if (alerteAttente?.niveau === 'rouge') {
+      return 400_000 + alerteAttente.jours * 100;
+    }
+    if (estDateISO(carte.date)) {
+      const retardEcheance = joursEntreDatesISO(carte.date);
+      if (retardEcheance >= 0) return 300_000 + retardEcheance * 100;
+    }
+    const alarme = getAlarmeInfo(carte);
+    const retardGlobal = !alarme.estDerniereColonne && alarme.diffTotal >= 12;
+    if (retardGlobal) {
+      return 200_000 + Math.max(0, alarme.diffTotal - 12) * 100;
+    }
+    if (alarme.diffZone >= alarme.seuilZone) {
+      return 100_000 + Math.max(0, alarme.diffZone - alarme.seuilZone) * 100;
+    }
+    return 0;
+  };
+
+  /** Les cartes terminées ou archivées ne remontent pas dans la vue Direction. */
+  const carteTermineeDirection = (carte: KanbanCarte): boolean => {
+    const colonne = data.colonnes.find((c) => c.id === carte.colonneId);
+    const titre = (colonne?.titre ?? '').trim().toUpperCase();
+    const etape = (carte.etat ?? '').trim().toUpperCase();
+    return (
+      titre.includes('TERMIN') ||
+      titre.includes('ARCHIVE') ||
+      etape.includes('TERMIN') ||
+      etape.includes('ARCHIVE')
+    );
+  };
+
   const cartesDeSection = (colonne: KanbanColonne, sectionId?: string): KanbanCarte[] => {
     const premiere = colonne.sections?.[0]?.id;
     return trierParOrdre(
@@ -312,10 +467,14 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
    * Supprime une section classique (avec ses cartes) — pas de section BRODERIE MAIN.
    */
   const supprimerSection = (colonneId: string, sectionId: string) => {
-    const section = data.colonnes
-      .find((c) => c.id === colonneId)
-      ?.sections?.find((s) => s.id === sectionId);
-    if (!section || estSectionBroderieMain(section)) return;
+    const colonne = data.colonnes.find((c) => c.id === colonneId);
+    const section = colonne?.sections?.find((s) => s.id === sectionId);
+    // Le tableau BRODERIE MAIN reste rattaché à sa colonne : sa section ne se supprime pas.
+    const estMainDediee = !!colonne && estColonneBroderie(colonne) && !estColonneBrodeuse(colonne);
+    const sectionMain = estMainDediee
+      ? colonne?.sections?.find((s) => estSectionBroderieMain(s)) ?? colonne?.sections?.[0]
+      : undefined;
+    if (!section || estSectionBroderieMain(section) || section.id === sectionMain?.id) return;
     const nb = data.cartes.filter((c) => c.colonneId === colonneId && c.sectionId === sectionId).length;
     const nom = section.titre.trim() || 'sans nom';
     const message =
@@ -352,6 +511,129 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           : c
       ),
     }));
+  };
+
+  /* --------------------------- Brodeuses (BRODERIE MACHINE / LABO CONFECTION) -------------------------- */
+
+  /** Retourne l'id de la section « Brodeuses » de la colonne, ou l'indéfini. */
+  const getSectionBrodeuseId = (colonneId: string): string | undefined => {
+    const colonne = data.colonnes.find((c) => c.id === colonneId);
+    return colonne?.sections?.find((s) => estSectionBrodeuse(s))?.id;
+  };
+
+  /** Ajoute une brodeuse dans la colonne (crée la section « Brodeuses » au besoin). */
+  const ajouterBrodeuse = (colonneId: string) => {
+    setData((prev) => {
+      const colonne = prev.colonnes.find((c) => c.id === colonneId);
+      if (!colonne) return prev;
+      const sections = colonne.sections ?? [];
+      const existante = sections.find((s) => estSectionBrodeuse(s));
+      const ordreSection = sections.reduce((max, s) => Math.max(max, s.ordre), -1) + 1;
+      const section: KanbanSection =
+        existante ?? { id: nouvelId(), titre: 'Brodeuses', ordre: ordreSection };
+      const personnes = section.personnes ?? [];
+      const ordre = personnes.reduce((max, p) => Math.max(max, p.ordre), -1) + 1;
+      return {
+        ...prev,
+        colonnes: prev.colonnes.map((c) =>
+          c.id === colonneId
+            ? {
+                ...c,
+                sections: existante
+                  ? sections.map((s) =>
+                      s.id === section.id
+                        ? { ...s, personnes: [...personnes, { id: nouvelId(), titre: '', ordre }] }
+                        : s
+                    )
+                  : [
+                      ...sections,
+                      { ...section, personnes: [{ id: nouvelId(), titre: '', ordre }] },
+                    ],
+              }
+            : c
+        ),
+      };
+    });
+  };
+
+  /** Supprime une brodeuse (et ses cartes assignées). */
+  const supprimerBrodeuse = (colonneId: string, personneId: string) => {
+    const sectionId = getSectionBrodeuseId(colonneId);
+    if (!sectionId) return;
+    const section = data.colonnes.find((c) => c.id === colonneId)?.sections?.find((s) => s.id === sectionId);
+    const personne = section?.personnes?.find((p) => p.id === personneId);
+    if (!personne) return;
+    const nb = data.cartes.filter(
+      (c) => c.colonneId === colonneId && c.sectionId === sectionId && c.personneId === personneId
+    ).length;
+    const nom = personne.titre.trim() || 'sans nom';
+    const message =
+      nb > 0
+        ? `Supprimer la brodeuse « ${nom} » et ses ${nb} carte(s) assignées ?`
+        : `Supprimer la brodeuse « ${nom} » ?`;
+    if (!window.confirm(message)) return;
+    setData((prev) => ({
+      ...prev,
+      colonnes: prev.colonnes.map((c) =>
+        c.id === colonneId
+          ? {
+              ...c,
+              sections: c.sections?.map((s) =>
+                s.id === sectionId ? { ...s, personnes: s.personnes?.filter((p) => p.id !== personneId) } : s
+              ),
+            }
+          : c
+      ),
+      cartes: prev.cartes.filter(
+        (k) => !(k.colonneId === colonneId && k.sectionId === sectionId && k.personneId === personneId)
+      ),
+    }));
+  };
+
+  /** Déplace une carte vers la brodeuse ciblée (glisser-déposer). */
+  const deplacerCarteBrodeuse = (
+    carteId: string,
+    colonneId: string,
+    sectionId: string,
+    personneId: string,
+    index: number
+  ) => {
+    const today = getDateISOSite();
+    setData((prev) => {
+      const carte = prev.cartes.find((c) => c.id === carteId);
+      const colonne = prev.colonnes.find((c) => c.id === colonneId);
+      if (!carte || !colonne) return prev;
+      const section = colonne.sections?.find((s) => s.id === sectionId);
+      const personne = section?.personnes?.find((p) => p.id === personneId);
+      if (!section || !personne) return prev;
+      const cibles = trierParOrdre(
+        prev.cartes.filter(
+          (c) =>
+            c.colonneId === colonneId &&
+            c.sectionId === sectionId &&
+            c.personneId === personneId &&
+            c.id !== carteId
+        )
+      );
+      const position = clamp(index, 0, cibles.length);
+      const ordonnees = [
+        ...cibles.slice(0, position),
+        {
+          ...carte,
+          colonneId,
+          sectionId,
+          personneId,
+          dateEntreeZone: today,
+          date: undefined,
+          historiqueDeplacements: [...(carte.historiqueDeplacements ?? []), entreeDeplacement(today, colonneId, sectionId, personneId)],
+        },
+        ...cibles.slice(position),
+      ].map((c, i) => ({ ...c, ordre: i }));
+      const hors = prev.cartes.filter(
+        (c) => c.id !== carteId && !(c.colonneId === colonneId && c.sectionId === sectionId && c.personneId === personneId)
+      );
+      return { ...prev, cartes: [...hors, ...ordonnees] };
+    });
   };
 
   /** Ajoute une section classique dans la colonne. */
@@ -412,9 +694,11 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     etat: string,
     traiteur: string,
     client: string,
+    commercial: string,
     remarques: string,
     couleur: KanbanCouleurId,
-    date?: string
+    date?: string,
+    dateExpedition?: string
   ) => {
     const trimmed = titre.trim();
     if (!trimmed || !couleur) return;
@@ -434,11 +718,13 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             etat: etat.trim() || undefined,
             traiteur: traiteur.trim() || undefined,
             client: client.trim() || undefined,
+            commercial: commercial.trim() || undefined,
             remarques: remarques.trim() || undefined,
             couleur,
             colonneId,
             sectionId: zone,
             date: date || undefined,
+            dateExpedition: dateExpedition || undefined,
             dateEntreeZone: getDateISOSite(),
             ordre: prev.cartes.filter((c) => c.colonneId === colonneId && memeZone(c)).length,
             creeLe: new Date().toISOString(),
@@ -583,14 +869,14 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     const rect = e.currentTarget.getBoundingClientRect();
     const avant = e.clientY < rect.top + rect.height / 2;
     setColonneCible(carte.colonneId);
-    // Si la carte est dans une section BRODERIE MAIN, inclure personneId.
+    // Si la carte est dans une zone d'affectation, inclure personneId.
     const colonne = data.colonnes.find((c) => c.id === carte.colonneId);
     const section = colonne?.sections?.find((s) => s.id === carte.sectionId);
-    const isBroderieMain = section && estSectionBroderieMain(section);
+    const estAffectee = !!section && (estSectionBroderieMain(section) || estSectionBrodeuse(section));
     setInsertion({
       colonneId: carte.colonneId,
       sectionId,
-      personneId: isBroderieMain ? carte.personneId : undefined,
+      personneId: estAffectee ? carte.personneId : undefined,
       index: avant ? position : position + 1,
     });
   };
@@ -616,9 +902,10 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     e.preventDefault();
     e.dataTransfer.dropEffect = 'move';
     setColonneCible(colonne.id);
-    // Si la colonne a une section BRODERIE MAIN, l'en-tête n'est pas une zone de dépôt valide.
+    // Si la colonne a une section BRODERIE MAIN ou Brodeuses, l'en-tête n'est pas une zone de dépôt valide.
     const sectionBroderie = colonne.sections?.find((s) => estSectionBroderieMain(s));
-    if (sectionBroderie) {
+    const sectionBrodeuse = colonne.sections?.find((s) => estSectionBrodeuse(s));
+    if (sectionBroderie || sectionBrodeuse || estColonneBrodeuse(colonne) || estColonneBroderie(colonne)) {
       // Pas de zone de dépôt valide sur l'en-tête : ne pas setInsertion.
       return;
     }
@@ -663,9 +950,9 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   const deposerSurColonne = (e: React.DragEvent, colonne: KanbanColonne) => {
     e.preventDefault();
     if (drag?.type === 'carte') {
-      // Si la colonne a une section BRODERIE MAIN, l'en-tête n'accepte pas les dépôts.
+      // Si la colonne a une section BRODERIE MAIN ou est une colonne Brodeuse, l'en-tête n'accepte pas les dépôts.
       const sectionBroderie = colonne.sections?.find((s) => estSectionBroderieMain(s));
-      if (sectionBroderie) {
+      if (sectionBroderie || estColonneBrodeuse(colonne) || estColonneBroderie(colonne)) {
         arreterDrag();
         return;
       }
@@ -718,6 +1005,26 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     arreterDrag();
   };
 
+  /** Chute dans une cellule brodeuse (colonne BRODERIE MACHINE / LABO CONFECTION). */
+  const deposerZoneBrodeuse = (
+    e: React.DragEvent,
+    colonneId: string,
+    sectionId: string,
+    personneId: string,
+    finZone: number
+  ) => {
+    if (drag?.type !== 'carte') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const memeZone =
+      insertion &&
+      insertion.colonneId === colonneId &&
+      insertion.sectionId === sectionId &&
+      insertion.personneId === personneId;
+    deplacerCarteBrodeuse(drag.id, colonneId, sectionId, personneId, memeZone ? insertion.index : finZone);
+    arreterDrag();
+  };
+
   /* -------------------------------- Rendu -------------------------------- */
 
   const ouvrirEdition = (carte: KanbanCarte) => {
@@ -727,10 +1034,12 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       etat: carte.etat ?? '',
       traiteur: carte.traiteur ?? '',
       client: carte.client ?? '',
+      commercial: carte.commercial ?? '',
       remarques: carte.remarques ?? '',
       // La couleur affichée sert de défaut : le post-it a toujours une couleur.
       couleur: carte.couleur ?? 'jaune',
       dateEcheance: carte.date,
+      dateExpedition: carte.dateExpedition,
       attentes: (carte.attentes ?? []).map((a) => ({ ...a })),
     });
   };
@@ -743,9 +1052,11 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       etat: edition.etat.trim() || undefined,
       traiteur: edition.traiteur.trim() || undefined,
       client: edition.client.trim() || undefined,
+      commercial: edition.commercial.trim() || undefined,
       remarques: edition.remarques.trim() || undefined,
       couleur: edition.couleur,
       date: edition.dateEcheance || undefined,
+      dateExpedition: edition.dateExpedition || undefined,
       attentes: edition.attentes
         .filter((a) => a.dateEntree)
         .map((a) => ({
@@ -760,14 +1071,16 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
 
   const validerComposer = (colonneId: string, sectionId?: string) => {
     if (!composerNom.trim() || !composerCouleur) return;
-    ajouterCarte(colonneId, sectionId, composerNom, composerEtat, composerTraiteur, composerClient, composerRemarques, composerCouleur, composerDateEcheance);
+    ajouterCarte(colonneId, sectionId, composerNom, composerEtat, composerTraiteur, composerClient, composerCommercial, composerRemarques, composerCouleur, composerDateEcheance, composerDateExpedition);
     setComposerNom('');
     setComposerEtat('');
     setComposerTraiteur('');
     setComposerClient('');
+    setComposerCommercial('');
     setComposerRemarques('');
     setComposerCouleur(null);
     setComposerDateEcheance('');
+    setComposerDateExpedition('');
   };
 
   const fermerComposer = () => {
@@ -776,9 +1089,27 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     setComposerEtat('');
     setComposerTraiteur('');
     setComposerClient('');
+    setComposerCommercial('');
     setComposerRemarques('');
     setComposerCouleur(null);
     setComposerDateEcheance('');
+    setComposerDateExpedition('');
+  };
+
+  const copierCarte = (carte: KanbanCarte) => {
+    const lignes = [
+      `Titre : ${carte.titre}`,
+      carte.etat ? `Étape : ${carte.etat}` : null,
+      carte.traiteur ? `Traiteur : ${carte.traiteur}` : null,
+      carte.client ? `Client : ${carte.client}` : null,
+      carte.commercial ? `Commercial : ${carte.commercial}` : null,
+      carte.date ? `Date d'échéance : ${formatDateFr(carte.date)}` : null,
+      carte.dateExpedition ? `Date d'expédition : ${formatDateFr(carte.dateExpedition)}` : null,
+      carte.remarques ? `Remarques : ${carte.remarques}` : null,
+    ].filter(Boolean).join('\n');
+    navigator.clipboard.writeText(lignes);
+    setCopieOk(carte.id);
+    setTimeout(() => setCopieOk(null), 1200);
   };
 
   /** Post-its d'une zone : formes carrées, 2 par ligne, édition sur place. */
@@ -786,6 +1117,8 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     cartesZone.map((carte, position) => {
       const enEdition = edition?.id === carte.id;
       const enDrag = drag?.type === 'carte' && drag.id === carte.id;
+      const colonneCarte = data.colonnes.find((c) => c.id === carte.colonneId);
+      const estArchive = !!colonneCarte && colonneCarte.titre.toUpperCase().includes('ARCHIVE');
       if (enEdition && edition) {
         return (
           <div
@@ -824,7 +1157,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             <input
               value={edition.etat}
               onChange={(e) => setEdition({ ...edition, etat: e.target.value })}
-              placeholder="État (ex: En cours, En attente, Terminé)"
+              placeholder="Étape (ex: En cours, En attente, Terminé)"
               className="w-full text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-hidden focus:border-violet-400"
             />
             <input
@@ -839,6 +1172,12 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
               placeholder="Nom du client"
               className="w-full text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-hidden focus:border-violet-400"
             />
+            <input
+              value={edition.commercial}
+              onChange={(e) => setEdition({ ...edition, commercial: e.target.value })}
+              placeholder="Commercial"
+              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-hidden focus:border-violet-400"
+            />
             <textarea
               rows={3}
               value={edition.remarques}
@@ -846,13 +1185,22 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
               placeholder="Remarques libres…"
               className="w-full text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 resize-none focus:outline-hidden focus:border-violet-400"
             />
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
                 Date d'échéance
                 <input
                   type="date"
                   value={edition.dateEcheance ?? ''}
                   onChange={(e) => setEdition({ ...edition, dateEcheance: e.target.value || undefined })}
+                  className="text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1 focus:outline-hidden focus:border-violet-400 w-auto"
+                />
+              </label>
+              <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
+                Date d'expédition
+                <input
+                  type="date"
+                  value={edition.dateExpedition ?? ''}
+                  onChange={(e) => setEdition({ ...edition, dateExpedition: e.target.value || undefined })}
                   className="text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1 focus:outline-hidden focus:border-violet-400 w-auto"
                 />
               </label>
@@ -988,6 +1336,10 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       const { diffZone, diffTotal } = alarmeInfo;
       const dateDeplacementFr = formatDateFr(alarmeInfo.dateEntree ?? carte.dateEntreeZone ?? carte.creeLe);
       const postIt = KANBAN_COULEURS[carte.couleur ?? 'jaune'];
+      const alerteAttente = getAlerteAttente(carte);
+      const attenteEstOrange = alerteAttente?.niveau === 'orange';
+      const attenteEstRouge = alerteAttente?.niveau === 'rouge';
+      const attenteJours = alerteAttente?.jours ?? 0;
       return (
         <div
           key={carte.id}
@@ -996,13 +1348,61 @@ onDragStart={(e) => dragCarte(e, carte.id)}
             onDragEnd={arreterDrag}
             onDragOver={(e) => survolCarte(e, carte, position, zone.sectionId)}
             onClick={() => ouvrirEdition(carte)}
-            title={`${postIt.label} — date de déplacement : ${dateDeplacementFr} (créée le ${new Date(
-              carte.creeLe
-            ).toLocaleDateString('fr-FR')}) — dans la zone depuis ${diffZone}j (seuil ${alarmeInfo.seuilZone}j)${alarmeInfo.estDerniereColonne ? ' — dernière colonne' : ''}${alarme ? ` ⚠ ALARME ${alarmeInfo.type === 'zone' ? 'ZONE' : 'GLOBALE'}` : ' — pas en alarme'} — cliquer pour modifier`}
-            className={`group ${postIt.fond} rounded-[3px] p-2.5 aspect-square self-start overflow-y-auto cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all relative ${
-              alarme ? 'border-2 border-red-600 shadow-[0_0_12px_rgba(220,38,38,0.65)]' : `border ${postIt.bordure} shadow-sm`
+            className={`group/carte ${attenteEstRouge ? 'bg-red-500' : attenteEstOrange ? 'bg-orange-400' : postIt.fond} rounded-[3px] p-2.5 aspect-square self-start overflow-y-auto cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all relative ${
+              attenteEstRouge
+                ? 'border-2 border-red-600 shadow-[0_0_12px_rgba(220,38,38,0.65)]'
+                : attenteEstOrange
+                  ? 'border-2 border-orange-600 shadow-[0_0_12px_rgba(234,88,12,0.55)]'
+                  : alarme
+                    ? 'border-2 border-red-600 shadow-[0_0_12px_rgba(220,38,38,0.65)]'
+                    : `border ${postIt.bordure} shadow-sm`
             } ${enDrag ? 'opacity-40' : ''}`}
           >
+          {estArchive && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                copierCarte(carte);
+              }}
+              title={copieOk === carte.id ? 'Copié !' : 'Copier la carte'}
+              className={`absolute top-1 right-1 z-10 p-1 rounded transition-all ${
+                attenteEstRouge
+                  ? 'text-white/80 hover:text-white hover:bg-white/20'
+                  : attenteEstOrange
+                    ? 'text-orange-950/80 hover:text-orange-950 hover:bg-white/30'
+                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+              }`}
+            >
+              {copieOk === carte.id ? (
+                <span
+                  className={`text-[10px] font-bold ${
+                    attenteEstRouge
+                      ? 'text-white'
+                      : attenteEstOrange
+                        ? 'text-orange-950'
+                        : 'text-emerald-600'
+                  }`}
+                >
+                  ✓
+                </span>
+              ) : (
+                <Copy className="w-3 h-3 shrink-0" />
+              )}
+            </button>
+          )}
+          {alerteAttente && (
+            <div
+              className={`mb-1.5 flex flex-wrap items-center justify-center gap-1 rounded-sm px-1.5 py-1 text-[8px] font-extrabold tracking-wide text-white ${
+                attenteEstRouge ? 'bg-red-800' : 'bg-orange-600'
+              }`}
+            >
+              <AlertTriangle className="h-3 w-3 shrink-0" />
+              <span>
+                {`ATTENTE${alerteAttente.attente.libelle ? `: ${alerteAttente.attente.libelle}` : ''}`}
+              </span>
+            </div>
+          )}
           {alarme && alarmeInfo.type === 'zone' && (
             <div className="mb-1.5 flex items-center justify-center gap-1 rounded-sm bg-red-600 px-1.5 py-1 text-[8px] font-extrabold uppercase tracking-wide text-white">
               <AlertTriangle className="h-3 w-3 shrink-0" />
@@ -1021,35 +1421,68 @@ onDragStart={(e) => dragCarte(e, carte.id)}
           )}
           {carte.date && (
             <div className="flex justify-end mb-1">
-              <span className={`flex items-center gap-0.5 text-[10px] font-medium whitespace-nowrap ${
-                alarme ? 'text-red-600 animate-pulse' : 'text-slate-600'
-              }`}>
+              <span
+                title="Date d'échéance"
+                className={`flex items-center gap-0.5 rounded-sm px-1.5 py-0.5 text-[10px] font-bold whitespace-nowrap animate-pulse ${
+                  attenteEstRouge
+                    ? 'bg-white text-red-600'
+                    : 'bg-red-600 text-white'
+                }`}
+              >
                 <AlertTriangle className="w-3 h-3" />
                 {new Date(carte.date).toLocaleDateString('fr-FR')}
               </span>
             </div>
           )}
-          <p className="text-xs font-semibold text-slate-800 leading-snug">{carte.titre}</p>
+          <p
+            className={`text-xs font-semibold leading-snug ${
+              attenteEstRouge
+                ? 'text-white'
+                : attenteEstOrange
+                  ? 'text-orange-950'
+                  : 'text-slate-800'
+            }`}
+          >
+            {carte.titre}
+          </p>
           {carte.etat && (
-            <p className="text-[10px] text-slate-600 mt-0.5">
-              <span className="font-medium">État :</span> {carte.etat}
-            </p>
-          )}
-          {carte.traiteur && (
-            <p className="text-[10px] text-slate-600 mt-0.5">
-              <span className="font-medium">Traiteur :</span> {carte.traiteur}
+            <p className={`text-[10px] mt-0.5 ${
+              attenteEstRouge
+                ? 'text-white/90'
+                : attenteEstOrange
+                  ? 'text-orange-900/90'
+                  : 'text-slate-600'
+            }`}>
+              <span className="font-medium">Étape :</span> {carte.etat}
             </p>
           )}
           {carte.client && (
-            <p className="text-[10px] text-slate-600 mt-0.5">
+            <p className={`text-[10px] mt-0.5 ${
+              attenteEstRouge
+                ? 'text-white/90'
+                : attenteEstOrange
+                  ? 'text-orange-900/90'
+                  : 'text-slate-600'
+            }`}>
               <span className="font-medium">Client :</span> {carte.client}
             </p>
           )}
-          {carte.remarques && (
-            <p className="text-[10px] text-slate-500 mt-0.5 italic">
-              {carte.remarques}
-            </p>
-          )}
+          <div className="pointer-events-none absolute inset-x-1 bottom-1 z-20 hidden group-hover/carte:block rounded-md border border-white/10 bg-black/90 p-1.5 text-[9px] leading-tight text-white shadow-xl backdrop-blur-sm">
+            <div>
+              <span className="text-white/60">Création :</span>{' '}
+              <span className="font-semibold">{formatDateFr(carte.creeLe)}</span>
+            </div>
+            <div>
+              <span className="text-white/60">Dernier déplacement :</span>{' '}
+              <span className="font-semibold">{dateDeplacementFr}</span>
+            </div>
+            <div>
+              <span className="text-white/60">Expédition :</span>{' '}
+              <span className="font-semibold">
+                {carte.dateExpedition ? formatDateFr(carte.dateExpedition) : '—'}
+              </span>
+            </div>
+          </div>
         </div>
       );
     });
@@ -1103,7 +1536,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
 
         <div>
           <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">
-            État
+            Étape
           </label>
           <input
             value={composerEtat}
@@ -1116,7 +1549,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                 fermerComposer();
               }
             }}
-            placeholder="État (ex: En cours, En attente, Terminé)"
+            placeholder="Étape (ex: En cours, En attente, Terminé)"
             className="w-full text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-hidden focus:border-violet-400"
           />
         </div>
@@ -1163,6 +1596,26 @@ onDragStart={(e) => dragCarte(e, carte.id)}
 
         <div>
           <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">
+            Commercial
+          </label>
+          <input
+            value={composerCommercial}
+            onChange={(e) => setComposerCommercial(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') {
+                e.preventDefault();
+                validerComposer(colonne.id, zone.sectionId);
+              } else if (e.key === 'Escape') {
+                fermerComposer();
+              }
+            }}
+            placeholder="Nom du commercial"
+            className="w-full text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-hidden focus:border-violet-400"
+          />
+        </div>
+
+        <div>
+          <label className="block text-[10px] font-bold text-slate-500 uppercase mb-0.5">
             Remarques
           </label>
           <textarea
@@ -1182,13 +1635,22 @@ onDragStart={(e) => dragCarte(e, carte.id)}
           />
         </div>
 
-        <div>
+        <div className="flex flex-wrap items-center gap-2">
           <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
             Date d'échéance
             <input
               type="date"
               value={composerDateEcheance}
               onChange={(e) => setComposerDateEcheance(e.target.value)}
+              className="text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1 focus:outline-hidden focus:border-violet-400 w-auto"
+            />
+          </label>
+          <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
+            Date d'expédition
+            <input
+              type="date"
+              value={composerDateExpedition}
+              onChange={(e) => setComposerDateExpedition(e.target.value)}
               className="text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1 focus:outline-hidden focus:border-violet-400 w-auto"
             />
           </label>
@@ -1249,9 +1711,11 @@ onDragStart={(e) => dragCarte(e, carte.id)}
           setComposerEtat('');
           setComposerTraiteur('');
           setComposerClient('');
+          setComposerCommercial('');
           setComposerRemarques('');
           setComposerCouleur(null);
           setComposerDateEcheance('');
+          setComposerDateExpedition('');
         }}
         className="col-span-2 w-full inline-flex items-center justify-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-violet-700 hover:bg-white border border-transparent hover:border-slate-200 rounded-lg px-2 py-1.5 transition-colors cursor-pointer"
       >
@@ -1338,7 +1802,43 @@ onDragStart={(e) => dragCarte(e, carte.id)}
             {surligne ? 'Déposez la carte ici' : 'Glissez une carte ici'}
           </div>
         )}
-        {rendreCartes({ sectionId: personne.id }, cartesZone)}
+        {rendreCartes({ sectionId: section.id }, cartesZone)}
+      </div>
+    );
+  };
+
+  /** Liste de cartes d'une brodeuse (colonne BRODERIE MACHINE / LABO CONFECTION). */
+  const construireListeBrodeuse = (
+    colonne: KanbanColonne,
+    section: KanbanSection,
+    personne: KanbanPersonne
+  ) => {
+    const cartesZone = trierParOrdre(
+      data.cartes.filter(
+        (c) => c.colonneId === colonne.id && c.sectionId === section.id && c.personneId === personne.id
+      )
+    );
+    const enCible = colonneCible === colonne.id && drag?.type === 'carte';
+    const surligne =
+      enCible &&
+      insertion?.colonneId === colonne.id &&
+      insertion?.sectionId === section.id &&
+      insertion?.personneId === personne.id;
+    return (
+      <div
+        key={personne.id}
+        onDragOver={(e) => survolZonePersonne(e, colonne.id, section.id, personne.id, cartesZone.length)}
+        onDrop={(e) => deposerZoneBrodeuse(e, colonne.id, section.id, personne.id, cartesZone.length)}
+        className={`grid grid-cols-2 gap-2 content-start min-h-[5rem] px-1 transition-colors ${
+          surligne ? 'bg-violet-50/70' : ''
+        }`}
+      >
+        {cartesZone.length === 0 && (
+          <div className="col-span-2 rounded-lg border border-dashed border-slate-300/80 px-3 py-4 text-center text-[11px] text-slate-400">
+            {surligne ? 'Déposez la carte ici' : 'Glissez une carte ici'}
+          </div>
+        )}
+        {rendreCartes({ sectionId: section.id }, cartesZone)}
       </div>
     );
   };
@@ -1559,6 +2059,332 @@ onDragStart={(e) => dragCarte(e, carte.id)}
     );
   };
 
+  /**
+   * Tableau des brodeuses d'une colonne « BRODERIE MACHINE » / « LABO
+   * CONFECTION » : une tuile par brodeuse, affectation par glisser-déposer.
+   */
+  const renduBrodeuse = (colonne: KanbanColonne) => {
+    const section = colonne.sections?.find((s) => estSectionBrodeuse(s));
+    const personnes = trierParOrdre(section?.personnes ?? []);
+    const nbCartes = section
+      ? data.cartes.filter((c) => c.colonneId === colonne.id && c.sectionId === section.id).length
+      : 0;
+    const estLabo = estColonneLaboConfection(colonne);
+    // Cartes présentes dans la colonne mais pas encore affectées à une brodeuse.
+    const nonAssignees = trierParOrdre(
+      data.cartes.filter(
+        (c) =>
+          c.colonneId === colonne.id &&
+          !c.personneId &&
+          (!c.sectionId || (!!section && c.sectionId === section.id))
+      )
+    );
+    const surligneNon =
+      colonneCible === colonne.id &&
+      drag?.type === 'carte' &&
+      insertion?.colonneId === colonne.id &&
+      (section ? insertion.sectionId === section.id : !insertion?.sectionId) &&
+      !insertion?.personneId;
+
+    return (
+      <div className="space-y-2">
+        {section && (
+          <div className="flex items-center gap-1 px-1 pb-1">
+            <EditableItemName
+              value={section.titre}
+              onSave={(titre) => renommerSection(colonne.id, section.id, titre)}
+              placeholder="Section"
+              className="min-w-0"
+            />
+            <span className="ml-auto text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-1.5 py-0.5 tabular-nums shrink-0">
+              {nbCartes}
+            </span>
+            <button
+              type="button"
+              onClick={() => supprimerSection(colonne.id, section.id)}
+              title="Supprimer la section Brodeuses"
+              className="ml-2 p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 cursor-pointer"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        )}
+
+        <div
+          onDragOver={(e) => {
+            if (!section || drag?.type !== 'carte') return;
+            survolZone(e, colonne.id, section.id, nonAssignees.length);
+          }}
+          onDrop={(e) => {
+            if (!section || drag?.type !== 'carte') return;
+            deposerDansZone(e, colonne.id, section.id, nonAssignees.length);
+          }}
+          className={`rounded-xl border p-1.5 transition-all ${
+            surligneNon ? 'border-violet-400 ring-2 ring-violet-200 bg-violet-50/60' : 'border-slate-200/80 bg-white/50'
+          }`}
+        >
+          <div className="flex items-center gap-1 px-1 pb-1">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+              Non assignées
+            </span>
+            <span className="ml-auto text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-1.5 py-0.5 tabular-nums shrink-0">
+              {nonAssignees.length}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-2 content-start min-h-[4rem] px-1">
+            {nonAssignees.length === 0 ? (
+              <div className="col-span-2 rounded-lg border border-dashed border-slate-300/80 px-3 py-3 text-center text-[11px] text-slate-400">
+                {section ? 'Déposez une carte ici pour la désassigner' : 'Aucune carte en attente'}
+              </div>
+            ) : (
+              rendreCartes({ sectionId: section?.id }, nonAssignees)
+            )}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-slate-200/80 bg-white/60 overflow-hidden">
+          {estLabo ? (
+            <>
+              <div className="grid grid-cols-[11rem_minmax(0,1fr)] border-b border-slate-200 bg-slate-50">
+                <div className="border-r border-slate-200 px-2 py-1.5 text-[10px] font-extrabold uppercase tracking-wider text-violet-700">
+                  Brodeuse
+                </div>
+                <div className="px-2 py-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+                  Modèles
+                </div>
+              </div>
+              {personnes.length === 0 ? (
+                <div className="px-3 py-4 text-center text-[11px] text-slate-400">
+                  Aucune brodeuse : ajoutez-en une ci-dessous.
+                </div>
+              ) : (
+                personnes.map((personne) => {
+                  if (!section) return null;
+                  const nb = data.cartes.filter(
+                    (c) =>
+                      c.colonneId === colonne.id &&
+                      c.sectionId === section.id &&
+                      c.personneId === personne.id
+                  ).length;
+                  const surligne =
+                    colonneCible === colonne.id &&
+                    drag?.type === 'carte' &&
+                    insertion?.colonneId === colonne.id &&
+                    insertion.sectionId === section.id &&
+                    insertion.personneId === personne.id;
+                  return (
+                    <div
+                      key={personne.id}
+                      onDragOver={(e) => survolZonePersonne(e, colonne.id, section.id, personne.id, nb)}
+                      onDrop={(e) => deposerZoneBrodeuse(e, colonne.id, section.id, personne.id, nb)}
+                      className={`grid grid-cols-[11rem_minmax(0,1fr)] border-b border-slate-200/70 last:border-b-0 transition-colors ${
+                        surligne ? 'bg-violet-50/60' : ''
+                      }`}
+                    >
+                      <div className="group flex items-start gap-1 border-r border-slate-200 px-2 py-2">
+                        <div className="min-w-0 flex-1">
+                          <EditableItemName
+                            value={personne.titre}
+                            onSave={(titre) => renommerPersonne(colonne.id, section.id, personne.id, titre)}
+                            placeholder="Nom de la brodeuse"
+                            className="min-w-0"
+                          />
+                          <span className="mt-1 inline-block text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-1.5 py-0.5 tabular-nums">
+                            {nb}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => supprimerBrodeuse(colonne.id, personne.id)}
+                          title="Supprimer la brodeuse"
+                          className="shrink-0 p-1 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                      <div className="px-1 py-1">
+                        {construireListeBrodeuse(colonne, section, personne)}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </>
+          ) : personnes.length === 0 ? (
+            <div className="px-3 py-4 text-center text-[11px] text-slate-400">
+              Aucune brodeuse : ajoutez-en une ci-dessous.
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-200">
+              {personnes.map((personne) => (
+                <div key={personne.id} className="group p-2 space-y-1">
+                  <div className="flex items-center gap-1">
+                    <EditableItemName
+                      value={personne.titre}
+                      onSave={(titre) => {
+                        if (section) renommerPersonne(colonne.id, section.id, personne.id, titre);
+                      }}
+                      placeholder="Nom de la brodeuse"
+                      className="min-w-0"
+                    />
+                    <span className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-1.5 py-0.5 tabular-nums shrink-0">
+                      {data.cartes.filter(
+                        (c) =>
+                          c.colonneId === colonne.id &&
+                          c.sectionId === section?.id &&
+                          c.personneId === personne.id
+                      ).length}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => supprimerBrodeuse(colonne.id, personne.id)}
+                      title="Supprimer la brodeuse"
+                      className="ml-auto p-1 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                  {section && construireListeBrodeuse(colonne, section, personne)}
+                </div>
+              ))}
+            </div>
+          )}
+          <div className="border-t border-slate-200 bg-slate-50 px-2 py-1.5">
+            <button
+              type="button"
+              onClick={() => ajouterBrodeuse(colonne.id)}
+              className="w-full inline-flex items-center justify-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-violet-700 cursor-pointer"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              Ajouter une brodeuse
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renduDirection = () => {
+    const groupes: Record<'alerte' | 'attente' | 'encours', KanbanCarte[]> = {
+      alerte: [],
+      attente: [],
+      encours: [],
+    };
+    for (const carte of trierParOrdre(data.cartes)) {
+      if (carteTermineeDirection(carte)) continue;
+      groupes[categorieDirection(carte)].push(carte);
+    }
+    groupes.alerte.sort((a, b) => urgenceDirection(b) - urgenceDirection(a));
+    groupes.attente.sort((a, b) => {
+      const joursA = getAlerteAttente(a)?.jours ?? Number.MAX_SAFE_INTEGER;
+      const joursB = getAlerteAttente(b)?.jours ?? Number.MAX_SAFE_INTEGER;
+      return joursA - joursB;
+    });
+    const onglets = [
+      { id: 'alerte' as const, label: 'ALERTE', detail: '(Urgence)' },
+      { id: 'attente' as const, label: 'EN ATTENTE', detail: '' },
+      { id: 'encours' as const, label: 'EN COURS', detail: '' },
+    ];
+    const styles = {
+      alerte: {
+        actif: 'border-red-600 bg-red-600 text-white',
+        inactif: 'border-red-200 bg-white text-red-700 hover:border-red-400',
+        badge: 'bg-red-100 text-red-700',
+      },
+      attente: {
+        actif: 'border-orange-500 bg-orange-500 text-white',
+        inactif: 'border-orange-200 bg-white text-orange-700 hover:border-orange-400',
+        badge: 'bg-orange-100 text-orange-700',
+      },
+      encours: {
+        actif: 'border-violet-600 bg-violet-600 text-white',
+        inactif: 'border-violet-200 bg-white text-violet-700 hover:border-violet-400',
+        badge: 'bg-violet-100 text-violet-700',
+      },
+    };
+    const actif = onglets.find((o) => o.id === ongletDirection) ?? onglets[0];
+    const cartesActives = groupes[ongletDirection];
+    const premiereColonne = colonnes[0];
+    return (
+      <div className="flex-1 overflow-y-auto">
+        <div className="mx-auto w-full max-w-6xl px-4 py-6 sm:px-6 space-y-4">
+          <div className="grid gap-2 sm:grid-cols-3">
+            {onglets.map((onglet) => {
+              const selectionne = onglet.id === ongletDirection;
+              const style = styles[onglet.id];
+              return (
+                <button
+                  key={onglet.id}
+                  type="button"
+                  aria-pressed={selectionne}
+                  onClick={() => setOngletDirection(onglet.id)}
+                  className={`flex items-center justify-between gap-2 rounded-xl border px-4 py-3 text-left transition-colors cursor-pointer ${
+                    selectionne ? style.actif : style.inactif
+                  }`}
+                >
+                  <span className="flex items-baseline gap-1.5">
+                    <span className="text-sm font-extrabold tracking-wide">{onglet.label}</span>
+                    {onglet.detail && (
+                      <span className="text-[10px] font-semibold opacity-80">{onglet.detail}</span>
+                    )}
+                  </span>
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[11px] font-bold tabular-nums ${
+                      selectionne ? 'bg-white/20 text-white' : style.badge
+                    }`}
+                  >
+                    {groupes[onglet.id].length}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+
+          <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-sm font-extrabold uppercase tracking-wide text-slate-700">
+                {actif.label}
+                {actif.detail ? ` ${actif.detail}` : ''}
+              </h2>
+              <span className="text-xs font-semibold text-slate-500">
+                {cartesActives.length} carte{cartesActives.length > 1 ? 's' : ''} · tableau
+                Développement
+              </span>
+            </div>
+            {premiereColonne ? (
+              <>
+                {/* Même largeur de post-it que dans une colonne kanban :
+                    17rem de contenu utile / 2 cartes par ligne, gap de 0.5rem. */}
+                <div className="grid grid-cols-[repeat(auto-fill,8.25rem)] items-start gap-2 content-start">
+                  {rendreCartes({}, cartesActives)}
+                </div>
+                {cartesActives.length === 0 && (
+                  <p className="mt-2 text-center text-[11px] text-slate-400">
+                    Aucune carte dans cet onglet.
+                  </p>
+                )}
+              </>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-300 px-4 py-6 text-center">
+                <p className="text-xs font-semibold text-slate-500">
+                  Aucun espace de cartes dans cet environnement.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => ajouterColonne('DEBRIEF')}
+                  className="mt-2 inline-flex items-center gap-1 text-[11px] font-bold text-violet-700 hover:text-violet-800 cursor-pointer"
+                >
+                  <Plus className="w-3 h-3" />
+                  Créer un espace de cartes
+                </button>
+              </div>
+            )}
+          </section>
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col">
       {/* Bandeau haut : titre, date/heure, sélecteur de vue (même trame que les autres vues) */}
@@ -1586,18 +2412,62 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                     <span className="text-[11px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
                   </span>
                 </div>
+                {estDirecteur && (
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
+                    <span className="font-semibold uppercase tracking-wide text-slate-400">
+                      Environnement
+                    </span>
+                    <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+                      {(['developpement', 'direction'] as const).map((env) => (
+                        <button
+                          key={env}
+                          type="button"
+                          aria-pressed={environnement === env}
+                          onClick={() => changerEnvironnement(env)}
+                          className={`rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors cursor-pointer ${
+                            environnement === env
+                              ? 'bg-white text-violet-700 shadow-sm'
+                              : 'text-slate-500 hover:text-slate-800'
+                          }`}
+                        >
+                          {env === 'developpement' ? 'Développement' : 'Direction'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
             {/* Actions */}
             <div className="flex min-w-0 flex-wrap items-center gap-2.5 min-[900px]:justify-end">
               <span className="hidden whitespace-nowrap text-xs font-semibold text-slate-500 md:inline">
-                {data.cartes.length} tâche{data.cartes.length > 1 ? 's' : ''} • {colonnes.length}{' '}
-                colonne{colonnes.length > 1 ? 's' : ''}
+                {data.cartes.length} tâche{data.cartes.length > 1 ? 's' : ''} •{' '}
+                {environnement === 'direction'
+                  ? '3 onglets'
+                  : `${colonnes.length} colonne${colonnes.length > 1 ? 's' : ''}`}
               </span>
               <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
             </div>
 
+            </div>
+
+            {/* Légende des couleurs, commune aux environnements Développement et Direction */}
+            <div
+              aria-label="Légende des couleurs des cartes"
+              className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-[11px] font-semibold text-slate-600"
+            >
+              {COULEURS_KANBAN_IDS.map((couleurId, index) => (
+                <React.Fragment key={couleurId}>
+                  {index > 0 && <span className="text-slate-300">°</span>}
+                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                    <span
+                      className={`h-3.5 w-3.5 shrink-0 rounded-[3px] border ${KANBAN_COULEURS[couleurId].fond} ${KANBAN_COULEURS[couleurId].bordure}`}
+                    />
+                    {KANBAN_COULEURS[couleurId].label}
+                  </span>
+                </React.Fragment>
+              ))}
             </div>
 
             {/* Tabs */}
@@ -1608,7 +2478,10 @@ onDragStart={(e) => dragCarte(e, carte.id)}
         </div>
       </div>
 
-      {/* Tableau kanban : rangée horizontale de colonnes */}
+      {environnement === 'direction' ? (
+        renduDirection()
+      ) : (
+      /* Tableau kanban : rangée horizontale de colonnes */
       <div className="flex-1 overflow-x-auto overflow-y-auto">
         <div className="inline-flex items-start gap-4 px-4 sm:px-6 py-6 min-w-full">
           {colonnes.map((colonne, indexColonne) => {
@@ -1616,8 +2489,14 @@ onDragStart={(e) => dragCarte(e, carte.id)}
             const enCible = colonneCible === colonne.id && drag?.type === 'carte';
             const colonneEnCible = rangeeCible === colonne.id && drag?.type === 'colonne';
             const sections = colonne.sections?.length ? colonne.sections : undefined;
-            // Colonne large si elle contient une section BRODERIE MAIN.
-            const aBroderieMain = sections?.some((s) => estSectionBroderieMain(s));
+            const aBrodeuse = estColonneBrodeuse(colonne);
+            // Colonne dédiée BRODERIE MAIN : son tableau 4 colonnes est rattaché à la colonne.
+            const estMainDediee = estColonneBroderie(colonne) && !aBrodeuse;
+            const sectionMain = estMainDediee
+              ? sections?.find((s) => estSectionBroderieMain(s)) ?? sections?.[0]
+              : undefined;
+            // Colonne large si BRODERIE MAIN (section ou colonne dédiée) ou Brodeuse.
+            const aBroderieMain = estMainDediee || sections?.some((s) => estSectionBroderieMain(s));
             return (
               <section
                 key={colonne.id}
@@ -1627,7 +2506,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                 }}
                 onDrop={(e) => deposerSurColonne(e, colonne)}
                 className={`${
-                  aBroderieMain ? 'w-[50rem]' : 'w-72'
+                  aBroderieMain || aBrodeuse ? 'w-[50rem]' : 'w-72'
                 } shrink-0 bg-slate-100/80 rounded-2xl border transition-all ${
                   enCible || colonneEnCible
                     ? 'border-violet-400 ring-2 ring-violet-200 bg-violet-50/60'
@@ -1694,9 +2573,25 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                   </button>
                 </div>
 
-                {/* Sections : liste simple ou 2 sections empilées ; section BRODERIE MAIN = tableau 4 colonnes */}
+                {/* Sections : liste simple ou 2 sections empilées ; section BRODERIE MAIN = tableau 4 colonnes ; colonnes BRODERIE MACHINE / LABO CONFECTION = tableau brodeuses */}
                 <div className="px-2 pb-2 space-y-2">
-                  {sections
+                  {estColonneBrodeuse(colonne) ? (
+                    <>
+                      {sections
+                        ?.filter(
+                          (section) =>
+                            !estSectionBrodeuse(section) && !estSectionBroderieMain(section)
+                        )
+                        .map((section) =>
+                          renduZone(colonne, { section, sectionId: section.id })
+                        )}
+                      {renduBrodeuse(colonne)}
+                    </>
+                  ) : estMainDediee ? (
+                    sectionMain
+                      ? renduBroderieMain(colonne, sectionMain)
+                      : zonesSimple(colonne)
+                  ) : sections
                     ? sections.map((section) =>
                         estSectionBroderieMain(section)
                           ? renduBroderieMain(colonne, section)
@@ -1767,6 +2662,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
           </div>
         </div>
       </div>
+      )}
     </div>
   );
 };
