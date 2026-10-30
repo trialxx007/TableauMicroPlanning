@@ -12,19 +12,19 @@ export const KANBAN_COULEURS: Record<
   { label: string; point: string; fond: string; bordure: string }
 > = {
   blanc: {
-    label: 'Demande client',
+    label: 'Commande client',
     point: 'bg-white ring-1 ring-slate-300',
     fond: 'bg-white',
     bordure: 'border-slate-200',
   },
   jaune: {
-    label: 'Robrak essai',
+    label: 'RobRAK essai',
     point: 'bg-yellow-300',
     fond: 'bg-yellow-200',
     bordure: 'border-yellow-300',
   },
   vert: {
-    label: 'Robrak essai validé',
+    label: 'RobRAK client',
     point: 'bg-green-400',
     fond: 'bg-green-200',
     bordure: 'border-green-300',
@@ -42,11 +42,15 @@ export const COULEURS_KANBAN_IDS = Object.keys(KANBAN_COULEURS) as KanbanCouleur
 /** Côté du tableau de la section BRODERIE MAIN auquel appartient une personne. */
 export type KanbanBloc = 'client' | 'initiatives';
 
-/** Personne dans la section « BRODERIE MAIN » (tableau 4 colonnes). */
+/**
+ * Personne d'une section à affectation : BRODERIE MAIN (bloc client /
+ * initiatives) ou Brodeuses (bloc absent).
+ */
 export interface KanbanPersonne {
   id: string;
   titre: string;
-  bloc: KanbanBloc;
+  /** Côté client/initiatives ; absent pour une brodeuse. */
+  bloc?: KanbanBloc;
   ordre: number;
 }
 
@@ -66,9 +70,9 @@ export interface KanbanSection {
 }
 
 /**
- * Colonne spéciale « BRODERIE MAIN » (sous « Broderie Machine ») : rendue en
- * tableau 4 colonnes (chaîne + post-its de chaque côté) au lieu d'une liste.
- * Détection par titre de colonne (exact, insensible casse/tirets).
+ * Colonne dédiée « BRODERIE MAIN » : rendue en tableau 4 colonnes (chaîne +
+ * post-its de chaque côté) au lieu d'une liste. Détection par titre de colonne
+ * (insensible casse/tirets).
  */
 export function estColonneBroderie(colonne: { titre: string }): boolean {
   const t = colonne.titre.trim().toUpperCase().replace(/\s+/g, ' ');
@@ -79,6 +83,27 @@ export function estColonneBroderie(colonne: { titre: string }): boolean {
 export function estSectionBroderieMain(section: { titre: string }): boolean {
   const t = section.titre.trim().toUpperCase().replace(/\s+/g, ' ');
   return t === 'BRODERIE MAIN' || t === 'BRODERIE-MAIN';
+}
+
+/** Section « Brodeuses » : tableau d'affectation par brodeuse. */
+export function estSectionBrodeuse(section: { titre: string }): boolean {
+  const t = section.titre.trim().toUpperCase().replace(/\s+/g, ' ');
+  return t.includes('BRODEUSE');
+}
+
+/** Colonne « LABO CONFECTION » : tableau Brodeuse / Modèles. */
+export function estColonneLaboConfection(colonne: { titre: string }): boolean {
+  const t = colonne.titre.trim().toUpperCase().replace(/\s+/g, ' ');
+  return t.includes('LABO CONFECTION');
+}
+
+/**
+ * Colonne dédiée aux brodeuses (« BRODERIE MACHINE », « LABO CONFECTION »).
+ * Elle peut cohabiter avec d'autres sections (dont BRODERIE MAIN).
+ */
+export function estColonneBrodeuse(colonne: { titre: string; sections?: { titre: string }[] }): boolean {
+  const t = colonne.titre.trim().toUpperCase().replace(/\s+/g, ' ');
+  return t.includes('BRODERIE MACHINE') || estColonneLaboConfection(colonne);
 }
 
 /** Une colonne du tableau kanban (type liste Trello). */
@@ -112,12 +137,16 @@ export interface KanbanDeplacement {
 export interface KanbanCarte {
   id: string;
   titre: string;
-  /** État de la carte (ex: "En cours", "En attente", "Terminé"…). */
+  /** Étape de la carte (ex: "En cours", "En attente", "Terminé"…). */
   etat?: string;
   /** Traiteur qui traite le modèle. */
   traiteur?: string;
   /** Nom du client pour ce modèle. */
   client?: string;
+  /** Commercial associé à la carte. */
+  commercial?: string;
+  /** Date d'expédition au format YYYY-MM-DD ; optionnelle. */
+  dateExpedition?: string;
   /** Remarques libres. */
   remarques?: string;
   couleur?: KanbanCouleurId;
