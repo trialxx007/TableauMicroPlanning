@@ -1,5 +1,142 @@
 @import "tailwindcss";
 
+/* Kanban board brand tokens and Inter-like typography (presentation only). */
+@theme {
+  --color-brand: #6d4aff;
+  --color-brand-strong: #5636e0;
+  --color-brand-soft: #f1edff;
+}
+
+.kanban-app {
+  font-family: Inter, "Inter var", "Segoe UI", ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+}
+
+.kanban-app ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.kanban-app ::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+.kanban-app ::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Card edit panel fields (presentation only). */
+.kanban-app .kanban-label {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5b6478;
+}
+
+.kanban-app .kanban-label-compact {
+  display: block;
+  margin-bottom: 3px;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: #5b6478;
+}
+
+.kanban-app .kanban-field,
+.kanban-app .kanban-field-compact {
+  width: 100%;
+  border: 1px solid #d5d9e2;
+  background-color: #ffffff;
+  color: #1c2333;
+  outline: none;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.kanban-app .kanban-field {
+  height: 30px;
+  padding: 0 9px;
+  border-radius: 6px;
+  font-size: 13px;
+}
+
+.kanban-app .kanban-field-compact {
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.kanban-app .kanban-field:focus,
+.kanban-app .kanban-field-compact:focus {
+  border-color: #6d4aff;
+  box-shadow: 0 0 0 3px rgba(109, 74, 255, 0.18);
+}
+
+/* Native selects need room for the arrow at this compact padding. */
+.kanban-app select.kanban-field,
+.kanban-app select.kanban-field-compact {
+  padding-right: 1.15rem;
+}
+
+.kanban-app .kanban-field-error,
+.kanban-app .kanban-field-error:focus {
+  border-color: #e11d48;
+  box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.12);
+}
+
+.kanban-app .kanban-textarea {
+  height: 44px;
+  min-height: 44px;
+  padding: 6px 9px;
+  resize: vertical;
+  line-height: 1.35;
+}
+
+/* Stage pagination: slide the visible columns in the direction of travel. */
+@keyframes kanban-page-next {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+@keyframes kanban-page-prev {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.kanban-page-next {
+  animation: kanban-page-next 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.kanban-page-prev {
+  animation: kanban-page-prev 260ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .kanban-page-next,
+  .kanban-page-prev {
+    animation: none;
+  }
+}
+
 /* Shared content width for each page header and its main content. */
 .page-container,
 .page-container-wide {

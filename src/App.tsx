@@ -26,7 +26,7 @@ import {
   lireSession,
   ongletsAutorises,
 } from './utils/auth.ts';
-import { RefreshCw, FileSpreadsheet, Check, Plus } from 'lucide-react';
+import { RefreshCw, FileSpreadsheet, Plus } from 'lucide-react';
 
 export default function App() {
   const [session, setSession] = useState<SessionProfil | null>(() => lireSession());
@@ -537,16 +537,6 @@ export default function App() {
         </main>
       )}
       </div>
-
-      <footer className="mt-auto py-4 border-t border-slate-200 bg-white text-center text-xs text-slate-400">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span>Point Commande Journalière — Confection Textile & Haut de Gamme</span>
-          <span className="flex items-center gap-1 text-slate-500 font-medium">
-            <Check className="w-3.5 h-3.5 text-emerald-600" />
-            Suivi d'Atelier de Fabrication
-          </span>
-        </div>
-      </footer>
 
       <CardModal
         isOpen={isModalOpen}

@@ -8,6 +8,8 @@ export type AppPage = 'point-journalier' | 'archive' | 'suivi-global' | 'tableau
 interface ViewSwitcherProps {
   currentPage: AppPage;
   onChangePage: (page: AppPage) => void;
+  /** `solid` renders the active tab as a full purple pill (kanban header). */
+  variant?: 'default' | 'solid';
 }
 
 interface TabConfig {
@@ -79,10 +81,11 @@ const TABS: TabConfig[] = [
 ];
 
 /** Sélecteur d'interface des deux vues, affiché au centre de l'en-tête. */
-export const ViewSwitcher: React.FC<ViewSwitcherProps> = ({ currentPage, onChangePage }) => {
+export const ViewSwitcher: React.FC<ViewSwitcherProps> = ({ currentPage, onChangePage, variant = 'default' }) => {
   const { profil } = useProfil();
   const autorises = ongletsAutorises(profil.id);
   const onglets = TABS.filter((tab) => autorises.includes(tab.page));
+  const solide = variant === 'solid';
 
   // Un seul onglet autorisé (profil Production) : le sélecteur n'a plus lieu d'être.
   if (onglets.length <= 1) return null;
@@ -104,14 +107,22 @@ export const ViewSwitcher: React.FC<ViewSwitcherProps> = ({ currentPage, onChang
             onClick={() => onChangePage(tab.page)}
             title={tab.title}
             className={`inline-flex flex-none cursor-pointer items-center gap-2 whitespace-nowrap rounded-[9px] border py-1.5 pl-1.5 pr-3 text-sm transition-colors duration-150 ${
-              isActive
-                ? `border-slate-200 bg-white font-medium shadow-xs ${tab.activeLabel}`
-                : 'border-transparent text-slate-500 hover:bg-slate-200/60'
+              solide
+                ? isActive
+                  ? 'border-transparent bg-brand font-semibold text-white shadow-sm'
+                  : 'border-transparent text-slate-600 hover:bg-white/70'
+                : isActive
+                  ? `border-slate-200 bg-white font-medium shadow-xs ${tab.activeLabel}`
+                  : 'border-transparent text-slate-500 hover:bg-slate-200/60'
             }`}
           >
             <span
               className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] transition-colors duration-150 ${
-                isActive ? tab.activeIcon : tab.idleIcon
+                solide && isActive
+                  ? 'bg-white/20 text-white'
+                  : isActive
+                    ? tab.activeIcon
+                    : tab.idleIcon
               }`}
             >
               {tab.icon}

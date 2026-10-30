@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   COULEURS_KANBAN_IDS,
   estColonneBroderie,
@@ -23,7 +23,7 @@ import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
 import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
 import { dateISOFromDateTime, estDateISO, getDateISOSite, getNowParis, joursEntreDatesISO, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import { Profil } from '@/src/utils/auth.ts';
-import { AlertTriangle, Calendar, Check, Clock, Copy, GitMerge, GripVertical, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Calendar, Check, ChevronLeft, ChevronRight, Clock, Copy, FileText, GitMerge, GripVertical, LayoutGrid, MoreHorizontal, Pause, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
 
 interface DeveloppementViewProps {
   onChangePage: (page: AppPage) => void;
@@ -34,7 +34,7 @@ interface DeveloppementViewProps {
 /** Élément en cours de glissement (carte ou colonne). */
 type DragInfo = { type: 'carte'; id: string } | { type: 'colonne'; id: string };
 
-/** Brouillon d'édition d'une carte (mode Trello : édition sur place). */
+/** Brouillon d'édition d'une carte (panneau modal). */
 interface BrouillonEdition {
   id: string;
   titre: string;
@@ -65,6 +65,26 @@ function formatDateFr(valeur: string | null | undefined): string {
   const [annee, mois, jour] = valeur.slice(0, 10).split('-');
   return annee && mois && jour ? `${jour}/${mois}/${annee}` : valeur;
 }
+
+/** Formats an ISO date as a short French label (`28 oct.`). */
+function formatDateCourte(valeur: string | null | undefined): string {
+  if (!valeur) return '—';
+  const [annee, mois, jour] = valeur.slice(0, 10).split('-');
+  if (!annee || !mois || !jour) return formatDateFr(valeur);
+  const moisCourts = ['janv.', 'févr.', 'mars', 'avr.', 'mai', 'juin', 'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.'];
+  return `${jour} ${moisCourts[Number(mois) - 1] ?? mois}`;
+}
+
+/** Gap between the anchor card and the edit popover, and viewport safety margin. */
+const POPOVER_GAP = 12;
+const POPOVER_MARGE = 8;
+/** Preferred width of the compact card edit popover. */
+const POPOVER_LARGEUR = 460;
+
+/** Preset waiting reasons offered in the card edit panel. */
+const MOTIFS_ATTENTE = ['Attente de mesures client', 'Attente du brief client'];
+/** Sentinel option that reveals the free-text reason field. */
+const MOTIF_ATTENTE_AUTRE = 'Autre…';
 
 /** Construit une entrée d'historique de déplacement. */
 function entreeDeplacement(
@@ -119,6 +139,13 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   /** Colonne survolée pendant un glissement de colonne (surlignage ciblé). */
   const [rangeeCible, setRangeeCible] = useState<string | null>(null);
   const [edition, setEdition] = useState<BrouillonEdition | null>(null);
+  /** Card that opened the edit popover: the panel follows it while scrolling. */
+  const [ancreEdition, setAncreEdition] = useState<HTMLElement | null>(null);
+  /** Viewport coordinates computed from the anchor (popover presentation only). */
+  const [positionEdition, setPositionEdition] = useState<{ top: number; left: number } | null>(null);
+  /** Waiting periods are collapsed by default to keep the quick-edit panel short. */
+  const [attenteDepliee, setAttenteDepliee] = useState(false);
+  const panneauEditionRef = useRef<HTMLDivElement>(null);
   const [composerOuverte, setComposerOuverte] = useState<string | null>(null);
   const [composerNom, setComposerNom] = useState('');
   const [composerEtat, setComposerEtat] = useState('');
@@ -133,6 +160,10 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   const [nouveauTitre, setNouveauTitre] = useState('');
   const [copieOk, setCopieOk] = useState<string | null>(null);
   const [ongletDirection, setOngletDirection] = useState<'alerte' | 'attente' | 'encours'>('alerte');
+  /** Currently displayed stage page (5 columns per page, view only). */
+  const [pageEtapes, setPageEtapes] = useState(0);
+  /** Slide direction of the page transition (1 = next, -1 = previous). */
+  const [sensPage, setSensPage] = useState<1 | -1>(1);
 
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
@@ -178,6 +209,21 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   };
 
   const colonnes = useMemo(() => trierParOrdre(data.colonnes), [data.colonnes]);
+  const ETAPES_PAR_PAGE = 5;
+  const totalPages = Math.max(1, Math.ceil(colonnes.length / ETAPES_PAR_PAGE));
+  const pageCourante = Math.min(pageEtapes, totalPages - 1);
+  const debutPage = pageCourante * ETAPES_PAR_PAGE;
+  const colonnesPage = colonnes.slice(debutPage, debutPage + ETAPES_PAR_PAGE);
+
+  /** Changes the visible stage page and records the slide direction for the animation. */
+  const allerPageEtapes = (page: number) => {
+    setSensPage(page >= pageCourante ? 1 : -1);
+    setPageEtapes(page);
+  };
+
+  useEffect(() => {
+    if (pageEtapes > totalPages - 1) setPageEtapes(totalPages - 1);
+  }, [pageEtapes, totalPages]);
   const cartesDe = (colonneId: string): KanbanCarte[] =>
     trierParOrdre(data.cartes.filter((c) => c.colonneId === colonneId));
 
@@ -743,11 +789,13 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     }));
   };
 
-  const supprimerCarte = (id: string) => {
+  /** Deletes a card after confirmation; returns whether the card was removed. */
+  const supprimerCarte = (id: string): boolean => {
     const carte = data.cartes.find((c) => c.id === id);
-    if (!carte) return;
-    if (!window.confirm(`Supprimer la tâche « ${carte.titre} » ?`)) return;
+    if (!carte) return false;
+    if (!window.confirm(`Supprimer la tâche « ${carte.titre} » ?`)) return false;
     setData((prev) => ({ ...prev, cartes: prev.cartes.filter((c) => c.id !== id) }));
+    return true;
   };
 
   const deplacerCarte = (
@@ -1027,7 +1075,20 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
 
   /* -------------------------------- Rendu -------------------------------- */
 
-  const ouvrirEdition = (carte: KanbanCarte) => {
+  /** Closes the edit panel and forgets its anchor. */
+  const fermerEdition = useCallback(() => {
+    setEdition(null);
+    setAncreEdition(null);
+    setPositionEdition(null);
+    setAttenteDepliee(false);
+  }, []);
+
+  const ouvrirEdition = (carte: KanbanCarte, ancre?: HTMLElement | null) => {
+    // Clicking the card that is already open must not discard the draft.
+    if (edition?.id === carte.id) return;
+    setAncreEdition(ancre ?? null);
+    setPositionEdition(null);
+    setAttenteDepliee(false);
     setEdition({
       id: carte.id,
       titre: carte.titre,
@@ -1066,8 +1127,161 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           ...(a.dateSortie ? { dateSortie: a.dateSortie } : {}),
         })),
     });
-    setEdition(null);
+    fermerEdition();
   };
+
+  /* --------------------- Card edit panel (presentation) -------------------- */
+
+  const carteEdition = edition ? data.cartes.find((c) => c.id === edition.id) : undefined;
+
+  /** Existing values used to populate the selects (no new data fields). */
+  const valeursTraiteur = Array.from(
+    new Set(data.cartes.map((c) => c.traiteur?.trim()).filter((v): v is string => !!v))
+  ).sort((a, b) => a.localeCompare(b, 'fr'));
+  const valeursCommercial = Array.from(
+    new Set(data.cartes.map((c) => c.commercial?.trim()).filter((v): v is string => !!v))
+  ).sort((a, b) => a.localeCompare(b, 'fr'));
+  const suggestionsClient = Array.from(
+    new Set(data.cartes.map((c) => c.client?.trim()).filter((v): v is string => !!v))
+  ).sort((a, b) => a.localeCompare(b, 'fr'));
+
+  const dateDeplacementEdition = carteEdition
+    ? getAlarmeInfo(carteEdition).dateEntree ?? carteEdition.dateEntreeZone ?? carteEdition.creeLe
+    : undefined;
+  const dateDeplacementISO = dateDeplacementEdition?.slice(0, 10);
+  const colonneEdition = carteEdition
+    ? data.colonnes.find((c) => c.id === carteEdition.colonneId)
+    : undefined;
+  const sectionEdition =
+    carteEdition?.sectionId && colonneEdition?.sections
+      ? colonneEdition.sections.find((s) => s.id === carteEdition.sectionId)
+      : undefined;
+  const emplacementEdition = sectionEdition
+    ? `${colonneEdition?.titre ?? ''} · ${sectionEdition.titre}`
+    : colonneEdition?.titre ?? '';
+
+  const erreurExpedition =
+    edition?.dateExpedition && dateDeplacementISO && edition.dateExpedition < dateDeplacementISO
+      ? "La date d'expédition doit être postérieure ou égale à la date de déplacement."
+      : null;
+
+  const erreursAttentes: (string | null)[] = (edition?.attentes ?? []).map((a) =>
+    a.dateEntree && a.dateSortie && a.dateSortie < a.dateEntree
+      ? "La date de sortie doit être postérieure ou égale à la date d'entrée."
+      : null
+  );
+  const formulaireInvalide = !!erreurExpedition || erreursAttentes.some(Boolean);
+
+  const normaliserAttentes = (attentes: KanbanAttente[]) =>
+    attentes.map((a) => ({
+      id: a.id,
+      libelle: a.libelle ?? '',
+      dateEntree: a.dateEntree ?? '',
+      dateSortie: a.dateSortie ?? '',
+    }));
+
+  const editionModifiee = !!(
+    edition &&
+    carteEdition &&
+    (edition.titre !== carteEdition.titre ||
+      edition.etat !== (carteEdition.etat ?? '') ||
+      edition.traiteur !== (carteEdition.traiteur ?? '') ||
+      edition.client !== (carteEdition.client ?? '') ||
+      edition.commercial !== (carteEdition.commercial ?? '') ||
+      edition.remarques !== (carteEdition.remarques ?? '') ||
+      edition.couleur !== (carteEdition.couleur ?? 'jaune') ||
+      (edition.dateEcheance ?? '') !== (carteEdition.date ?? '') ||
+      (edition.dateExpedition ?? '') !== (carteEdition.dateExpedition ?? '') ||
+      JSON.stringify(normaliserAttentes(edition.attentes)) !==
+        JSON.stringify(normaliserAttentes(carteEdition.attentes ?? [])))
+  );
+
+  const enregistrementAutorise = !!edition && !formulaireInvalide && editionModifiee;
+
+  // Keep the latest save handler without re-subscribing the keyboard listener.
+  const enregistrerEditionRef = useRef(enregistrerEdition);
+  useEffect(() => {
+    enregistrerEditionRef.current = enregistrerEdition;
+  });
+
+  useEffect(() => {
+    if (!edition) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        fermerEdition();
+      } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        if (!formulaireInvalide && editionModifiee) enregistrerEditionRef.current();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [edition, formulaireInvalide, editionModifiee, fermerEdition]);
+
+  /**
+   * Adaptive popover placement: opens to the right of the card, flips left or
+   * above when it would overflow, and stays clamped inside the viewport.
+   */
+  const placerEdition = useCallback(() => {
+    if (!ancreEdition) return;
+    if (!ancreEdition.isConnected) {
+      fermerEdition();
+      return;
+    }
+    const rect = ancreEdition.getBoundingClientRect();
+    const panneau = panneauEditionRef.current;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const largeur = panneau?.offsetWidth ?? Math.min(POPOVER_LARGEUR, vw - POPOVER_MARGE * 2);
+    const hauteur = Math.min(
+      panneau?.offsetHeight ?? vh - POPOVER_MARGE * 2,
+      vh - POPOVER_MARGE * 2
+    );
+
+    let left = rect.right + POPOVER_GAP;
+    if (left + largeur + POPOVER_MARGE > vw) {
+      const aGauche = rect.left - POPOVER_GAP - largeur;
+      left = aGauche >= POPOVER_MARGE ? aGauche : Math.max(POPOVER_MARGE, vw - POPOVER_MARGE - largeur);
+    }
+
+    let top = rect.top;
+    if (top + hauteur + POPOVER_MARGE > vh) top = rect.top - POPOVER_GAP - hauteur;
+    top = clamp(top, POPOVER_MARGE, Math.max(POPOVER_MARGE, vh - POPOVER_MARGE - hauteur));
+
+    setPositionEdition((p) => (p && p.top === top && p.left === left ? p : { top, left }));
+  }, [ancreEdition, fermerEdition]);
+
+  useLayoutEffect(() => {
+    if (!edition) return;
+    placerEdition();
+  }, [edition, placerEdition]);
+
+  // Follow the anchor card on any scroll (board included) and on resize.
+  useEffect(() => {
+    if (!edition) return;
+    const onMove = () => placerEdition();
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    return () => {
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+    };
+  }, [edition, placerEdition]);
+
+  // Outside click closes the popover, but clicking the anchor card keeps the draft.
+  useEffect(() => {
+    if (!edition) return;
+    const onDown = (event: MouseEvent) => {
+      const cible = event.target as Node | null;
+      if (!cible) return;
+      if (panneauEditionRef.current?.contains(cible)) return;
+      if (ancreEdition?.contains(cible)) return;
+      fermerEdition();
+    };
+    document.addEventListener('mousedown', onDown);
+    return () => document.removeEventListener('mousedown', onDown);
+  }, [edition, ancreEdition, fermerEdition]);
 
   const validerComposer = (colonneId: string, sectionId?: string) => {
     if (!composerNom.trim() || !composerCouleur) return;
@@ -1112,225 +1326,12 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     setTimeout(() => setCopieOk(null), 1200);
   };
 
-  /** Post-its d'une zone : formes carrées, 2 par ligne, édition sur place. */
+  /** Post-its d'une zone : formes carrées, 2 par ligne, édition via la fiche. */
   const rendreCartes = (zone: { sectionId?: string }, cartesZone: KanbanCarte[]) =>
     cartesZone.map((carte, position) => {
-      const enEdition = edition?.id === carte.id;
       const enDrag = drag?.type === 'carte' && drag.id === carte.id;
       const colonneCarte = data.colonnes.find((c) => c.id === carte.colonneId);
       const estArchive = !!colonneCarte && colonneCarte.titre.toUpperCase().includes('ARCHIVE');
-      if (enEdition && edition) {
-        return (
-          <div
-            key={carte.id}
-            className="col-span-2 bg-white rounded-lg border-2 border-violet-400 shadow-sm p-3 space-y-2"
-          >
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] font-bold text-slate-500 uppercase">Date de déplacement</span>
-              <span className="text-xs font-semibold text-slate-700 font-mono">
-                {formatDateFr(getAlarmeInfo(carte).dateEntree ?? carte.dateEntreeZone ?? carte.creeLe)}
-              </span>
-            </div>
-            <div className="flex flex-wrap items-center gap-1">
-              {(carte.historiqueDeplacements ?? []).slice(-6).map((h, i) => {
-                const col = data.colonnes.find((c) => c.id === h.colonneId);
-                const sec = h.sectionId ? col?.sections?.find((s) => s.id === h.sectionId) : undefined;
-                const label = sec ? `${col?.titre ?? h.colonneId} / ${sec.titre}` : (col?.titre ?? h.colonneId);
-                return (
-                  <span key={i} className="inline-flex items-center gap-1 rounded-md bg-slate-100 px-1.5 py-0.5 text-[9px] text-slate-600">
-                    {formatDateFr(h.date)} · {label}
-                  </span>
-                );
-              })}
-            </div>
-            <textarea
-              autoFocus
-              rows={2}
-              value={edition.titre}
-              onChange={(e) => setEdition({ ...edition, titre: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') setEdition(null);
-              }}
-              className="w-full text-xs font-bold text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 resize-none focus:outline-hidden focus:border-violet-400"
-              placeholder="Titre de la tâche"
-            />
-            <input
-              value={edition.etat}
-              onChange={(e) => setEdition({ ...edition, etat: e.target.value })}
-              placeholder="Étape (ex: En cours, En attente, Terminé)"
-              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-hidden focus:border-violet-400"
-            />
-            <input
-              value={edition.traiteur}
-              onChange={(e) => setEdition({ ...edition, traiteur: e.target.value })}
-              placeholder="Traiteur (nom du responsable)"
-              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-hidden focus:border-violet-400"
-            />
-            <input
-              value={edition.client}
-              onChange={(e) => setEdition({ ...edition, client: e.target.value })}
-              placeholder="Nom du client"
-              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-hidden focus:border-violet-400"
-            />
-            <input
-              value={edition.commercial}
-              onChange={(e) => setEdition({ ...edition, commercial: e.target.value })}
-              placeholder="Commercial"
-              className="w-full text-xs font-semibold text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 focus:outline-hidden focus:border-violet-400"
-            />
-            <textarea
-              rows={3}
-              value={edition.remarques}
-              onChange={(e) => setEdition({ ...edition, remarques: e.target.value })}
-              placeholder="Remarques libres…"
-              className="w-full text-[11px] text-slate-600 bg-slate-50 border border-slate-200 rounded-md px-2 py-1.5 resize-none focus:outline-hidden focus:border-violet-400"
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
-                Date d'échéance
-                <input
-                  type="date"
-                  value={edition.dateEcheance ?? ''}
-                  onChange={(e) => setEdition({ ...edition, dateEcheance: e.target.value || undefined })}
-                  className="text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1 focus:outline-hidden focus:border-violet-400 w-auto"
-                />
-              </label>
-              <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
-                Date d'expédition
-                <input
-                  type="date"
-                  value={edition.dateExpedition ?? ''}
-                  onChange={(e) => setEdition({ ...edition, dateExpedition: e.target.value || undefined })}
-                  className="text-xs text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-2 py-1 focus:outline-hidden focus:border-violet-400 w-auto"
-                />
-              </label>
-            </div>
-            <div className="flex items-center gap-1.5 flex-wrap">
-              {COULEURS_KANBAN_IDS.map((couleurId) => (
-                <button
-                  key={couleurId}
-                  type="button"
-                  title={KANBAN_COULEURS[couleurId].label}
-                  onClick={() => setEdition({ ...edition, couleur: couleurId })}
-                  className={`w-5 h-5 rounded-sm border ${KANBAN_COULEURS[couleurId].fond} ${
-                    KANBAN_COULEURS[couleurId].bordure
-                  } ${
-                    edition.couleur === couleurId
-                      ? 'ring-2 ring-offset-1 ring-slate-700'
-                      : 'hover:scale-110'
-                  } transition-transform cursor-pointer`}
-                />
-              ))}
-            </div>
-            <div className="space-y-1.5 rounded-md border border-slate-200 bg-slate-50 p-2">
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold text-slate-500 uppercase">Attente</span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setEdition({
-                      ...edition,
-                      attentes: [
-                        ...edition.attentes,
-                        { id: `ATT-${Date.now().toString(36).toUpperCase()}`, dateEntree: getDateISOSite() },
-                      ],
-                    })
-                  }
-                  className="inline-flex items-center gap-1 text-[10px] font-semibold text-violet-600 hover:text-violet-700"
-                >
-                  <Plus className="w-3 h-3" />
-                  Ajouter
-                </button>
-              </div>
-              {edition.attentes.length === 0 && (
-                <p className="text-[10px] text-slate-400">Aucune période d’attente</p>
-              )}
-              {edition.attentes.map((attente, index) => (
-                <div key={attente.id} className="flex flex-wrap items-center gap-1.5 rounded-md border border-slate-200 bg-white px-1.5 py-1">
-                  <input
-                    value={attente.libelle ?? ''}
-                    onChange={(e) => {
-                      const attentes = [...edition.attentes];
-                      attentes[index] = { ...attente, libelle: e.target.value };
-                      setEdition({ ...edition, attentes });
-                    }}
-                    placeholder="Motif"
-                    className="w-24 text-[10px] text-slate-800 bg-slate-50 border border-slate-200 rounded-md px-1.5 py-0.5 focus:outline-hidden focus:border-violet-400"
-                  />
-                  <label className="flex items-center gap-1 text-[9px] font-bold text-slate-500 uppercase">
-                    Entrée
-                    <input
-                      type="date"
-                      value={attente.dateEntree ?? ''}
-                      onChange={(e) => {
-                        const attentes = [...edition.attentes];
-                        attentes[index] = { ...attente, dateEntree: e.target.value };
-                        setEdition({ ...edition, attentes });
-                      }}
-                      className="text-[10px] text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-1 py-0.5 focus:outline-hidden focus:border-violet-400"
-                    />
-                  </label>
-                  <label className="flex items-center gap-1 text-[9px] font-bold text-slate-500 uppercase">
-                    Sortie
-                    <input
-                      type="date"
-                      value={attente.dateSortie ?? ''}
-                      onChange={(e) => {
-                        const attentes = [...edition.attentes];
-                        attentes[index] = { ...attente, dateSortie: e.target.value || undefined };
-                        setEdition({ ...edition, attentes });
-                      }}
-                      className="text-[10px] text-slate-900 bg-slate-50 border border-slate-200 rounded-md px-1 py-0.5 focus:outline-hidden focus:border-violet-400"
-                    />
-                  </label>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const attentes = edition.attentes.filter((_, i) => i !== index);
-                      setEdition({ ...edition, attentes });
-                    }}
-                    className="ml-auto text-rose-500 hover:text-rose-700"
-                    title="Supprimer"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-            <div className="flex items-center justify-between pt-0.5">
-              <button
-                type="button"
-                onClick={() => {
-                  supprimerCarte(carte.id);
-                  setEdition(null);
-                }}
-                className="inline-flex items-center gap-1 text-[11px] font-semibold text-rose-500 hover:text-rose-700 cursor-pointer"
-              >
-                <Trash2 className="w-3 h-3" />
-                Supprimer
-              </button>
-              <div className="flex items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={() => setEdition(null)}
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-slate-700 border border-slate-200 rounded-md px-2 py-1 cursor-pointer"
-                >
-                  <X className="w-3 h-3" />
-                  Annuler
-                </button>
-                <button
-                  type="button"
-                  onClick={enregistrerEdition}
-                  className="inline-flex items-center gap-1 text-[11px] font-bold text-white bg-violet-600 hover:bg-violet-700 rounded-md px-2 py-1 cursor-pointer"
-                >
-                  <Check className="w-3 h-3" />
-                  Enregistrer
-                </button>
-              </div>
-            </div>
-          </div>
-        );
-      }
       const alarmeInfo = getAlarmeInfo(carte);
       const alarme = alarmeInfo.active;
       const { diffZone, diffTotal } = alarmeInfo;
@@ -1340,134 +1341,126 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       const attenteEstOrange = alerteAttente?.niveau === 'orange';
       const attenteEstRouge = alerteAttente?.niveau === 'rouge';
       const attenteJours = alerteAttente?.jours ?? 0;
+      const attenteOuverte = (carte.attentes ?? []).find((a) => !estDateISO(a.dateSortie));
+      const echeanceJours = estDateISO(carte.date) ? -joursEntreDatesISO(carte.date) : null;
+      const retardJours = alarmeInfo.type === 'global' ? diffTotal : diffZone;
+
+      let alerteIcone = <Check className="h-3.5 w-3.5 shrink-0" />;
+      let alerteTexte = 'Aucune alerte';
+      let alerteClasses = 'bg-emerald-50 text-emerald-700';
+      if (attenteEstRouge) {
+        alerteIcone = <AlertTriangle className="h-3.5 w-3.5 shrink-0" />;
+        alerteTexte = `Attente en retard${alerteAttente?.attente.libelle ? ` · ${alerteAttente.attente.libelle}` : ''} · ${attenteJours} j`;
+        alerteClasses = 'bg-red-100 text-red-700';
+      } else if (alarme) {
+        alerteIcone = <AlertTriangle className="h-3.5 w-3.5 shrink-0" />;
+        alerteTexte = `${retardJours} jour${retardJours > 1 ? 's' : ''} de retard`;
+        alerteClasses = 'bg-red-100 text-red-700';
+      } else if (echeanceJours !== null && echeanceJours < 0) {
+        alerteIcone = <AlertTriangle className="h-3.5 w-3.5 shrink-0" />;
+        alerteTexte = `${-echeanceJours} jour${-echeanceJours > 1 ? 's' : ''} de retard`;
+        alerteClasses = 'bg-red-100 text-red-700';
+      } else if (attenteEstOrange) {
+        alerteIcone = <Pause className="h-3.5 w-3.5 shrink-0" />;
+        alerteTexte = `Attente${alerteAttente?.attente.libelle ? ` : ${alerteAttente.attente.libelle}` : ''} · ${attenteJours} j`;
+        alerteClasses = 'bg-slate-100 text-slate-600';
+      } else if (attenteOuverte) {
+        alerteIcone = <Pause className="h-3.5 w-3.5 shrink-0" />;
+        alerteTexte = `Attente${attenteOuverte.libelle ? ` : ${attenteOuverte.libelle}` : ''}`;
+        alerteClasses = 'bg-slate-100 text-slate-600';
+      } else if (echeanceJours === 0) {
+        alerteIcone = <Clock className="h-3.5 w-3.5 shrink-0" />;
+        alerteTexte = "À rendre aujourd'hui";
+        alerteClasses = 'bg-amber-100 text-amber-800';
+      } else if (echeanceJours === 1) {
+        alerteIcone = <Clock className="h-3.5 w-3.5 shrink-0" />;
+        alerteTexte = 'À rendre demain';
+        alerteClasses = 'bg-amber-100 text-amber-800';
+      } else if (echeanceJours === 2) {
+        alerteIcone = <Clock className="h-3.5 w-3.5 shrink-0" />;
+        alerteTexte = 'À rendre dans 2 jours';
+        alerteClasses = 'bg-amber-100 text-amber-800';
+      }
+
+      const proprietaire = [carte.client, carte.traiteur].filter(Boolean).join(' · ');
       return (
         <div
           key={carte.id}
           draggable
-onDragStart={(e) => dragCarte(e, carte.id)}
-            onDragEnd={arreterDrag}
-            onDragOver={(e) => survolCarte(e, carte, position, zone.sectionId)}
-            onClick={() => ouvrirEdition(carte)}
-            className={`group/carte ${attenteEstRouge ? 'bg-red-500' : attenteEstOrange ? 'bg-orange-400' : postIt.fond} rounded-[3px] p-2.5 aspect-square self-start overflow-y-auto cursor-pointer hover:shadow-md hover:-translate-y-0.5 transition-all relative ${
-              attenteEstRouge
-                ? 'border-2 border-red-600 shadow-[0_0_12px_rgba(220,38,38,0.65)]'
-                : attenteEstOrange
-                  ? 'border-2 border-orange-600 shadow-[0_0_12px_rgba(234,88,12,0.55)]'
-                  : alarme
-                    ? 'border-2 border-red-600 shadow-[0_0_12px_rgba(220,38,38,0.65)]'
-                    : `border ${postIt.bordure} shadow-sm`
-            } ${enDrag ? 'opacity-40' : ''}`}
-          >
-          {estArchive && (
+          data-carte-id={carte.id}
+          onDragStart={(e) => dragCarte(e, carte.id)}
+          onDragEnd={arreterDrag}
+          onDragOver={(e) => survolCarte(e, carte, position, zone.sectionId)}
+          onClick={(e) => ouvrirEdition(carte, e.currentTarget)}
+          className={`group/carte relative w-full cursor-pointer rounded-xl border p-3.5 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md ${postIt.fond} ${postIt.bordure} ${
+            enDrag ? 'opacity-40' : ''
+          }`}
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold leading-snug text-slate-900">
+                {carte.titre}
+              </p>
+              {proprietaire && (
+                <p className="mt-0.5 truncate text-xs text-slate-500">{proprietaire}</p>
+              )}
+            </div>
             <button
               type="button"
               onClick={(e) => {
                 e.stopPropagation();
-                copierCarte(carte);
+                if (estArchive) copierCarte(carte);
+                else {
+                  const ancre = e.currentTarget.closest<HTMLElement>('[data-carte-id]');
+                  ouvrirEdition(carte, ancre ?? e.currentTarget);
+                }
               }}
-              title={copieOk === carte.id ? 'Copié !' : 'Copier la carte'}
-              className={`absolute top-1 right-1 z-10 p-1 rounded transition-all ${
-                attenteEstRouge
-                  ? 'text-white/80 hover:text-white hover:bg-white/20'
-                  : attenteEstOrange
-                    ? 'text-orange-950/80 hover:text-orange-950 hover:bg-white/30'
-                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
-              }`}
+              title={
+                estArchive
+                  ? copieOk === carte.id
+                    ? 'Copié !'
+                    : 'Copier la carte'
+                  : 'Ouvrir la fiche'
+              }
+              className="shrink-0 rounded-md p-1 text-slate-400 transition-colors hover:bg-white/70 hover:text-slate-700"
             >
-              {copieOk === carte.id ? (
-                <span
-                  className={`text-[10px] font-bold ${
-                    attenteEstRouge
-                      ? 'text-white'
-                      : attenteEstOrange
-                        ? 'text-orange-950'
-                        : 'text-emerald-600'
-                  }`}
-                >
-                  ✓
-                </span>
+              {estArchive ? (
+                copieOk === carte.id ? (
+                  <Check className="h-4 w-4 text-emerald-600" />
+                ) : (
+                  <Copy className="h-3.5 w-3.5" />
+                )
               ) : (
-                <Copy className="w-3 h-3 shrink-0" />
+                <MoreHorizontal className="h-4 w-4" />
               )}
             </button>
-          )}
-          {alerteAttente && (
-            <div
-              className={`mb-1.5 flex flex-wrap items-center justify-center gap-1 rounded-sm px-1.5 py-1 text-[8px] font-extrabold tracking-wide text-white ${
-                attenteEstRouge ? 'bg-red-800' : 'bg-orange-600'
-              }`}
-            >
-              <AlertTriangle className="h-3 w-3 shrink-0" />
-              <span>
-                {`ATTENTE${alerteAttente.attente.libelle ? `: ${alerteAttente.attente.libelle}` : ''}`}
-              </span>
-            </div>
-          )}
-          {alarme && alarmeInfo.type === 'zone' && (
-            <div className="mb-1.5 flex items-center justify-center gap-1 rounded-sm bg-red-600 px-1.5 py-1 text-[8px] font-extrabold uppercase tracking-wide text-white">
-              <AlertTriangle className="h-3 w-3 shrink-0" />
-              <span>
-                {`Délai zone : ${diffZone}j / ${alarmeInfo.seuilZone}j`}
-              </span>
-            </div>
-          )}
-          {alarme && alarmeInfo.type === 'global' && (
-            <div className="mt-1 flex items-center justify-center gap-1 rounded-sm bg-red-600 px-1 py-0.5 text-[8px] font-extrabold uppercase tracking-wide text-white">
-              <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
-              <span>
-                {`Délai global : ${diffTotal}j / 12j`}
-              </span>
-            </div>
-          )}
-          {carte.date && (
-            <div className="flex justify-end mb-1">
-              <span
-                title="Date d'échéance"
-                className={`flex items-center gap-0.5 rounded-sm px-1.5 py-0.5 text-[10px] font-bold whitespace-nowrap animate-pulse ${
-                  attenteEstRouge
-                    ? 'bg-white text-red-600'
-                    : 'bg-red-600 text-white'
-                }`}
-              >
-                <AlertTriangle className="w-3 h-3" />
-                {new Date(carte.date).toLocaleDateString('fr-FR')}
-              </span>
-            </div>
-          )}
-          <p
-            className={`text-xs font-semibold leading-snug ${
-              attenteEstRouge
-                ? 'text-white'
-                : attenteEstOrange
-                  ? 'text-orange-950'
-                  : 'text-slate-800'
-            }`}
+          </div>
+
+          <span
+            className={`mt-2 inline-flex items-center gap-1.5 rounded-full border ${postIt.bordure} bg-white/70 px-2 py-0.5 text-[10px] font-semibold text-slate-700`}
           >
-            {carte.titre}
-          </p>
-          {carte.etat && (
-            <p className={`text-[10px] mt-0.5 ${
-              attenteEstRouge
-                ? 'text-white/90'
-                : attenteEstOrange
-                  ? 'text-orange-900/90'
-                  : 'text-slate-600'
-            }`}>
-              <span className="font-medium">Étape :</span> {carte.etat}
-            </p>
-          )}
-          {carte.client && (
-            <p className={`text-[10px] mt-0.5 ${
-              attenteEstRouge
-                ? 'text-white/90'
-                : attenteEstOrange
-                  ? 'text-orange-900/90'
-                  : 'text-slate-600'
-            }`}>
-              <span className="font-medium">Client :</span> {carte.client}
-            </p>
-          )}
-          <div className="pointer-events-none absolute inset-x-1 bottom-1 z-20 hidden group-hover/carte:block rounded-md border border-white/10 bg-black/90 p-1.5 text-[9px] leading-tight text-white shadow-xl backdrop-blur-sm">
+            <FileText className="h-3 w-3 shrink-0 text-slate-500" />
+            {postIt.label}
+          </span>
+
+          <div
+            className={`mt-2.5 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-semibold ${alerteClasses}`}
+          >
+            {alerteIcone}
+            <span className="min-w-0 truncate">{alerteTexte}</span>
+          </div>
+
+          <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-black/5 pt-2 text-[11px]">
+            <span className="min-w-0 truncate text-slate-500">
+              Étape :{' '}
+              <span className="font-medium text-slate-700">{carte.etat?.trim() || '—'}</span>
+            </span>
+            <span className="shrink-0 font-medium text-slate-500">
+              Éch. {formatDateCourte(carte.date ?? carte.dateExpedition)}
+            </span>
+          </div>
+
+          <div className="pointer-events-none absolute inset-x-2 bottom-2 z-20 hidden rounded-lg border border-white/10 bg-slate-900/95 p-2 text-[9px] leading-tight text-white shadow-xl backdrop-blur-sm group-hover/carte:block">
             <div>
               <span className="text-white/60">Création :</span>{' '}
               <span className="font-semibold">{formatDateFr(carte.creeLe)}</span>
@@ -1490,7 +1483,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
   /** Fiche identitaire d'un nouveau post-it, ou bouton d'ouverture de la fiche. */
   const rendreComposer = (colonne: KanbanColonne, zone: { sectionId?: string }) =>
     composerOuverte === cleZone(colonne.id, zone.sectionId) ? (
-      <div className="col-span-2 bg-white rounded-lg border-2 border-violet-300 shadow-sm p-2.5 space-y-2">
+      <div className="w-full bg-white rounded-xl border-2 border-violet-300 shadow-sm p-2.5 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-[10px] font-extrabold uppercase tracking-wider text-violet-600">
             Fiche identitaire
@@ -1717,7 +1710,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
           setComposerDateEcheance('');
           setComposerDateExpedition('');
         }}
-        className="col-span-2 w-full inline-flex items-center justify-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-violet-700 hover:bg-white border border-transparent hover:border-slate-200 rounded-lg px-2 py-1.5 transition-colors cursor-pointer"
+        className="w-full inline-flex items-center justify-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-violet-700 hover:bg-white border border-transparent hover:border-slate-200 rounded-lg px-2 py-1.5 transition-colors cursor-pointer"
       >
         <Plus className="w-3.5 h-3.5" />
         Nouvelle Carte
@@ -1747,12 +1740,12 @@ onDragStart={(e) => dragCarte(e, carte.id)}
         key={zone.sectionId ?? 'unique'}
         onDragOver={(e) => survolZone(e, colonne.id, zone.sectionId, cartesZone.length)}
         onDrop={(e) => deposerDansZone(e, colonne.id, zone.sectionId, cartesZone.length)}
-        className={`grid grid-cols-2 gap-2 content-start transition-colors ${
+        className={`flex flex-col gap-2 content-start transition-colors ${
           zone.section ? 'min-h-[5rem] px-1' : 'min-h-[7rem] rounded-b-2xl'
         } ${surligne ? 'bg-violet-50/70' : ''}`}
       >
         {cartesZone.length === 0 && (
-          <div className="col-span-2 rounded-lg border border-dashed border-slate-300/80 px-3 py-4 text-center text-[11px] text-slate-400">
+          <div className="w-full rounded-lg border border-dashed border-slate-300/80 px-3 py-4 text-center text-[11px] text-slate-400">
             {surligne
               ? 'Déposez la carte ici'
               : avecComposer
@@ -1793,12 +1786,12 @@ onDragStart={(e) => dragCarte(e, carte.id)}
         key={personne.id}
         onDragOver={(e) => survolZonePersonne(e, colonne.id, section.id, personne.id, cartesZone.length)}
         onDrop={(e) => deposerZonePersonne(e, colonne.id, section.id, personne.id, cartesZone.length)}
-        className={`grid grid-cols-2 gap-2 content-start min-h-[5rem] px-1 transition-colors ${
+        className={`flex flex-col gap-2 content-start min-h-[5rem] px-1 transition-colors ${
           surligne ? 'bg-violet-50/70' : ''
         }`}
       >
         {cartesZone.length === 0 && (
-          <div className="col-span-2 rounded-lg border border-dashed border-slate-300/80 px-3 py-4 text-center text-[11px] text-slate-400">
+          <div className="w-full rounded-lg border border-dashed border-slate-300/80 px-3 py-4 text-center text-[11px] text-slate-400">
             {surligne ? 'Déposez la carte ici' : 'Glissez une carte ici'}
           </div>
         )}
@@ -1829,12 +1822,12 @@ onDragStart={(e) => dragCarte(e, carte.id)}
         key={personne.id}
         onDragOver={(e) => survolZonePersonne(e, colonne.id, section.id, personne.id, cartesZone.length)}
         onDrop={(e) => deposerZoneBrodeuse(e, colonne.id, section.id, personne.id, cartesZone.length)}
-        className={`grid grid-cols-2 gap-2 content-start min-h-[5rem] px-1 transition-colors ${
+        className={`flex flex-col gap-2 content-start min-h-[5rem] px-1 transition-colors ${
           surligne ? 'bg-violet-50/70' : ''
         }`}
       >
         {cartesZone.length === 0 && (
-          <div className="col-span-2 rounded-lg border border-dashed border-slate-300/80 px-3 py-4 text-center text-[11px] text-slate-400">
+          <div className="w-full rounded-lg border border-dashed border-slate-300/80 px-3 py-4 text-center text-[11px] text-slate-400">
             {surligne ? 'Déposez la carte ici' : 'Glissez une carte ici'}
           </div>
         )}
@@ -2131,9 +2124,9 @@ onDragStart={(e) => dragCarte(e, carte.id)}
               {nonAssignees.length}
             </span>
           </div>
-          <div className="grid grid-cols-2 gap-2 content-start min-h-[4rem] px-1">
+          <div className="flex flex-col gap-2 content-start min-h-[4rem] px-1">
             {nonAssignees.length === 0 ? (
-              <div className="col-span-2 rounded-lg border border-dashed border-slate-300/80 px-3 py-3 text-center text-[11px] text-slate-400">
+              <div className="w-full rounded-lg border border-dashed border-slate-300/80 px-3 py-3 text-center text-[11px] text-slate-400">
                 {section ? 'Déposez une carte ici pour la désassigner' : 'Aucune carte en attente'}
               </div>
             ) : (
@@ -2353,9 +2346,8 @@ onDragStart={(e) => dragCarte(e, carte.id)}
             </div>
             {premiereColonne ? (
               <>
-                {/* Même largeur de post-it que dans une colonne kanban :
-                    17rem de contenu utile / 2 cartes par ligne, gap de 0.5rem. */}
-                <div className="grid grid-cols-[repeat(auto-fill,8.25rem)] items-start gap-2 content-start">
+                {/* Direction cards reuse the kanban card presentation. */}
+                <div className="grid grid-cols-1 items-start gap-3 content-start sm:grid-cols-2 xl:grid-cols-3">
                   {rendreCartes({}, cartesActives)}
                 </div>
                 {cartesActives.length === 0 && (
@@ -2386,7 +2378,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
   };
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-800 flex flex-col">
+    <div className="kanban-app min-h-screen bg-slate-50 text-slate-800 flex flex-col">
       {/* Bandeau haut : titre, date/heure, sélecteur de vue (même trame que les autres vues) */}
       <div className="relative z-20 border-b border-slate-200 bg-white shadow-xs">
         <div className="w-full px-4 py-4 sm:px-6">
@@ -2394,11 +2386,11 @@ onDragStart={(e) => dragCarte(e, carte.id)}
             <div className="flex flex-col gap-4 min-[900px]:flex-row min-[900px]:items-center min-[900px]:justify-between min-[900px]:gap-6">
             {/* Brand */}
             <div className="flex min-w-0 items-center gap-3.5">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-violet-600 text-white">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-brand text-white shadow-sm shadow-brand/30">
                 <SquareKanban className="h-6 w-6" />
               </div>
               <div className="flex min-w-0 flex-col gap-1.5">
-                <h1 className="m-0 whitespace-normal text-[22px] font-medium leading-[1.2] text-slate-900 min-[900px]:overflow-hidden min-[900px]:text-ellipsis min-[900px]:whitespace-nowrap">
+                <h1 className="m-0 whitespace-normal text-[22px] font-semibold leading-[1.2] text-slate-900 min-[900px]:overflow-hidden min-[900px]:text-ellipsis min-[900px]:whitespace-nowrap">
                   Développement
                 </h1>
                 <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-500">
@@ -2407,7 +2399,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                     {fullFrenchDate}
                   </span>
                   <span className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-lg border border-slate-200 px-2 py-0.5 font-medium tabular-nums text-slate-900">
-                    <Clock className="h-3.5 w-3.5 shrink-0 text-violet-600" />
+                    <Clock className="h-3.5 w-3.5 shrink-0 text-brand" />
                     <span>{parisTime}</span>
                     <span className="text-[11px] font-medium text-slate-400">{LIBELLE_FUSEAU}</span>
                   </span>
@@ -2417,17 +2409,17 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                     <span className="font-semibold uppercase tracking-wide text-slate-400">
                       Environnement
                     </span>
-                    <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-0.5">
+                    <div className="inline-flex rounded-full border border-slate-200 bg-slate-100 p-0.5">
                       {(['developpement', 'direction'] as const).map((env) => (
                         <button
                           key={env}
                           type="button"
                           aria-pressed={environnement === env}
                           onClick={() => changerEnvironnement(env)}
-                          className={`rounded-md px-2.5 py-1 text-[11px] font-bold transition-colors cursor-pointer ${
+                          className={`rounded-full px-3 py-1 text-[11px] font-semibold transition-colors cursor-pointer ${
                             environnement === env
-                              ? 'bg-white text-violet-700 shadow-sm'
-                              : 'text-slate-500 hover:text-slate-800'
+                              ? 'bg-brand text-white shadow-sm'
+                              : 'bg-white text-slate-600 hover:text-slate-900'
                           }`}
                         >
                           {env === 'developpement' ? 'Développement' : 'Direction'}
@@ -2441,38 +2433,46 @@ onDragStart={(e) => dragCarte(e, carte.id)}
 
             {/* Actions */}
             <div className="flex min-w-0 flex-wrap items-center gap-2.5 min-[900px]:justify-end">
-              <span className="hidden whitespace-nowrap text-xs font-semibold text-slate-500 md:inline">
-                {data.cartes.length} tâche{data.cartes.length > 1 ? 's' : ''} •{' '}
-                {environnement === 'direction'
-                  ? '3 onglets'
-                  : `${colonnes.length} colonne${colonnes.length > 1 ? 's' : ''}`}
+              <span className="hidden items-center gap-2 whitespace-nowrap rounded-full border border-slate-200 bg-white px-3 py-1 text-xs font-semibold text-slate-600 md:inline-flex">
+                <span>
+                  {data.cartes.length} tâche{data.cartes.length > 1 ? 's' : ''}
+                </span>
+                <span className="h-1 w-1 rounded-full bg-slate-300" />
+                <span>
+                  {environnement === 'direction'
+                    ? '3 onglets'
+                    : `${colonnes.length} colonne${colonnes.length > 1 ? 's' : ''}`}
+                </span>
               </span>
               <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
             </div>
 
             </div>
 
-            {/* Légende des couleurs, commune aux environnements Développement et Direction */}
-            <div
-              aria-label="Légende des couleurs des cartes"
-              className="flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2 text-[11px] font-semibold text-slate-600"
-            >
-              {COULEURS_KANBAN_IDS.map((couleurId, index) => (
-                <React.Fragment key={couleurId}>
-                  {index > 0 && <span className="text-slate-300">°</span>}
-                  <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+            {/* Onglets de vue + légende des couleurs alignée à droite */}
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="min-w-0">
+                <ViewSwitcher currentPage="developpement" onChangePage={onChangePage} variant="solid" />
+              </div>
+
+              {/* Légende des couleurs : repères visuels des cartes */}
+              <div
+                aria-label="Repères visuels des couleurs de cartes"
+                className="ml-auto flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-3 py-2 shadow-sm"
+              >
+                {COULEURS_KANBAN_IDS.map((couleurId) => (
+                  <span
+                    key={couleurId}
+                    className={`inline-flex items-center gap-2 whitespace-nowrap rounded-lg border px-2.5 py-1.5 text-xs font-semibold text-slate-800 shadow-xs ${KANBAN_COULEURS[couleurId].fond} ${KANBAN_COULEURS[couleurId].bordure}`}
+                  >
                     <span
-                      className={`h-3.5 w-3.5 shrink-0 rounded-[3px] border ${KANBAN_COULEURS[couleurId].fond} ${KANBAN_COULEURS[couleurId].bordure}`}
+                      className={`h-4 w-3.5 shrink-0 rounded-[3px] border shadow-xs ${KANBAN_COULEURS[couleurId].point} ${KANBAN_COULEURS[couleurId].bordure}`}
+                      aria-hidden="true"
                     />
                     {KANBAN_COULEURS[couleurId].label}
                   </span>
-                </React.Fragment>
-              ))}
-            </div>
-
-            {/* Tabs */}
-            <div className="min-w-0">
-              <ViewSwitcher currentPage="developpement" onChangePage={onChangePage} />
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -2481,10 +2481,74 @@ onDragStart={(e) => dragCarte(e, carte.id)}
       {environnement === 'direction' ? (
         renduDirection()
       ) : (
-      /* Tableau kanban : rangée horizontale de colonnes */
-      <div className="flex-1 overflow-x-auto overflow-y-auto">
-        <div className="inline-flex items-start gap-4 px-4 sm:px-6 py-6 min-w-full">
-          {colonnes.map((colonne, indexColonne) => {
+        <>
+          {/* Stage pagination: 5 visible columns per page */}
+          <div className="border-b border-slate-200 bg-white">
+            <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
+              <div className="flex min-w-0 flex-wrap items-center gap-3">
+                <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-700">
+                  <LayoutGrid className="h-3.5 w-3.5 shrink-0 text-slate-400" />
+                  Étapes {colonnes.length === 0 ? 0 : debutPage + 1} à{' '}
+                  {Math.min(debutPage + ETAPES_PAR_PAGE, colonnes.length)} sur {colonnes.length}{' '}
+                  étape{colonnes.length > 1 ? 's' : ''}
+                </span>
+                <div className="flex items-center gap-1" role="tablist" aria-label="Pages d'étapes">
+                  {Array.from({ length: totalPages }, (_, i) => {
+                    const active = i === pageCourante;
+                    const debut = i * ETAPES_PAR_PAGE + 1;
+                    const fin = Math.min((i + 1) * ETAPES_PAR_PAGE, colonnes.length);
+                    return (
+                      <button
+                        key={i}
+                        type="button"
+                        role="tab"
+                        aria-label={`Étapes ${debut} à ${fin}`}
+                        aria-selected={active}
+                        onClick={() => allerPageEtapes(i)}
+                        className={`h-1.5 cursor-pointer rounded-full transition-all ${
+                          active ? 'w-6 bg-brand' : 'w-3 bg-slate-300 hover:bg-slate-400'
+                        }`}
+                      />
+                    );
+                  })}
+                </div>
+                <span className="hidden text-[11px] text-slate-400 sm:inline">
+                  Progression des dossiers de gauche à droite →
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => allerPageEtapes(Math.max(0, pageCourante - 1))}
+                  disabled={pageCourante === 0}
+                  title="Étapes précédentes"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 text-slate-500 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => allerPageEtapes(Math.min(totalPages - 1, pageCourante + 1))}
+                  disabled={pageCourante >= totalPages - 1}
+                  title="Étapes suivantes"
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+
+          {/* Tableau kanban : rangée horizontale de colonnes */}
+          <div className="flex-1 overflow-x-auto overflow-y-auto">
+            <div
+              key={pageCourante}
+              className={`inline-flex min-w-full items-start gap-4 px-4 py-6 sm:px-6 ${
+                sensPage === 1 ? 'kanban-page-next' : 'kanban-page-prev'
+              }`}
+            >
+              {colonnesPage.map((colonne, indexPage) => {
+                const indexColonne = debutPage + indexPage;
             const cartes = cartesDe(colonne.id);
             const enCible = colonneCible === colonne.id && drag?.type === 'carte';
             const colonneEnCible = rangeeCible === colonne.id && drag?.type === 'colonne';
@@ -2505,7 +2569,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                   survolEnteteColonne(e, colonne);
                 }}
                 onDrop={(e) => deposerSurColonne(e, colonne)}
-                className={`${
+                className={`group/col ${
                   aBroderieMain || aBrodeuse ? 'w-[50rem]' : 'w-72'
                 } shrink-0 bg-slate-100/80 rounded-2xl border transition-all ${
                   enCible || colonneEnCible
@@ -2524,9 +2588,9 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                   >
                     <GripVertical className="w-4 h-4" />
                   </span>
-                  <span
-                    className={`w-2.5 h-2.5 rounded-full shrink-0 ${KANBAN_COULEURS[colonne.couleur].point}`}
-                  />
+                  <span className="shrink-0 rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-slate-500">
+                    {String(indexColonne + 1).padStart(2, '0')}
+                  </span>
                   <EditableItemName
                     value={colonne.titre}
                     onSave={(titre) => renommerColonne(colonne.id, titre)}
@@ -2536,41 +2600,43 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                   <span className="ml-auto text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-1.5 py-0.5 tabular-nums shrink-0">
                     {cartes.length}
                   </span>
-                  {sections ? (
+                  <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/col:opacity-100">
+                    {sections ? (
+                      <button
+                        type="button"
+                        onClick={() => fusionnerColonne(colonne.id)}
+                        title="Réassembler les sections en une seule liste"
+                        className="p-1 rounded text-slate-300 hover:text-violet-600 hover:bg-violet-50 transition-colors cursor-pointer shrink-0"
+                      >
+                        <GitMerge className="w-3.5 h-3.5" />
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => scinderColonne(colonne.id)}
+                        title="Scinder la colonne en 2 sections empilées"
+                        className="p-1 rounded text-slate-300 hover:text-violet-600 hover:bg-violet-50 transition-colors cursor-pointer shrink-0"
+                      >
+                        <Scissors className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <button
                       type="button"
-                      onClick={() => fusionnerColonne(colonne.id)}
-                      title="Réassembler les sections en une seule liste"
+                      onClick={() => ajouterSection(colonne.id)}
+                      title="Ajouter une section"
                       className="p-1 rounded text-slate-300 hover:text-violet-600 hover:bg-violet-50 transition-colors cursor-pointer shrink-0"
                     >
-                      <GitMerge className="w-3.5 h-3.5" />
+                      <Plus className="w-3.5 h-3.5" />
                     </button>
-                  ) : (
                     <button
                       type="button"
-                      onClick={() => scinderColonne(colonne.id)}
-                      title="Scinder la colonne en 2 sections empilées"
-                      className="p-1 rounded text-slate-300 hover:text-violet-600 hover:bg-violet-50 transition-colors cursor-pointer shrink-0"
+                      onClick={() => supprimerColonne(colonne.id)}
+                      title="Supprimer la colonne"
+                      className="p-1 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
                     >
-                      <Scissors className="w-3.5 h-3.5" />
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => ajouterSection(colonne.id)}
-                    title="Ajouter une section"
-                    className="p-1 rounded text-slate-300 hover:text-violet-600 hover:bg-violet-50 transition-colors cursor-pointer shrink-0"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => supprimerColonne(colonne.id)}
-                    title="Supprimer la colonne"
-                    className="p-1 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 transition-colors cursor-pointer shrink-0"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
+                  </div>
                 </div>
 
                 {/* Sections : liste simple ou 2 sections empilées ; section BRODERIE MAIN = tableau 4 colonnes ; colonnes BRODERIE MACHINE / LABO CONFECTION = tableau brodeuses */}
@@ -2603,7 +2669,8 @@ onDragStart={(e) => dragCarte(e, carte.id)}
             );
           })}
 
-          {/* Ajout de colonne (style Trello, en bout de rangée) */}
+          {/* Add column (last page only) */}
+          {pageCourante === totalPages - 1 && (
           <div className="w-72 shrink-0">
             {nouvelleColonne ? (
               <div className="bg-slate-100/80 border border-violet-300 rounded-2xl p-3 space-y-2">
@@ -2614,6 +2681,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       ajouterColonne(nouveauTitre);
+                      allerPageEtapes(Math.ceil((colonnes.length + 1) / ETAPES_PAR_PAGE) - 1);
                       setNouveauTitre('');
                       setNouvelleColonne(false);
                     } else if (e.key === 'Escape') {
@@ -2629,6 +2697,7 @@ onDragStart={(e) => dragCarte(e, carte.id)}
                     type="button"
                     onClick={() => {
                       ajouterColonne(nouveauTitre);
+                      allerPageEtapes(Math.ceil((colonnes.length + 1) / ETAPES_PAR_PAGE) - 1);
                       setNouveauTitre('');
                       setNouvelleColonne(false);
                     }}
@@ -2660,8 +2729,493 @@ onDragStart={(e) => dragCarte(e, carte.id)}
               </button>
             )}
           </div>
+          )}
+              </div>
+            </div>
+        </>
+      )}
+
+      {/* Card edit popover: anchored to the clicked card, presentation only. */}
+      {edition && carteEdition && (
+        <div
+          ref={panneauEditionRef}
+          role="dialog"
+          aria-label="Modifier la carte"
+          style={{
+            top: positionEdition?.top ?? 0,
+            left: positionEdition?.left ?? 0,
+            width: `min(${POPOVER_LARGEUR}px, calc(100vw - ${POPOVER_MARGE * 2}px))`,
+            maxHeight: `calc(100vh - ${(positionEdition?.top ?? 0) + POPOVER_MARGE}px)`,
+          }}
+          className={`fixed z-[60] flex flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl ${
+            positionEdition ? 'animate-popover-in' : 'invisible'
+          }`}
+        >
+          {/* Header: title, move info, close */}
+          <div className="flex h-11 shrink-0 items-center gap-2 border-b border-slate-100 pl-4 pr-3">
+            <h2 className="m-0 shrink-0 text-xs font-bold uppercase tracking-[0.05em] text-slate-900">
+              Modifier la carte
+            </h2>
+            <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-brand-soft px-2.5 py-[3px] text-[11px] font-medium text-brand-strong">
+              <Clock className="h-3 w-3 shrink-0" />
+              <span className="truncate">
+                Déplacée le {formatDateFr(dateDeplacementISO)}
+                {emplacementEdition ? ` · ${emplacementEdition}` : ''}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={fermerEdition}
+              aria-label="Fermer"
+              className="ml-auto inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-800"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+
+          {/* Scrollable body: keeps header and footer visible. */}
+          <div className="min-h-0 flex-1 overflow-y-auto">
+            <div className="@container flex flex-col gap-[9px] px-4 pb-2.5 pt-3">
+              {/* Main fields */}
+              <div className="space-y-[9px]">
+                {/* Title + stage */}
+                <div className="grid grid-cols-1 gap-2.5 @min-[400px]:grid-cols-[minmax(0,1fr)_auto]">
+                  <div className="min-w-0">
+                    <label htmlFor="carte-titre" className="kanban-label">
+                      Titre
+                    </label>
+                    <input
+                      id="carte-titre"
+                      autoFocus
+                      value={edition.titre}
+                      onChange={(event) => setEdition({ ...edition, titre: event.target.value })}
+                      className="kanban-field"
+                      placeholder="Titre de la tâche"
+                    />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="kanban-label">Étape</span>
+                    <div
+                      role="group"
+                      aria-label="Étape"
+                      className="inline-flex h-[30px] w-full items-center gap-0.5 rounded-[7px] bg-slate-100 p-0.5 @min-[400px]:w-auto"
+                    >
+                      {(['proto', 'dt'] as const).map((etape) => (
+                        <button
+                          key={etape}
+                          type="button"
+                          aria-pressed={edition.etat === etape}
+                          onClick={() => setEdition({ ...edition, etat: etape })}
+                          className={`h-full min-w-[44px] flex-1 rounded-[5px] px-3 text-[11px] font-semibold uppercase tracking-[0.04em] transition-colors @min-[400px]:flex-none ${
+                            edition.etat === etape
+                              ? 'bg-brand font-bold text-white'
+                              : 'text-slate-600 hover:bg-white'
+                          }`}
+                        >
+                          {etape}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Traiteur / Client / Commercial */}
+                <div className="grid grid-cols-1 gap-2.5 @min-[400px]:grid-cols-[1fr_1.2fr_1fr]">
+                  <div>
+                    <label htmlFor="carte-traiteur" className="kanban-label">
+                      Traiteur
+                    </label>
+                    <select
+                      id="carte-traiteur"
+                      value={edition.traiteur}
+                      onChange={(event) => setEdition({ ...edition, traiteur: event.target.value })}
+                      className="kanban-field"
+                    >
+                      <option value="">—</option>
+                      {edition.traiteur && !valeursTraiteur.includes(edition.traiteur) && (
+                        <option value={edition.traiteur}>{edition.traiteur}</option>
+                      )}
+                      {valeursTraiteur.map((valeur) => (
+                        <option key={valeur} value={valeur}>
+                          {valeur}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="carte-client" className="kanban-label">
+                      Client
+                    </label>
+                    <input
+                      id="carte-client"
+                      list="clients-suggestions"
+                      value={edition.client}
+                      onChange={(event) => setEdition({ ...edition, client: event.target.value })}
+                      className="kanban-field"
+                      placeholder="Nom du client"
+                    />
+                    <datalist id="clients-suggestions">
+                      {suggestionsClient.map((valeur) => (
+                        <option key={valeur} value={valeur} />
+                      ))}
+                    </datalist>
+                  </div>
+                  <div>
+                    <label htmlFor="carte-commercial" className="kanban-label">
+                      Commercial
+                    </label>
+                    <select
+                      id="carte-commercial"
+                      value={edition.commercial}
+                      onChange={(event) =>
+                        setEdition({ ...edition, commercial: event.target.value })
+                      }
+                      className="kanban-field"
+                    >
+                      <option value="">—</option>
+                      {edition.commercial && !valeursCommercial.includes(edition.commercial) && (
+                        <option value={edition.commercial}>{edition.commercial}</option>
+                      )}
+                      {valeursCommercial.map((valeur) => (
+                        <option key={valeur} value={valeur}>
+                          {valeur}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+
+                {/* Type */}
+                <div>
+                  <span className="kanban-label">Type</span>
+                  <div role="group" aria-label="Type de carte" className="flex h-7 items-center gap-2">
+                    {COULEURS_KANBAN_IDS.map((couleurId) => {
+                      const actif = edition.couleur === couleurId;
+                      const couleur = KANBAN_COULEURS[couleurId];
+                      return (
+                        <button
+                          key={couleurId}
+                          type="button"
+                          aria-pressed={actif}
+                          aria-label={couleur.label}
+                          title={couleur.label}
+                          onClick={() => setEdition({ ...edition, couleur: couleurId })}
+                          className={`grid h-6 w-6 shrink-0 place-items-center rounded-md transition-shadow ${couleur.point} ${
+                            actif
+                              ? 'ring-2 ring-slate-900 ring-offset-2'
+                              : 'hover:ring-2 hover:ring-slate-300'
+                          }`}
+                        >
+                          {actif && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
+                        </button>
+                      );
+                    })}
+                    <span className="ml-1.5 truncate text-xs font-medium text-slate-500">
+                      {KANBAN_COULEURS[edition.couleur].label}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Dates */}
+                <div className="grid grid-cols-2 gap-2.5">
+                  <div>
+                    <label htmlFor="carte-echeance" className="kanban-label">
+                      Échéance
+                    </label>
+                    <input
+                      id="carte-echeance"
+                      type="date"
+                      value={edition.dateEcheance ?? ''}
+                      onChange={(event) =>
+                        setEdition({ ...edition, dateEcheance: event.target.value || undefined })
+                      }
+                      className="kanban-field"
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="carte-expedition" className="kanban-label">
+                      Expédition
+                    </label>
+                    <input
+                      id="carte-expedition"
+                      type="date"
+                      value={edition.dateExpedition ?? ''}
+                      onChange={(event) =>
+                        setEdition({ ...edition, dateExpedition: event.target.value || undefined })
+                      }
+                      className={`kanban-field ${erreurExpedition ? 'kanban-field-error' : ''}`}
+                      aria-invalid={!!erreurExpedition}
+                      aria-describedby={erreurExpedition ? 'erreur-expedition' : undefined}
+                    />
+                    {erreurExpedition && (
+                      <p
+                        id="erreur-expedition"
+                        className="mt-1 text-[11px] font-medium text-rose-600"
+                      >
+                        {erreurExpedition}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Notes */}
+                <div>
+                  <label htmlFor="carte-remarques" className="kanban-label">
+                    Remarques
+                  </label>
+                  <textarea
+                    id="carte-remarques"
+                    rows={2}
+                    value={edition.remarques}
+                    onChange={(event) => setEdition({ ...edition, remarques: event.target.value })}
+                    className="kanban-field kanban-textarea"
+                    placeholder="Remarques libres…"
+                  />
+                </div>
+              </div>
+
+              {/* Waiting periods: collapsed by default, one click to expand. */}
+              <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                <div className="flex h-8 items-center gap-2 px-2.5">
+                  <button
+                    type="button"
+                    aria-expanded={attenteDepliee}
+                    onClick={() => setAttenteDepliee((ouvert) => !ouvert)}
+                    className="inline-flex min-w-0 items-center gap-1.5 text-[11px] font-bold uppercase tracking-[0.06em] text-slate-700"
+                  >
+                    <ChevronRight
+                      className={`h-3 w-3 shrink-0 text-slate-500 transition-transform ${attenteDepliee ? 'rotate-90' : ''}`}
+                    />
+                    Attente
+                    <span className="grid h-[18px] min-w-[18px] place-items-center rounded-full bg-slate-200/80 px-1 text-[11px] font-semibold text-slate-600">
+                      {edition.attentes.length}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEdition({
+                        ...edition,
+                        attentes: [
+                          ...edition.attentes,
+                          {
+                            id: `ATT-${Date.now().toString(36).toUpperCase()}`,
+                            dateEntree: getDateISOSite(),
+                          },
+                        ],
+                      });
+                      setAttenteDepliee(true);
+                    }}
+                    className="ml-auto inline-flex items-center text-xs font-semibold text-brand-strong transition-colors hover:text-brand"
+                  >
+                    + Ajouter
+                  </button>
+                </div>
+
+                {attenteDepliee && (
+                  <div className="space-y-1.5 border-t border-slate-200 bg-white p-2">
+                    {edition.attentes.length === 0 && (
+                      <p className="rounded-md border border-dashed border-slate-200 bg-slate-50 px-2 py-2 text-center text-[10px] text-slate-400">
+                        Aucune période d’attente
+                      </p>
+                    )}
+                  {edition.attentes.map((attente, index) => {
+                    const libelle = attente.libelle?.trim() ?? '';
+                    const motifConnu = MOTIFS_ATTENTE.includes(libelle);
+                    const valeurSelect = libelle === '' ? MOTIF_ATTENTE_AUTRE : libelle;
+                    const enCours = !attente.dateSortie;
+                    const duree = attente.dateEntree
+                      ? Math.max(
+                          0,
+                          joursEntreDatesISO(attente.dateEntree, attente.dateSortie || getDateISOSite())
+                        )
+                      : null;
+                    const erreurAttente = erreursAttentes[index];
+
+                    return (
+                      <div
+                        key={attente.id}
+                        className="rounded-lg border border-slate-200 bg-slate-50 p-2"
+                      >
+                        <div className="flex items-center gap-2">
+                          <select
+                            aria-label={`Motif de l’attente ${index + 1}`}
+                            value={motifConnu || libelle === '' ? valeurSelect : libelle}
+                            onChange={(event) => {
+                              const valeur = event.target.value;
+                              const attentes = [...edition.attentes];
+                              attentes[index] = {
+                                ...attente,
+                                libelle: valeur === MOTIF_ATTENTE_AUTRE ? '' : valeur,
+                              };
+                              setEdition({ ...edition, attentes });
+                            }}
+                            className="kanban-field-compact min-w-0 flex-1"
+                          >
+                            {MOTIFS_ATTENTE.map((motif) => (
+                              <option key={motif} value={motif}>
+                                {motif}
+                              </option>
+                            ))}
+                            {libelle !== '' && !motifConnu && (
+                              <option value={libelle}>{libelle}</option>
+                            )}
+                            <option value={MOTIF_ATTENTE_AUTRE}>{MOTIF_ATTENTE_AUTRE}</option>
+                          </select>
+                          <button
+                            type="button"
+                            aria-label="Supprimer cette attente"
+                            onClick={() => {
+                              if (window.confirm('Supprimer cette période d’attente ?')) {
+                                setEdition({
+                                  ...edition,
+                                  attentes: edition.attentes.filter((_, i) => i !== index),
+                                });
+                              }
+                            }}
+                            className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-rose-500 transition-colors hover:bg-rose-50 hover:text-rose-700"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </button>
+                        </div>
+
+                        {(!motifConnu || libelle === '') && (
+                          <input
+                            aria-label={`Motif personnalisé de l’attente ${index + 1}`}
+                            value={attente.libelle ?? ''}
+                            onChange={(event) => {
+                              const attentes = [...edition.attentes];
+                              attentes[index] = { ...attente, libelle: event.target.value };
+                              setEdition({ ...edition, attentes });
+                            }}
+                            placeholder="Précisez le motif…"
+                            className="kanban-field-compact mt-2 w-full"
+                          />
+                        )}
+
+                        <div className="mt-2 grid grid-cols-2 gap-2">
+                          <div>
+                            <label
+                              htmlFor={`attente-entree-${attente.id}`}
+                              className="kanban-label-compact"
+                            >
+                              Entrée
+                            </label>
+                            <input
+                              id={`attente-entree-${attente.id}`}
+                              type="date"
+                              value={attente.dateEntree ?? ''}
+                              onChange={(event) => {
+                                const attentes = [...edition.attentes];
+                                attentes[index] = { ...attente, dateEntree: event.target.value };
+                                setEdition({ ...edition, attentes });
+                              }}
+                              className={`kanban-field-compact w-full ${
+                                erreurAttente ? 'kanban-field-error' : ''
+                              }`}
+                            />
+                          </div>
+                          <div>
+                            <label
+                              htmlFor={`attente-sortie-${attente.id}`}
+                              className="kanban-label-compact"
+                            >
+                              Sortie
+                            </label>
+                            <input
+                              id={`attente-sortie-${attente.id}`}
+                              type="date"
+                              value={attente.dateSortie ?? ''}
+                              disabled={enCours}
+                              aria-invalid={!!erreurAttente}
+                              onChange={(event) => {
+                                const attentes = [...edition.attentes];
+                                attentes[index] = {
+                                  ...attente,
+                                  dateSortie: event.target.value || undefined,
+                                };
+                                setEdition({ ...edition, attentes });
+                              }}
+                              className={`kanban-field-compact w-full disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 ${
+                                erreurAttente ? 'kanban-field-error' : ''
+                              }`}
+                            />
+                          </div>
+                        </div>
+
+                        {erreurAttente && (
+                          <p className="mt-1 text-[11px] font-medium text-rose-600">{erreurAttente}</p>
+                        )}
+
+                        <div className="mt-2 flex items-center justify-between gap-2">
+                          <label className="inline-flex items-center gap-2 text-[11px] font-medium text-slate-600">
+                            <input
+                              type="checkbox"
+                              checked={enCours}
+                              onChange={(event) => {
+                                const attentes = [...edition.attentes];
+                                attentes[index] = {
+                                  ...attente,
+                                  // Checking "En cours" clears the exit date; unchecking seeds it with today.
+                                  dateSortie: event.target.checked
+                                    ? undefined
+                                    : attente.dateSortie || getDateISOSite(),
+                                };
+                                setEdition({ ...edition, attentes });
+                              }}
+                              className="h-3.5 w-3.5 rounded border-slate-300 accent-brand text-brand focus:ring-brand/30"
+                            />
+                            En cours
+                          </label>
+                          <span className="text-[11px] font-semibold text-slate-500">
+                            Durée :{' '}
+                            {duree === null
+                              ? '—'
+                              : `${duree} jour${duree > 1 ? 's' : ''}`}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="flex h-[50px] shrink-0 items-center gap-2 border-t border-slate-100 px-4">
+            <button
+              type="button"
+              onClick={() => {
+                // supprimerCarte owns the confirmation dialog.
+                if (supprimerCarte(edition.id)) fermerEdition();
+              }}
+              className="inline-flex h-[30px] items-center gap-1.5 rounded-md px-1.5 text-xs font-semibold text-rose-600 transition-colors hover:text-rose-700"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Supprimer
+            </button>
+            <div className="ml-auto flex items-center gap-2">
+              <button
+                type="button"
+                onClick={fermerEdition}
+                className="inline-flex h-[30px] items-center justify-center rounded-md border border-slate-300 bg-white px-3.5 text-xs font-semibold text-slate-800 transition-colors hover:bg-slate-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={enregistrerEdition}
+                disabled={!enregistrementAutorise}
+                className="inline-flex h-[30px] items-center justify-center gap-1.5 rounded-md bg-brand px-3.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Check className="h-3.5 w-3.5" />
+                Enregistrer
+              </button>
+            </div>
+          </div>
         </div>
-      </div>
       )}
     </div>
   );

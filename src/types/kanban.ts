@@ -13,27 +13,27 @@ export const KANBAN_COULEURS: Record<
 > = {
   blanc: {
     label: 'Commande client',
-    point: 'bg-white ring-1 ring-slate-300',
-    fond: 'bg-white',
-    bordure: 'border-slate-200',
+    point: 'bg-sky-500',
+    fond: 'bg-sky-100',
+    bordure: 'border-sky-300',
   },
   jaune: {
     label: 'RobRAK essai',
-    point: 'bg-yellow-300',
-    fond: 'bg-yellow-200',
-    bordure: 'border-yellow-300',
+    point: 'bg-amber-500',
+    fond: 'bg-amber-100',
+    bordure: 'border-amber-300',
   },
   vert: {
     label: 'RobRAK client',
-    point: 'bg-green-400',
-    fond: 'bg-green-200',
-    bordure: 'border-green-300',
+    point: 'bg-emerald-500',
+    fond: 'bg-emerald-100',
+    bordure: 'border-emerald-300',
   },
   bleu: {
     label: 'Keep',
-    point: 'bg-blue-400',
-    fond: 'bg-blue-200',
-    bordure: 'border-blue-300',
+    point: 'bg-slate-400',
+    fond: 'bg-slate-200',
+    bordure: 'border-slate-300',
   },
 };
 
