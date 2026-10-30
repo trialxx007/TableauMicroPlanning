@@ -74,7 +74,7 @@ export const Header: React.FC<HeaderProps> = ({
 
             {/* Actions */}
             <div className="flex min-w-0 flex-wrap items-center gap-2.5 min-[900px]:justify-end">
-              {!lectureSeule && (
+              {!lectureSeule && currentPage !== 'archive' && (
                 <button
                   onClick={onOpenCreateModal}
                   className="inline-flex h-[38px] shrink-0 cursor-pointer items-center gap-1.5 whitespace-nowrap rounded-[10px] bg-blue-600 px-4 text-sm font-medium text-white shadow-sm transition-colors duration-150 hover:bg-blue-700 active:bg-blue-800"

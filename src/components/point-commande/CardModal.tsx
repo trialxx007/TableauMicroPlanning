@@ -164,6 +164,7 @@ export const CardModal: React.FC<CardModalProps> = ({
   );
   const [jalons, setJalons] = useState<Record<JalonCode, JalonState>>({});
   const [okProd, setOkProd] = useState(false);
+  const [dateTerminaison, setDateTerminaison] = useState<string | undefined>();
   const [ofs, setOfs] = useState<OrdreFabrication[]>([]);
   const [quantiteDemandee, setQuantiteDemandee] = useState<number>(100);
   const [quantiteFinie, setQuantiteFinie] = useState<number>(0);
@@ -211,6 +212,7 @@ export const CardModal: React.FC<CardModalProps> = ({
       setTypeCarte((initialData.typeCarte as TypeCarte) ?? 'R');
       setJalons(jalonsInitiaux(initialData));
       setOkProd(Boolean(initialData.okProd));
+      setDateTerminaison(initialData.dateTerminaison);
       const normalizedOfs = (initialData.ofs || []).map((o) => ({
         ...o,
         quantiteFinie: computeOfQuantiteFinie(o),
@@ -234,6 +236,7 @@ export const CardModal: React.FC<CardModalProps> = ({
       setTypeCarte('R');
       setJalons(preremplirJalons(cataloguePourType('R')));
       setOkProd(false);
+      setDateTerminaison(createPrefill?.dateTerminaison);
       setOfs([]);
       setQuantiteDemandee(200);
       setQuantiteFinie(0);
@@ -536,6 +539,7 @@ export const CardModal: React.FC<CardModalProps> = ({
         dateRdl: jalons['RDL']?.valide ? getNowParis().dateStr : undefined,
         okProd: Boolean(okProd),
         dateOkProd: okProd ? getNowParis().dateStr : undefined,
+        dateTerminaison: dateTerminaison ?? '',
         ofs,
         quantiteDemandee: Number(quantiteDemandee),
         quantiteFinie: Number(quantiteFinie),
@@ -720,6 +724,30 @@ export const CardModal: React.FC<CardModalProps> = ({
               <span>
                 {okProdEffectif ? (autoOkProd ? 'OK Prod auto' : 'OK Prod validé') : 'Valider OK Prod'}
               </span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() =>
+                setDateTerminaison((current) =>
+                  current ? undefined : getNowParis().dateStr
+                )
+              }
+              disabled={lectureSeule}
+              aria-pressed={Boolean(dateTerminaison)}
+              title={
+                dateTerminaison
+                  ? 'Cliquer pour retirer ce modèle de l’archive'
+                  : 'Marquer ce modèle comme terminé et l’envoyer dans l’archive'
+              }
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold whitespace-nowrap transition-colors ${
+                dateTerminaison
+                  ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                  : 'bg-white text-slate-600 border-slate-300 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300'
+              } ${lectureSeule ? 'cursor-default' : 'cursor-pointer'}`}
+            >
+              <CheckCircle2 className="w-3.5 h-3.5" />
+              <span>{dateTerminaison ? 'Modèle terminé' : 'Terminer le modèle'}</span>
             </button>
 
             <button
@@ -1217,7 +1245,7 @@ export const CardModal: React.FC<CardModalProps> = ({
               </span>
               {!isAddingOF && !lectureSeule && <button type="button" onClick={() => setIsAddingOF(true)} className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold text-slate-900 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg shadow-2xs transition-colors cursor-pointer"><Plus className="w-3 h-3" /><span>Ajouter un OF</span></button>}
             </div>
-            <OFSubTable cardId={initialData?.id || 'NOUVELLE-CARTE'} totalDemandee={quantiteDemandee} onChangeTotalDemandee={setQuantiteDemandee} ofs={ofs} isAddingOF={isAddingOF} onCloseAddOF={() => setIsAddingOF(false)} onUpdateOFs={(newOfs) => { setOfs(newOfs); const totalFinie = newOfs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0); if (newOfs.length > 0) { setQuantiteFinie(totalFinie); } }} />
+            <OFSubTable cardId={initialData?.id || 'NOUVELLE-CARTE'} totalDemandee={quantiteDemandee} onChangeTotalDemandee={setQuantiteDemandee} ofs={ofs} isAddingOF={isAddingOF} onCloseAddOF={() => setIsAddingOF(false)} lectureSeule={lectureSeule} onUpdateOFs={(newOfs) => { setOfs(newOfs); const totalFinie = newOfs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0); if (newOfs.length > 0) { setQuantiteFinie(totalFinie); } }} />
           </div>
 
           {/* Section 3: Remarques */}

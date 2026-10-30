@@ -14,10 +14,12 @@ import {
 import type {
   CardItem,
   CardJalon,
+  DestinationCatalogue,
   JalonCategorie,
   JalonCatalogue,
   JalonCode,
 } from '../src/types/card.ts';
+import { OF_DESTINATIONS } from '../src/types/card.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -56,6 +58,11 @@ function openDb(): DatabaseSync {
  * alourdirait chaque lecture. Si le besoin évolue, seul `data` est à migrer.
  */
 function initSchema(conn: DatabaseSync): void {
+  const destinationsAlreadyExisted = Boolean(
+    conn
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'destinations'")
+      .get()
+  );
   conn.exec(`
     CREATE TABLE IF NOT EXISTS jalons (
       code      TEXT PRIMARY KEY,
@@ -63,6 +70,11 @@ function initSchema(conn: DatabaseSync): void {
       categorie TEXT NOT NULL DEFAULT 'STATUT',
       ordre     INTEGER NOT NULL DEFAULT 0,
       cree_le   TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS destinations (
+      code      TEXT PRIMARY KEY,
+      libelle   TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS cards (
@@ -103,6 +115,15 @@ function initSchema(conn: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_card_jalons_card ON card_jalons(card_id);
     CREATE INDEX IF NOT EXISTS idx_journal_at ON journal_modifications(at DESC);
   `);
+
+  if (!destinationsAlreadyExisted) {
+    const insertDestination = conn.prepare(
+      'INSERT OR IGNORE INTO destinations (code, libelle) VALUES (?, ?)'
+    );
+    for (const destination of OF_DESTINATIONS) {
+      insertDestination.run(destination.code, destination.label);
+    }
+  }
 
   // Le classement des jalons par grandeur (vert / bleu) est arrivé après la création
   // de la table : une base existante n'a pas la colonne. `CREATE TABLE IF NOT EXISTS`
@@ -370,6 +391,51 @@ function getDb(): DatabaseSync {
   initSchema(conn);
   seedIfEmpty(conn);
   return conn;
+}
+
+/* --------------------------------------------------- destinations */
+
+export function listDestinations(): DestinationCatalogue[] {
+  const rows = getDb()
+    .prepare('SELECT code, libelle FROM destinations ORDER BY code COLLATE NOCASE')
+    .all() as { code: string; libelle: string }[];
+  return rows.map(({ code, libelle }) => ({ code, label: libelle }));
+}
+
+export function createDestination(codeValue: unknown, labelValue: unknown): DestinationCatalogue {
+  const code = typeof codeValue === 'string' ? codeValue.trim().toUpperCase() : '';
+  const label = typeof labelValue === 'string' ? labelValue.trim() : '';
+  if (!code || !label) throw new Error('Le code et le nom sont requis');
+  if (code.length > 3) throw new Error('Le code ne peut pas dépasser 3 caractères');
+
+  const conn = getDb();
+  const exists = conn
+    .prepare('SELECT 1 FROM destinations WHERE UPPER(code) = UPPER(?)')
+    .get(code);
+  if (exists) throw new Error('Ce code existe déjà');
+
+  try {
+    conn.prepare('INSERT INTO destinations (code, libelle) VALUES (?, ?)').run(code, label);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (message.includes('UNIQUE constraint failed: destinations.code')) {
+      throw new Error('Ce code existe déjà');
+    }
+    throw error;
+  }
+  return { code, label };
+}
+
+export function deleteDestination(codeValue: unknown): DestinationCatalogue | undefined {
+  const code = typeof codeValue === 'string' ? codeValue.trim().toUpperCase() : '';
+  if (!code) throw new Error('Le code est requis');
+  const conn = getDb();
+  const row = conn
+    .prepare('SELECT code, libelle FROM destinations WHERE UPPER(code) = UPPER(?)')
+    .get(code) as { code: string; libelle: string } | undefined;
+  if (!row) return undefined;
+  conn.prepare('DELETE FROM destinations WHERE code = ?').run(row.code);
+  return { code: row.code, label: row.libelle };
 }
 
 /* ------------------------------------------------------------------ jalons */

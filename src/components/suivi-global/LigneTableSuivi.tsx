@@ -416,16 +416,17 @@ function SlotCase({
   const jalonsNomenclatures = jalonsCarte.filter((j) => j.categorie === 'NOMENCLATURE');
   const jalonsStatuts = jalonsCarte.filter((j) => j.categorie === 'STATUT');
 
-  // La case jauge deux cases empilées : si l'autre slot est déjà rempli, le
-  // slot vide reste compact (min-h) et la carte occupe tout le reste.
-  const pileCourante =
+  // Une carte seule dans sa pile ne doit pas être étirée sur toute la hauteur
+  // de la ligne (elle laisserait un grand vide interne) : elle garde sa hauteur
+  // naturelle et le slot vide occupe le reste comme zone de dépôt.
+  const pileCourante: (ChaineSlotCard | null | undefined)[] =
     slotType === 'modeleEnCours'
       ? row.modeleEnCoursCards
-      : slotType === 'lancement' && lancementIndex != null
-      ? (row.prochainsLancementsCards?.[lancementIndex] ?? [])
-      : [];
-  const autreSlotRempli =
-    slotIndex != null ? Boolean(pileCourante[1 - slotIndex]) : false;
+      : slotType === 'lancement'
+      ? row.prochainsLancementsCards?.[lancementIndex ?? 0] ?? []
+      : row.expeditionCards;
+  const carteSeule =
+    slotIndex != null && Boolean(slotCard) && !pileCourante[1 - slotIndex];
 
   // Identifiant de case : encode les coordonnées (ligne + colonne + index) du
   // slot, relues au dépôt par `parseSlotId`.
@@ -448,9 +449,7 @@ function SlotCase({
       return (
         <div
           data-case-id={slotId}
-          className={`w-full min-h-[50px] flex items-center justify-center text-[11px] text-slate-300 rounded-xl border border-dashed border-slate-200 p-1 ${
-            autreSlotRempli ? 'flex-none' : 'flex-1'
-          }`}
+          className="w-full min-h-[50px] flex-1 flex items-center justify-center text-[11px] text-slate-300 rounded-xl border border-dashed border-slate-200 p-1"
           title="Case vide"
         >
           —
@@ -462,9 +461,7 @@ function SlotCase({
         type="button"
         data-case-id={slotId}
         onClick={() => onOuvrirActionSlot(row.id, titreSlot, slotType, lancementIndex, slotIndex)}
-        className={`w-full min-h-[50px] flex items-center justify-center gap-1 text-[11px] font-medium rounded-xl transition-all border border-dashed p-1 text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 border-slate-200 hover:border-blue-300 cursor-pointer before:content-['+'] before:text-sm before:font-bold before:leading-none ${
-          autreSlotRempli ? 'flex-none' : 'flex-1'
-        }`}
+        className="w-full min-h-[50px] flex-1 flex items-center justify-center gap-1 text-[11px] font-medium rounded-xl transition-all border border-dashed p-1 text-slate-300 hover:text-blue-600 hover:bg-blue-50/50 border-slate-200 hover:border-blue-300 cursor-pointer before:content-['+'] before:text-sm before:font-bold before:leading-none"
         title="Cliquez pour assigner une carte, ou glissez une carte ici"
       >
         Nouvelle Carte
@@ -483,7 +480,10 @@ function SlotCase({
   const enMarge = !enAlerte && jalonsCarte.some((j) => j.enMarge);
 
   return (
-    <div data-case-id={slotId} className="flex flex-col gap-1 flex-1 min-h-0 w-full">
+    <div
+      data-case-id={slotId}
+      className={`flex flex-col gap-1 min-h-0 w-full ${carteSeule ? 'flex-none' : 'flex-1'}`}
+    >
       {/* Conteneur unifié : la ring relie la bande Alerte + la carte. Toute la
           carte (bande incluse) est saisissable pour l'échange. */}
       <div

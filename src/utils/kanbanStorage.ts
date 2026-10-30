@@ -14,7 +14,7 @@ import {
 import { dateISOFromDateTime, estDateISO, getDateISOSite } from './dateFrance.ts';
 
 /** Clé du localStorage (convention `aic_*` comme la vue courante). */
-const CLE = 'aic_kanban_dev_v1';
+const CLE = 'aic_kanban_dev_v2';
 
 /** Id unique suffisant pour du usage local (jamais collisionné entre sessions). */
 export function nouvelId(): string {
@@ -27,92 +27,125 @@ function couleurValide(couleur: unknown, defaut: KanbanCouleurId): KanbanCouleur
     : defaut;
 }
 
-/** Tableau de démarrage : 4 colonnes canoniques et quelques post-its d'exemple. */
+/**
+ * Tableau de démarrage du kanban Développement (flux atelier fourni par
+ * l'équipe). La clé de stockage est versionnée : une nouvelle version repart
+ * de ce jeu de données, puis les modifications restent locales au navigateur.
+ */
 export function kanbanInitial(): KanbanData {
   const colonnes: KanbanColonne[] = [
-    { id: 'KBC-BACKLOG', titre: 'Backlog', ordre: 0, couleur: 'blanc' },
-    { id: 'KBC-AFAIRE', titre: 'À faire', ordre: 1, couleur: 'bleu' },
-    { id: 'KBC-ENCOURS', titre: 'En cours', ordre: 2, couleur: 'jaune' },
-    { id: 'KBC-TERMINE', titre: 'Terminé', ordre: 3, couleur: 'vert' },
-  ];
-  const maintenant = new Date().toISOString();
-  const dateEntreeZone = getDateISOSite();
-  const cartes: KanbanCarte[] = [
+    { id: 'KBC-AFAIRE', titre: 'CONTROLE QUALITE', ordre: 0, couleur: 'blanc' },
+    { id: 'KBC-BACKLOG', titre: 'PATRONNAGE', ordre: 1, couleur: 'blanc' },
+    { id: 'KBC-ENCOURS', titre: 'PAV', ordre: 2, couleur: 'blanc' },
     {
-      id: nouvelId(),
-      titre: 'Demande client : coloris crème pour la réf. T-204',
-      etat: 'En attente',
-      traiteur: 'Équipe design',
-      client: 'Client T-204',
-      remarques: 'Quantité 120 pcs, réponse attendue vendredi.',
+      id: 'KBC-TERMINE',
+      titre: 'PUNCHING/PDF',
+      ordre: 3,
       couleur: 'blanc',
-      colonneId: 'KBC-BACKLOG',
-      ordre: 0,
-      creeLe: maintenant,
-      dateEntreeZone,
+      sections: [
+        { id: 'KB-MVF5320G-LZ16I', titre: 'PUNCHING', ordre: 0 },
+        { id: 'KB-MVF5320G-1UDJ5', titre: 'PDF', ordre: 1 },
+      ],
     },
+    { id: 'KB-MVEZ3HSK-E0Z76', titre: 'PAV', ordre: 4, couleur: 'blanc' },
+    { id: 'KB-MVEYYEN5-SADL9', titre: 'PLACEMENT', ordre: 5, couleur: 'blanc' },
     {
-      id: nouvelId(),
-      titre: 'Robrak essai : prototype manche sur tissu technique',
-      etat: 'En cours',
-      traiteur: 'Équipe prototype',
-      client: 'Robrak',
-      couleur: 'jaune',
-      colonneId: 'KBC-AFAIRE',
-      ordre: 0,
-      creeLe: maintenant,
-      dateEntreeZone,
+      id: 'KB-MVEZMH28-XHG19',
+      titre: 'PLAN DE COUPE/TRACE',
+      ordre: 6,
+      couleur: 'blanc',
+      sections: [
+        { id: 'KB-MVF57C3I-0X81I', titre: 'PLAN DE COUPE', ordre: 0 },
+        { id: 'KB-MVF57C3I-B4ODC', titre: 'TRACE', ordre: 1 },
+      ],
     },
+    { id: 'KB-MVF57IYT-VJFFF', titre: 'COUPE', ordre: 7, couleur: 'blanc' },
     {
-      id: nouvelId(),
-      titre: 'Robrak essai : montage du col montant XXL',
-      etat: 'En cours',
-      traiteur: 'Atelier montage',
-      client: 'Robrak',
-      couleur: 'jaune',
-      colonneId: 'KBC-ENCOURS',
-      ordre: 0,
-      creeLe: maintenant,
-      dateEntreeZone,
-    },
-    {
-      id: nouvelId(),
-      titre: 'Robrak essai validé : coupe et tombé réf. B-118',
-      etat: 'Terminé',
-      traiteur: 'Contrôle qualité',
-      client: 'Robrak',
-      couleur: 'vert',
-      colonneId: 'KBC-TERMINE',
-      ordre: 0,
-      creeLe: maintenant,
-      dateEntreeZone,
-    },
-    {
-      id: nouvelId(),
-      titre: 'Keep : patronage du col boutonné conservé',
-      etat: 'Validé',
-      traiteur: 'Équipe patronnage',
-      client: 'Interne',
-      couleur: 'bleu',
-      colonneId: 'KBC-AFAIRE',
-      ordre: 1,
-      creeLe: maintenant,
-      dateEntreeZone,
-    },
-  ];
-  return {
-    colonnes,
-    cartes: cartes.map((carte) => ({
-      ...carte,
-      historiqueDeplacements: [
+      id: 'KB-MVF667X9-HV2Q1',
+      titre: 'BRODERIE MACHINE/BRODERIE MAIN',
+      ordre: 8,
+      couleur: 'blanc',
+      sections: [
+        { id: 'KB-MVF6699B-605VG', titre: 'BRODERIE MACHINE', ordre: 0 },
         {
-          date: dateEntreeZone,
-          colonneId: carte.colonneId,
-          ...(carte.sectionId ? { sectionId: carte.sectionId } : {}),
+          id: 'KB-MVF6699B-QLFAB',
+          titre: 'BRODERIE MAIN',
+          ordre: 1,
+          personnes: [
+            { id: 'KB-MVG8Z32K-I9VRC', titre: 'niry', bloc: 'client', ordre: 0 },
+            { id: 'KB-MVG9AT39-M0VYH', titre: '', bloc: 'initiatives', ordre: 1 },
+            { id: 'KB-MVG9B06C-7TNMK', titre: '', bloc: 'initiatives', ordre: 2 },
+            { id: 'KB-MVG9B1QT-S1AOU', titre: '', bloc: 'client', ordre: 3 },
+          ],
         },
       ],
-    })),
-  };
+    },
+    { id: 'KB-MVF67FHF-ZUS4M', titre: 'LABO', ordre: 9, couleur: 'blanc' },
+    { id: 'KB-MVF67KX8-OQJPH', titre: 'QUALITE', ordre: 10, couleur: 'blanc' },
+    { id: 'KB-MVF67TLQ-G6AG6', titre: 'KIT CUIR', ordre: 11, couleur: 'blanc' },
+  ];
+  const cartes: KanbanCarte[] = [
+    {
+      id: 'KB-MVF00XQN-G248T',
+      titre: 'teste rapide',
+      etat: 'proto',
+      traiteur: 'siege',
+      client: 'zimmerman',
+      remarques: 'tsisy remarque',
+      couleur: 'blanc',
+      colonneId: 'KBC-BACKLOG',
+      dateEntreeZone: '2026-10-19',
+      historiqueDeplacements: [{ date: '2026-10-19', colonneId: 'KBC-BACKLOG' }],
+      ordre: 0,
+      creeLe: '2026-10-19T08:34:58.895Z',
+    },
+    {
+      id: 'KB-MVF8BC4Y-YZTP7',
+      titre: 'iui',
+      etat: 'kjgu',
+      traiteur: 'n,vhj',
+      client: 'hvj',
+      remarques: 'bnvhj',
+      couleur: 'bleu',
+      colonneId: 'KBC-BACKLOG',
+      date: '2026-10-21',
+      dateEntreeZone: '2026-10-19',
+      historiqueDeplacements: [{ date: '2026-10-19', colonneId: 'KBC-BACKLOG' }],
+      ordre: 2,
+      creeLe: '2026-10-19T12:27:01.042Z',
+    },
+    {
+      id: 'KB-MVEYQKYU-GP7L3',
+      titre: 'milamina',
+      couleur: 'vert',
+      colonneId: 'KBC-ENCOURS',
+      dateEntreeZone: '2026-10-23',
+      historiqueDeplacements: [{ date: '2026-10-23', colonneId: 'KBC-ENCOURS' }],
+      ordre: 0,
+      creeLe: '2026-10-19T07:58:56.162Z',
+    },
+    {
+      id: 'KB-MVEYQKYU-3FBD0',
+      titre: 'Rédiger le cahier des charges du module alertes',
+      couleur: 'jaune',
+      colonneId: 'KB-MVF667X9-HV2Q1',
+      sectionId: 'KB-MVF6699B-QLFAB',
+      personneId: 'KB-MVG8Z32K-I9VRC',
+      bloc: 'client',
+      dateEntreeZone: '2026-10-23',
+      historiqueDeplacements: [
+        {
+          date: '2026-10-23',
+          colonneId: 'KB-MVF667X9-HV2Q1',
+          sectionId: 'KB-MVF6699B-QLFAB',
+          personneId: 'KB-MVG8Z32K-I9VRC',
+        },
+      ],
+      ordre: 0,
+      creeLe: '2026-10-19T07:58:56.162Z',
+    },
+  ];
+  return { colonnes, cartes };
 }
 
 /**

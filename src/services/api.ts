@@ -1,4 +1,11 @@
-import { CardFormData, CardItem, JalonCategorie, JalonCatalogue } from '../types/card.ts';
+import {
+  CardFormData,
+  CardItem,
+  DestinationCatalogue,
+  JalonCategorie,
+  JalonCatalogue,
+  OF_DESTINATIONS,
+} from '../types/card.ts';
 import { CATALOGUE_INITIAL, cataloguePourType, categorieParCode } from '../data/mockJalons.ts';
 import { getNowParis } from '../utils/dateFrance.ts';
 import { normaliserDateJalon, normaliserSemaine } from '../utils/jalons.ts';
@@ -368,6 +375,47 @@ export const jalonApi = {
       `/api/v1/cards/${encodeURIComponent(cardId)}/jalons/${encodeURIComponent(code)}`,
       { method: 'DELETE', headers: enteteProfil() }
     );
+    const json = await res.json().catch(() => ({ success: false }));
+    if (!res.ok || !json.success) {
+      throw new Error(json?.error || `Erreur ${res.status}`);
+    }
+  },
+};
+
+export const destinationApi = {
+  async getAll(): Promise<DestinationCatalogue[]> {
+    try {
+      const res = await fetch('/api/v1/destinations');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json.success && Array.isArray(json.data)) {
+        return json.data as DestinationCatalogue[];
+      }
+      throw new Error('Réponse invalide du catalogue des destinations');
+    } catch (error) {
+      console.warn('Erreur chargement destinations, catalogue initial utilisé', error);
+      return OF_DESTINATIONS.map(({ code, label }) => ({ code, label }));
+    }
+  },
+
+  async create(code: string, label: string): Promise<DestinationCatalogue> {
+    const res = await fetch('/api/v1/destinations', {
+      method: 'POST',
+      headers: entetesJson(),
+      body: JSON.stringify({ code, label }),
+    });
+    const json = await res.json().catch(() => ({ success: false }));
+    if (!res.ok || !json.success) {
+      throw new Error(json?.error || `Erreur ${res.status}`);
+    }
+    return json.data as DestinationCatalogue;
+  },
+
+  async delete(code: string): Promise<void> {
+    const res = await fetch(`/api/v1/destinations/${encodeURIComponent(code)}`, {
+      method: 'DELETE',
+      headers: enteteProfil(),
+    });
     const json = await res.json().catch(() => ({ success: false }));
     if (!res.ok || !json.success) {
       throw new Error(json?.error || `Erreur ${res.status}`);

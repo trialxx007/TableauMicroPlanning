@@ -7,12 +7,15 @@ import type { CardItem, CardJalon, OrdreFabrication } from '../src/types/card.ts
 import { normaliserDateJalon, okProdAuto } from '../src/utils/jalons.ts';
 import {
   createJalon,
+  createDestination,
   deleteCard,
+  deleteDestination,
   deleteJalon,
   deleteJalonForCard,
   getCard,
   insertCard,
   listCards,
+  listDestinations,
   listJalons,
   prochainIdCarte,
   renameJalon,
@@ -156,6 +159,7 @@ const CHAMPS_CARTE_SUIVIS: { cle: string; lire: (c: CardItem) => unknown }[] = [
   { cle: 'quantiteFinie', lire: (c) => c.quantiteFinie },
   { cle: 'statut', lire: (c) => c.statut },
   { cle: 'okProd', lire: (c) => Boolean(c.okProd) },
+  { cle: 'dateTerminaison', lire: (c) => c.dateTerminaison },
   { cle: 'decisionReunion', lire: (c) => c.decisionReunion },
   { cle: 'notes', lire: (c) => c.notes },
 ];
@@ -273,6 +277,49 @@ function diffCarte(avant: CardItem, apres: CardItem): ChampModifie[] {
 }
 
 /* ------------------------------------------------------------------ jalons */
+
+apiRouter.get('/destinations', (_req: Request, res: Response) => {
+  const data = listDestinations();
+  res.json({ success: true, count: data.length, data });
+});
+
+apiRouter.post('/destinations', (req: Request, res: Response) => {
+  try {
+    const created = createDestination(req.body?.code, req.body?.label);
+    journaliser({
+      profil: profilDe(req),
+      action: 'destination.ajoute',
+      cible: `catalogue · ${created.code}`,
+      details: `Destination ${created.code} (${created.label})`,
+    });
+    res.status(201).json({ success: true, data: created });
+  } catch (err) {
+    const message = (err as Error).message;
+    res.status(message === 'Ce code existe déjà' ? 409 : 400).json({
+      success: false,
+      error: message,
+    });
+  }
+});
+
+apiRouter.delete('/destinations/:code', (req: Request, res: Response) => {
+  try {
+    const deleted = deleteDestination(req.params.code);
+    if (!deleted) {
+      res.status(404).json({ success: false, error: 'Destination non trouvée' });
+      return;
+    }
+    journaliser({
+      profil: profilDe(req),
+      action: 'destination.supprime',
+      cible: `catalogue · ${deleted.code}`,
+      details: `Destination ${deleted.code} (${deleted.label}) supprimée du catalogue`,
+    });
+    res.json({ success: true, data: deleted });
+  } catch (err) {
+    res.status(400).json({ success: false, error: (err as Error).message });
+  }
+});
 
 // Catalogue partagé des jalons : une seule base pour tout le monde. Il porte les
 // codes, leurs intitulés et leur grandeur (vert / bleu), pas les états : un jalon
@@ -468,6 +515,9 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
     jalons,
     okProd: okProdFinal,
     ...(okProdFinal ? { dateOkProd: String(body.dateOkProd || dateStr) } : {}),
+    ...(typeof body.dateTerminaison === 'string' && body.dateTerminaison.trim()
+      ? { dateTerminaison: body.dateTerminaison.trim() }
+      : {}),
     ofs: Array.isArray(body.ofs) ? body.ofs : [],
     quantiteDemandee,
     quantiteFinie,
@@ -528,6 +578,12 @@ apiRouter.put('/cards/:id', (req: Request, res: Response) => {
     dateOkProd: okProdPut
       ? existant.dateOkProd ?? body.dateOkProd ?? dateStr
       : existant.dateOkProd,
+    dateTerminaison:
+      body.dateTerminaison !== undefined
+        ? typeof body.dateTerminaison === 'string' && body.dateTerminaison.trim()
+          ? body.dateTerminaison.trim()
+          : undefined
+        : existant.dateTerminaison,
     ofs: Array.isArray(body.ofs) ? body.ofs : existant.ofs,
     quantiteDemandee,
     quantiteFinie,
@@ -569,6 +625,7 @@ const CHAMPS_MODIFIABLES = [
   'typeCarte',
   'okProd',
   'dateOkProd',
+  'dateTerminaison',
   'dateRdl',
   'ofs',
   'decisionReunion',
@@ -613,6 +670,12 @@ apiRouter.patch('/cards/:id', (req: Request, res: Response) => {
   };
   for (const champ of CHAMPS_MODIFIABLES) {
     if (body[champ] !== undefined) (patch as Record<string, unknown>)[champ] = body[champ];
+  }
+  if (patch.dateTerminaison !== undefined) {
+    patch.dateTerminaison =
+      typeof patch.dateTerminaison === 'string' && patch.dateTerminaison.trim()
+        ? patch.dateTerminaison.trim()
+        : undefined;
   }
   if (body.jalons !== undefined) {
     patch.jalons = parseJalons(body.jalons) ?? existing.jalons;

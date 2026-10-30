@@ -5,6 +5,7 @@ import { Header } from './components/layout/Header.tsx';
 import { StatsOverview, KpiFilterType } from './components/ui/StatsOverview.tsx';
 import { FilterBar, SortField, SortOrder } from './components/ui/FilterBar.tsx';
 import { CardTable } from './components/point-commande/CardTable.tsx';
+import { ArchiveView } from './components/point-commande/ArchiveView.tsx';
 import { CardModal } from './components/point-commande/CardModal.tsx';
 import { HistoriqueView } from './components/historique/HistoriqueView.tsx';
 import { SuiviGlobalView } from './components/suivi-global/SuiviGlobalView.tsx';
@@ -34,6 +35,7 @@ export default function App() {
     const memoire: AppPage =
       sauvegarde === 'suivi-global' ||
       sauvegarde === 'point-journalier' ||
+      sauvegarde === 'archive' ||
       sauvegarde === 'tableaux-ofs' ||
       sauvegarde === 'historique' ||
       sauvegarde === 'developpement'
@@ -159,6 +161,12 @@ export default function App() {
         );
       } else if (updates.jalons !== undefined) {
         showNotification(`Jalons mis à jour pour ${updated.modele}`);
+      } else if (Object.hasOwn(updates, 'dateTerminaison')) {
+        if (updates.dateTerminaison) {
+          showNotification(`Modèle ${updated.modele} archivé`);
+        } else {
+          showNotification(`Modèle ${updated.modele} réactivé`);
+        }
       }
     } catch (e) {
       console.error('Erreur mise à jour', e);
@@ -208,21 +216,27 @@ export default function App() {
     }
   };
 
+  const activeCards = useMemo(() => cards.filter((card) => !card.dateTerminaison), [cards]);
+  const archivedCards = useMemo(
+    () => cards.filter((card) => Boolean(card.dateTerminaison)),
+    [cards]
+  );
+
   const pendingReviewCount = useMemo(() => {
-    return cards.filter((c) => c.statut === 'BLOQUE' || !c.pointFaitAujourdhui || c.statut === 'EN_ATTENTE').length;
-  }, [cards]);
+    return activeCards.filter((c) => c.statut === 'BLOQUE' || !c.pointFaitAujourdhui || c.statut === 'EN_ATTENTE').length;
+  }, [activeCards]);
 
   const uniqueClients = useMemo(() => {
-    return Array.from(new Set(cards.map((c) => c.client))).sort();
-  }, [cards]);
+    return Array.from(new Set(activeCards.map((c) => c.client))).sort();
+  }, [activeCards]);
 
   const jalonsUtilises = useMemo(() => {
-    const codes = new Set(cards.flatMap((c) => (c.jalons ?? []).map((j) => j.code)));
+    const codes = new Set(activeCards.flatMap((c) => (c.jalons ?? []).map((j) => j.code)));
     return catalogue.filter((j) => codes.has(j.code));
-  }, [cards, catalogue]);
+  }, [activeCards, catalogue]);
 
   const filteredCards = useMemo(() => {
-    return cards
+    return activeCards
       .filter((card) => {
         if (isMeetingFilterActive) {
           if (card.statut !== 'BLOQUE' && card.statut !== 'EN_ATTENTE' && card.pointFaitAujourdhui) {
@@ -294,7 +308,7 @@ export default function App() {
         return sortOrder === 'asc' ? diff : -diff;
       });
   }, [
-    cards,
+    activeCards,
     catalogue,
     isMeetingFilterActive,
     searchQuery,
@@ -310,6 +324,10 @@ export default function App() {
     const [jalons, data] = await Promise.all([jalonApi.getAll(), cardApi.getAll()]);
     setCatalogue(jalons);
     setCards(data);
+  };
+
+  const handleReactivateCard = async (id: string) => {
+    await handleUpdateCard(id, { dateTerminaison: '' });
   };
 
   const handleConnexion = (profil: Profil) => {
@@ -346,12 +364,12 @@ export default function App() {
         </div>
       )}
 
-      {currentPage === 'point-journalier' && (
+      {(currentPage === 'point-journalier' || currentPage === 'archive') && (
         <Header
           onOpenCreateModal={handleOpenCreate}
           currentPage={currentPage}
           onChangePage={setCurrentPage}
-          cardsCount={cards.length}
+          cardsCount={currentPage === 'archive' ? archivedCards.length : activeCards.length}
           profil={session.profil}
           onDeconnexion={handleDeconnexion}
         />
@@ -359,7 +377,7 @@ export default function App() {
 
       <div key={currentPage} className="flex-1 flex flex-col animate-page-in">
       {currentPage === 'point-journalier' ? (
-        cards.length === 0 ? (
+        activeCards.length === 0 ? (
           <main className="flex-1 page-container py-6">
             <div className="bg-white rounded-xl border border-slate-200 p-12 text-center shadow-xs">
               <div className="w-12 h-12 rounded-full bg-slate-100 text-slate-400 mx-auto flex items-center justify-center mb-3">
@@ -386,7 +404,7 @@ export default function App() {
         <main className="flex-1 page-container py-6">
           <>
             <StatsOverview
-              cards={cards}
+              cards={activeCards}
               activeFilter={kpiFilter}
               onSelectFilter={setKpiFilter}
               isMeetingFilterActive={isMeetingFilterActive}
@@ -470,11 +488,13 @@ export default function App() {
           </> )
         </main>
         )
+      ) : currentPage === 'archive' ? (
+        <ArchiveView cards={archivedCards} onReactivateCard={handleReactivateCard} />
       ) : currentPage === 'suivi-global' ? (
         <main className="flex-1 w-full">
           <SuiviGlobalView
             onChangePage={setCurrentPage}
-            cards={cards}
+            cards={activeCards}
             onUpdateCard={handleUpdateCard}
             profil={session.profil}
             onDeconnexion={handleDeconnexion}
@@ -496,7 +516,7 @@ export default function App() {
       ) : currentPage === 'tableaux-ofs' ? (
         <main className="flex-1 w-full">
           <TableauxOFsView
-            cards={cards}
+            cards={activeCards}
             onUpdateCard={handleUpdateCard}
             onChangePage={setCurrentPage}
             profil={session.profil}

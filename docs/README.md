@@ -1,10 +1,12 @@
+
 # Suivi Global — Point Commande Journalière
 
 Application de suivi de production pour atelier textile haut de gamme.
 Elle réunit le **Point Commande Journalière** (les cartes de la réunion), le
 **Suivi Global** (chaînes, inspections, expéditions), les **Tableaux des OFs**
-(ordres de fabrication par client et par modèle), l'**Historique des
-modifications** et le tableau **Développement** (kanban des tâches internes).
+(ordres de fabrication par client et par modèle), l'**Archive** des modèles
+terminés, l'**Historique des modifications** et le tableau **Développement**
+(kanban des tâches internes).
 
 ---
 
@@ -28,12 +30,12 @@ même réseau que le serveur.
 L'écran d'accueil affiche quatre profils. Trois sont protégés par un mot de
 passe commun : **`1234`**. Le profil *Utilisateur* entre sans mot de passe.
 
-| Profil | Mot de passe | Ce qu'il peut faire |
-| --- | --- | --- |
-| **Utilisateur** | aucun | Consultation seule : lit toutes les vues métier, mais ne peut rien modifier. |
-| **Resp Planning** | `1234` | Modifie tout, sur toutes les vues métier **+ l'onglet Développement**. |
-| **Production** | `1234` | Uniquement l'onglet **Tableaux des OFs** (modifie les quantités d'OF, pas le type). |
-| **Direction** | `1234` | Toutes les vues **+ l'onglet Développement + l'onglet Historique**. |
+| Profil                  | Mot de passe | Ce qu'il peut faire                                                                        |
+| ----------------------- | ------------ | ------------------------------------------------------------------------------------------ |
+| **Utilisateur**   | aucun        | Consultation seule : lit les vues métier, mais ne peut rien modifier.                       |
+| **Resp Planning** | `1234`     | Modifie les vues métier, l'**Archive** et l'onglet **Développement**.                 |
+| **Production**    | `1234`     | Uniquement l'onglet **Tableaux des OFs** (modifie les quantités d'OF, pas le type). |
+| **Direction**     | `1234`     | Toutes les vues, dont l'**Archive**, le **Développement** et l'**Historique**.       |
 
 > Le mot de passe est **commun** aux trois profils protégés et vaut `1234`.
 
@@ -59,6 +61,7 @@ votre profil). Un profil qui n'a qu'un seul onglet autorisé (Production) voit
 directement cet onglet, sans sélecteur.
 
 ### Point Commande Journalière
+
 - **Pointer une quantité** : cliquez sur la **Qté finie** d'une ligne, saisissez
   la valeur et validez → l'avancement, le reste à produire et le statut se
   recalculent.
@@ -68,11 +71,15 @@ directement cet onglet, sans sélecteur.
   l'état (*En attente*, *Semaine*, *Date*, *TBC*, *Validé*). La couleur indique
   l'échéance (vert à l'heure, orange en marge, rouge en retard).
 - **OK Prod / Statut** : modifiables directement dans la ligne.
+- **Terminer un modèle** : depuis sa fiche, activez « Terminer le modèle » puis
+  enregistrez. Il quitte les vues opérationnelles et rejoint l'onglet **Archive**.
+  Depuis l'archive, le bouton « Réactiver » le remet dans les vues actives.
 - **Recherche** : barre de filtres pour retrouver un client, une saison ou un
   modèle.
 - **Copier la saison** : bouton de copie à côté de la valeur.
 
 ### Suivi Global
+
 - Consultez les **chaînes** de production et leurs **cases** (modèle en cours,
   prochains lancements, inspections, expéditions).
 - **Glissez-déposez** une carte d'une case à une autre.
@@ -82,11 +89,15 @@ directement cet onglet, sans sélecteur.
   postes et restaurées au rechargement.
 
 ### Tableaux des OFs
+
 - Récapitulatif des OFs **regroupé par client et par modèle**.
 - Le profil **Production** peut y modifier les **quantités** des OF directement
   dans le tableau (mais pas le type d'OF).
+- Un OF ou sous-OF marqué **Terminé** ou **Bloqué** est verrouillé ;
+  **Déverrouiller** permet de le modifier sans changer son statut.
 
 ### Développement *(Resp Planning / Direction)*
+
 - Tableau **kanban** de type Trello pour les tâches internes, indépendant des
   cartes de production.
 - **Colonnes** : ajouter, renommer, supprimer, réordonner par glisser-déposer.
@@ -103,6 +114,7 @@ directement cet onglet, sans sélecteur.
 - Les tâches sont enregistrées dans le **navigateur** (voir « Astuces »).
 
 ### Historique des modifications *(Direction)*
+
 - Liste du plus récent au plus ancien de **toutes les écritures** (Planning et
   Production) : date/heure, profil auteur, action, objet, et détail **champ par
   champ** (avant → après).

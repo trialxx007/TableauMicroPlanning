@@ -1,9 +1,9 @@
 import React from 'react';
-import { ClipboardList, TableProperties, Table2, History, SquareKanban } from 'lucide-react';
+import { ClipboardList, TableProperties, Table2, History, SquareKanban, Archive } from 'lucide-react';
 import { ongletsAutorises } from '@/src/utils/auth.ts';
 import { useProfil } from '@/src/context/ProfilContext.tsx';
 
-export type AppPage = 'point-journalier' | 'suivi-global' | 'tableaux-ofs' | 'historique' | 'developpement';
+export type AppPage = 'point-journalier' | 'archive' | 'suivi-global' | 'tableaux-ofs' | 'historique' | 'developpement';
 
 interface ViewSwitcherProps {
   currentPage: AppPage;
@@ -66,6 +66,15 @@ const TABS: TabConfig[] = [
     activeIcon: 'bg-violet-600 text-white',
     idleIcon: 'bg-violet-50 text-violet-600',
     activeLabel: 'text-violet-700',
+  },
+  {
+    page: 'archive',
+    label: 'Archive',
+    icon: <Archive className="h-[15px] w-[15px]" />,
+    title: 'Modèles terminés',
+    activeIcon: 'bg-amber-600 text-white',
+    idleIcon: 'bg-amber-50 text-amber-600',
+    activeLabel: 'text-amber-700',
   },
 ];
 

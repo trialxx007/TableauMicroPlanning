@@ -734,7 +734,9 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
   // Active / désactive l'expédition du modèle d'un bloc d'inspection.
   // Activation : la carte rejoint la colonne Expédition et le suivi OF par OF
-  // s'ouvre. Désactivation : la carte est retirée de la colonne Expédition.
+  // s'ouvre. Désactivation : la carte est retirée de la colonne ; ses dates et
+  // statuts d'expédition sont archivés par `handleAssignSlotCard` et restaurés
+  // au clic suivant (fausse manip réversible).
   // Le modèle reste dans tous les cas dans « Modèle en cours ».
   const handleEnvoyerExpedition = useCallback(
     (rowId: string, blocIndex: number) => {
@@ -746,7 +748,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
       const pile = ligne.expeditionCards as PileDeCartes;
       const existant = pile.findIndex((s) => s?.cardId === cardId);
       if (existant >= 0) {
-        // Déjà en expédition : le clic désactive le suivi.
+        // Déjà en expédition : le clic désactive le suivi. Le retrait archive
+        // automatiquement `expeditionOfs` (dates + statuts) pour la réactivation.
         handleAssignSlotCard(rowId, 'expedition', null, undefined, existant);
         setExpeditionOuverte((prev) =>
           prev?.rowId === rowId && prev.slotIndex === existant ? null : prev

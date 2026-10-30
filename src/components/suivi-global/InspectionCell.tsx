@@ -267,12 +267,12 @@ export const InspectionCell: React.FC<InspectionCellProps> = ({
                       onClick={onEnvoyerExpedition}
                       title={
                         expeditionActive
-                          ? "Désactiver l'expédition de ce modèle"
+                          ? "Désactiver l'expédition de ce modèle (données conservées)"
                           : 'Envoyer ce modèle en expédition'
                       }
                       aria-label={
                         expeditionActive
-                          ? "Désactiver l'expédition de ce modèle"
+                          ? "Désactiver l'expédition de ce modèle (données conservées)"
                           : 'Envoyer ce modèle en expédition'
                       }
                       className={`inline-flex items-center justify-center h-5 w-5 rounded-md border transition-colors cursor-pointer ${

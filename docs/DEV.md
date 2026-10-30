@@ -127,6 +127,8 @@ src/
 
     point-commande/
       CardTable.tsx          Tableau Point Commande (cartes, jalons, quantités)
+      ArchiveView.tsx        Archive des modèles terminés et réactivation
+      ArchiveView.tsx        Archive des modèles terminés et réactivation
       CardModal.tsx          Fiche complète d'une carte (création/édition)
       OFSubTable.tsx         Sous-tableau des OFs d'une carte
       OfPopover.tsx          Popover de détail d'un OF
@@ -202,9 +204,9 @@ Toute la logique vit dans `src/utils/auth.ts` :
 | Profil | Onglets autorisés | Écriture |
 | --- | --- | --- |
 | `utilisateur` | point-journalier, suivi-global, tableaux-ofs | aucune (`lectureSeule = true`) |
-| `resp-planning` | point-journalier, suivi-global, tableaux-ofs, developpement | toutes |
+| `resp-planning` | point-journalier, archive, suivi-global, tableaux-ofs, developpement | toutes |
 | `production` | tableaux-ofs uniquement | quantités d'OF seulement (`typeModifiable = false`) ; pas de création/suppression ni de fiche |
-| `direction` | les 4 + historique | toutes |
+| `direction` | point-journalier, archive, suivi-global, tableaux-ofs, historique, developpement | toutes |
 
 Le profil connecté est envoyé au serveur via l'en-tête **`X-Profil-Id`**
 (`services/api.ts`) : il ne restreint pas les accès côté serveur, il sert
@@ -295,7 +297,7 @@ insertions) pour faire évoluer une base existante sans perte de données.
 | Cartes, OFs, jalons, historique, layout du Suivi Global | Base SQLite (serveur) | **oui**, entre tous les postes |
 | Session du profil | `sessionStorage` (`aic_session_profil_v1`) | non (par onglet) |
 | Vue courante | `sessionStorage` (`aic_vue_actuelle_v1`) | non |
-| Tableau Développement (kanban) | `localStorage` (`aic_kanban_dev_v1`) | non (par navigateur) |
+| Tableau Développement (kanban) | `localStorage` (`aic_kanban_dev_v2`) | non (par navigateur) |
 | Alertes manuelles / popover / clignotement | `localStorage` (clés `*_v*`) | non |
 
 Le Suivi Global écrit aussi le layout dans `localStorage` en **repli** si le

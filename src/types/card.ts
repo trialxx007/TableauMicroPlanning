@@ -3,6 +3,12 @@ export type CardStatus = 'EN_ATTENTE' | 'EN_COURS' | 'TERMINE' | 'BLOQUE';
 /** Destination d'un OF : pays vers lequel il est expédié. */
 export type DestinationOF = 'FR' | 'US' | 'ES' | 'MX';
 
+/**
+ * Destination saisie en texte libre : au-delà des pays du catalogue, un libellé
+ * ou un code arbitraire peut être porté par l'OF.
+ */
+export type DestinationLibre = string;
+
 export const OF_DESTINATIONS: {
   code: DestinationOF;
   label: string;
@@ -13,6 +19,11 @@ export const OF_DESTINATIONS: {
   { code: 'ES', label: 'Espagne', classe: 'bg-amber-50 text-amber-800 border-amber-200' },
   { code: 'MX', label: 'Mexique', classe: 'bg-emerald-50 text-emerald-800 border-emerald-200' },
 ];
+
+export interface DestinationCatalogue {
+  code: string;
+  label: string;
+}
 
 export type OFType = 'I' | 'O' | 'L' | 'BDA';
 
@@ -43,6 +54,7 @@ export interface SousOrdreFabrication {
   quantiteDemandee: number;
   quantiteFinie: number;
   statut: CardStatus;
+  isLocked?: boolean;
   nbCases: number;
   casesEnCours: number[];
   casesLabels?: string[];
@@ -55,13 +67,14 @@ export interface OrdreFabrication {
   titre?: string;
   ordreRDL: number;
   type: OFType;
-  /** Destination (pays) de l'OF : FR, US, ES, MX… */
-  destination?: DestinationOF;
+  /** Destination (pays) de l'OF : FR, US, ES, MX… ou texte libre. */
+  destination?: DestinationOF | DestinationLibre;
   nomExecutant: string;
   quantiteDemandee: number;
   quantiteFinie: number;
   resteAProduire: number;
   statut: CardStatus;
+  isLocked?: boolean;
   notes?: string;
   sousOfs?: SousOrdreFabrication[];
   nbCases?: number;
@@ -116,6 +129,7 @@ export interface CardItem {
   dateRdl?: string;
   okProd: boolean;
   dateOkProd?: string;
+  dateTerminaison?: string;
   ofs: OrdreFabrication[];
   quantiteDemandee: number;
   quantiteFinie: number;

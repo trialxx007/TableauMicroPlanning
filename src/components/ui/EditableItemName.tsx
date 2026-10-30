@@ -8,6 +8,7 @@ interface EditableItemNameProps {
   onSave: (newName: string) => void;
   className?: string;
   prefix?: string;
+  disabled?: boolean;
 }
 
 export const EditableItemName: React.FC<EditableItemNameProps> = ({
@@ -17,6 +18,7 @@ export const EditableItemName: React.FC<EditableItemNameProps> = ({
   onSave,
   className = '',
   prefix,
+  disabled = false,
 }) => {
   const [isEditing, setIsEditing] = useState(false);
   const [text, setText] = useState(value || defaultValue);
@@ -32,6 +34,13 @@ export const EditableItemName: React.FC<EditableItemNameProps> = ({
       inputRef.current.select();
     }
   }, [isEditing]);
+
+  useEffect(() => {
+    if (disabled) {
+      setIsEditing(false);
+      setText(value || defaultValue);
+    }
+  }, [disabled, value, defaultValue]);
 
   const handleSave = () => {
     setIsEditing(false);
@@ -54,6 +63,7 @@ export const EditableItemName: React.FC<EditableItemNameProps> = ({
           ref={inputRef}
           type="text"
           value={text}
+          disabled={disabled}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
@@ -67,15 +77,16 @@ export const EditableItemName: React.FC<EditableItemNameProps> = ({
           }}
           onBlur={handleSave}
           placeholder={placeholder || defaultValue}
-          className="text-sm font-bold text-slate-900 bg-white border-2 border-slate-900 rounded px-2 py-1 focus:outline-hidden shadow-xs min-w-[160px] max-w-[260px]"
+          className="text-sm font-bold text-slate-900 bg-white border-2 border-slate-900 rounded px-2 py-1 focus:outline-hidden shadow-xs min-w-[160px] max-w-[260px] disabled:cursor-not-allowed disabled:opacity-60"
         />
         <button
           type="button"
           onMouseDown={(e) => {
             e.preventDefault();
-            handleSave();
+            if (!disabled) handleSave();
           }}
-          className="p-1 text-emerald-600 hover:text-emerald-800 rounded cursor-pointer"
+          disabled={disabled}
+          className="p-1 text-emerald-600 hover:text-emerald-800 rounded cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
           title="Valider"
         >
           <Check className="w-3.5 h-3.5" />
@@ -86,8 +97,10 @@ export const EditableItemName: React.FC<EditableItemNameProps> = ({
 
   return (
     <div
-      onClick={() => setIsEditing(true)}
-      className={`group inline-flex items-center gap-1 cursor-pointer py-0 px-1 rounded hover:bg-slate-200/80 transition-all ${className}`}
+      onClick={() => {
+        if (!disabled) setIsEditing(true);
+      }}
+      className={`group inline-flex items-center gap-1 py-0 px-1 rounded transition-all ${disabled ? 'cursor-default' : 'cursor-pointer hover:bg-slate-200/80'} ${className}`}
       title="Cliquer pour personnaliser le nom"
     >
       {prefix && <span className="text-slate-400 font-mono text-[11px]">{prefix}</span>}

@@ -9,6 +9,7 @@ export type ProfilId = 'utilisateur' | 'resp-planning' | 'production' | 'directi
 
 export type OngletId =
   | 'point-journalier'
+  | 'archive'
   | 'suivi-global'
   | 'tableaux-ofs'
   | 'historique'
@@ -17,6 +18,7 @@ export type OngletId =
 /** Miroir exact de `AppPage` (ViewSwitcher) : désynchronisation = onglet perdu. */
 const ONGLETS: readonly OngletId[] = [
   'point-journalier',
+  'archive',
   'suivi-global',
   'tableaux-ofs',
   'historique',
@@ -29,13 +31,13 @@ const ONGLETS: readonly OngletId[] = [
  * - Production : uniquement les OFs.
  * - Resp Planning : vues métier + Développement (kanban).
  * - Direction : tout, y compris l'historique et le Développement.
- * - Utilisateur : les trois vues métier.
+ * - Utilisateur : vues métier, sans archive.
  */
 const ONGLETS_PAR_PROFIL: Record<ProfilId, readonly OngletId[]> = {
   utilisateur: ['point-journalier', 'suivi-global', 'tableaux-ofs'],
-  'resp-planning': ['point-journalier', 'suivi-global', 'tableaux-ofs', 'developpement'],
+  'resp-planning': ['point-journalier', 'archive', 'suivi-global', 'tableaux-ofs', 'developpement'],
   production: ['tableaux-ofs'],
-  direction: ['point-journalier', 'suivi-global', 'tableaux-ofs', 'historique', 'developpement'],
+  direction: ['point-journalier', 'archive', 'suivi-global', 'tableaux-ofs', 'historique', 'developpement'],
 };
 
 export function ongletsAutorises(profilId: ProfilId): OngletId[] {

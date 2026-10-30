@@ -1,19 +1,24 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { OrdreFabrication, SousOrdreFabrication, CardStatus, OFType, OF_TYPES, OF_DESTINATIONS, DestinationOF, normalizeOFType } from '@/src/types/card.ts';
+import React, { useId, useMemo, useState, useEffect, useLayoutEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
+import { OrdreFabrication, SousOrdreFabrication, CardStatus, OFType, OF_TYPES, OF_DESTINATIONS, DestinationCatalogue, normalizeOFType } from '@/src/types/card.ts';
 import { EnCoursGrid } from './EnCoursCasesSection.tsx';
 import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
 import { useInspectionsParCarte } from '@/src/context/InspectionsParCarteContext.tsx';
 import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
+import { destinationApi } from '@/src/services/api.ts';
 import {
   Check,
   ChevronDown,
   ChevronUp,
+  Search,
   Plus,
+  Lock,
+  Unlock,
   Trash2,
   X,
 } from 'lucide-react';
 
-// Chevron dessiné en fond du <select> Destination (l'apparence native est retirée).
+// Chevron dessiné en fond du champ Destination (l'apparence native est retirée).
 const CHEVRON_DESTINATION =
   "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6l6 -6'/%3E%3C/svg%3E\")";
 
@@ -25,6 +30,7 @@ interface OFSubTableProps {
   onChangeTotalDemandee?: (n: number) => void;
   isAddingOF?: boolean;
   onCloseAddOF?: () => void;
+  lectureSeule?: boolean;
 }
 
 export function normalizeCases(cases: number[] | undefined, nbCases: number, totalAssigne: number): number[] {
@@ -126,6 +132,483 @@ const getStatusBadge = (statut: CardStatus) => {
   }
 };
 
+interface DestinationComboProps {
+  value: string | undefined;
+  options: (DestinationCatalogue & { inCatalogue: boolean })[];
+  onChange: (value: string | undefined) => void;
+  title: string;
+  lectureSeule: boolean;
+  onCreate: (destination: DestinationCatalogue) => Promise<void>;
+  onDelete: (code: string) => Promise<void>;
+}
+
+const DestinationCombo: React.FC<DestinationComboProps> = ({
+  value,
+  options,
+  onChange,
+  title,
+  lectureSeule,
+  onCreate,
+  onDelete,
+}) => {
+  const [open, setOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  const [search, setSearch] = useState('');
+  const [code, setCode] = useState('');
+  const [name, setName] = useState('');
+  const [autoCode, setAutoCode] = useState(false);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [codeError, setCodeError] = useState('');
+  const [nameError, setNameError] = useState('');
+  const [submitError, setSubmitError] = useState('');
+  const [deleteError, setDeleteError] = useState('');
+  const [deletingCode, setDeletingCode] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const codeRef = useRef<HTMLInputElement>(null);
+  const listId = useId();
+  const [popoverPosition, setPopoverPosition] = useState<{ top: number; left: number } | null>(
+    null
+  );
+  const normalizedSearch = normalizeDestinationSearch(search);
+  const filteredOptions = options.filter((destination) =>
+    normalizeDestinationSearch(`${destination.code} ${destination.label}`).includes(
+      normalizedSearch
+    )
+  );
+  if (!search.trim()) {
+    filteredOptions.unshift({ code: '', label: 'Aucune destination', inCatalogue: false });
+  }
+  const selectedCode = value?.toUpperCase() ?? '';
+  const activeOption = filteredOptions[activeIndex];
+
+  useEffect(() => {
+    if (!open) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (triggerRef.current?.contains(target) || panelRef.current?.contains(target)) return;
+      close();
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [open]);
+
+  useLayoutEffect(() => {
+    if (!open) {
+      setPopoverPosition(null);
+      return;
+    }
+
+    const positionPopover = () => {
+      const trigger = triggerRef.current;
+      const panel = panelRef.current;
+      if (!trigger || !panel) return;
+
+      const anchor = trigger.getBoundingClientRect();
+      const width = panel.offsetWidth;
+      const height = panel.offsetHeight;
+      const margin = 8;
+      const gap = 4;
+      const left = Math.max(
+        margin,
+        Math.min(anchor.right - width, window.innerWidth - width - margin)
+      );
+      const below = window.innerHeight - anchor.bottom - margin;
+      const top =
+        below >= height || below >= anchor.top - margin
+          ? Math.min(anchor.bottom + gap, window.innerHeight - height - margin)
+          : Math.max(margin, anchor.top - height - gap);
+      setPopoverPosition({ top, left });
+    };
+
+    positionPopover();
+    window.addEventListener('resize', positionPopover);
+    window.addEventListener('scroll', positionPopover, true);
+    return () => {
+      window.removeEventListener('resize', positionPopover);
+      window.removeEventListener('scroll', positionPopover, true);
+    };
+  }, [open, formOpen, filteredOptions.length, search]);
+
+  useEffect(() => {
+    if (formOpen) codeRef.current?.focus();
+    else if (open) searchRef.current?.focus();
+  }, [formOpen, open]);
+
+  function close() {
+    setOpen(false);
+    setFormOpen(false);
+    setSearch('');
+    setActiveIndex(0);
+  }
+
+  function openForm(prefillName = '') {
+    setName(prefillName);
+    setCode(firstTwoLetters(prefillName));
+    setAutoCode(Boolean(prefillName));
+    setCodeError('');
+    setNameError('');
+    setSubmitError('');
+    setFormOpen(true);
+  }
+
+  function cancelForm() {
+    setFormOpen(false);
+    setCode('');
+    setName('');
+    setAutoCode(false);
+    setCodeError('');
+    setNameError('');
+    setSubmitError('');
+  }
+
+  function moveActiveOption(direction: 1 | -1) {
+    if (!filteredOptions.length) return;
+    setActiveIndex((current) => (current + direction + filteredOptions.length) % filteredOptions.length);
+  }
+
+  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault();
+      moveActiveOption(1);
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveActiveOption(-1);
+    } else if (event.key === 'Enter') {
+      event.preventDefault();
+      if (activeOption) selectDestination(activeOption.code);
+      else if (search.trim()) openForm(search.trim());
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    }
+  }
+
+  function handleOptionKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      moveActiveOption(event.key === 'ArrowDown' ? 1 : -1);
+      searchRef.current?.focus();
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      close();
+    }
+  }
+
+  function selectDestination(destination: string | undefined) {
+    onChange(destination);
+    close();
+  }
+
+  function handleNameChange(nextName: string) {
+    setName(nextName);
+    if (!code || autoCode) {
+      setCode(firstTwoLetters(nextName));
+      setAutoCode(Boolean(nextName));
+    }
+  }
+
+  async function handleSubmit(event: React.FormEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    const normalizedCode = code.trim().toUpperCase();
+    const normalizedName = name.trim();
+    const duplicate = options.some(
+      (destination) =>
+        Boolean(normalizedCode) && destination.code.toUpperCase() === normalizedCode
+    );
+    setCodeError(
+      !normalizedCode
+        ? 'Le code est requis'
+        : duplicate
+          ? 'Ce code existe déjà'
+          : ''
+    );
+    setNameError(normalizedName ? '' : 'Le nom est requis');
+    setSubmitError('');
+    if (!normalizedCode || !normalizedName || duplicate) return;
+
+    setSaving(true);
+    try {
+      await onCreate({ code: normalizedCode, label: normalizedName });
+      close();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Erreur lors de l’ajout';
+      if (message.toLowerCase().includes('existe déjà')) setCodeError('Ce code existe déjà');
+      else setSubmitError(message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(destination: DestinationCatalogue) {
+    const confirmed = window.confirm(
+      `Supprimer ${destination.code} · ${destination.label} du catalogue des destinations ? Les OF déjà renseignés ne seront pas modifiés.`
+    );
+    if (!confirmed) return;
+
+    setDeleteError('');
+    setDeletingCode(destination.code);
+    try {
+      await onDelete(destination.code);
+    } catch (error) {
+      setDeleteError(
+        error instanceof Error ? error.message : 'Erreur lors de la suppression'
+      );
+    } finally {
+      setDeletingCode(null);
+    }
+  }
+
+  return (
+    <span className="relative inline-flex shrink-0">
+      <button
+        ref={triggerRef}
+        type="button"
+        role="combobox"
+        aria-label="Destination"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-controls={open && !formOpen ? listId : undefined}
+        disabled={lectureSeule}
+        title={title}
+        onClick={() => {
+          if (open) close();
+          else {
+            setOpen(true);
+            setFormOpen(false);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+            event.preventDefault();
+            setOpen(true);
+            setFormOpen(false);
+          } else if (event.key === 'Escape' && open) {
+            event.preventDefault();
+            close();
+          }
+        }}
+        style={{
+          backgroundImage: CHEVRON_DESTINATION,
+          backgroundRepeat: 'no-repeat',
+          backgroundPosition: 'right 6px center',
+          backgroundSize: '14px',
+        }}
+        className={`h-6 w-28 appearance-none truncate pl-2 pr-7 text-left text-[11px] font-bold rounded-md border focus:outline-hidden focus:ring-1 focus:ring-blue-400 ${lectureSeule ? 'cursor-default' : 'cursor-pointer'} ${
+          value ? 'bg-white text-slate-700 border-slate-200' : 'bg-white text-slate-500 border-slate-300'
+        }`}
+      >
+        {value ?? 'Destination'}
+      </button>
+
+      {open &&
+        createPortal(
+        <div
+          ref={panelRef}
+          style={{
+            position: 'fixed',
+            top: popoverPosition?.top ?? 0,
+            left: popoverPosition?.left ?? 0,
+            zIndex: 60,
+            visibility: popoverPosition ? 'visible' : 'hidden',
+          }}
+          className="w-64 overflow-hidden rounded-lg border border-slate-300 bg-white shadow-lg"
+        >
+          {formOpen ? (
+            <form
+              noValidate
+              onSubmit={handleSubmit}
+              className="p-3"
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  cancelForm();
+                }
+              }}
+            >
+              <h3 className="mb-2 text-xs font-bold text-slate-800">Nouvelle destination</h3>
+              <label htmlFor={`${listId}-code`} className="mb-1 block text-[11px] font-semibold text-slate-600">
+                Code
+              </label>
+              <input
+                ref={codeRef}
+                id={`${listId}-code`}
+                type="text"
+                maxLength={3}
+                required
+                value={code}
+                aria-invalid={Boolean(codeError)}
+                aria-describedby={codeError ? `${listId}-code-error` : undefined}
+                onChange={(event) => {
+                  setCode(event.target.value.slice(0, 3).toUpperCase());
+                  setAutoCode(false);
+                  setCodeError('');
+                }}
+                className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs uppercase focus:outline-hidden focus:ring-1 focus:ring-blue-400"
+              />
+              {codeError && <p id={`${listId}-code-error`} className="mt-1 text-[11px] text-red-600">{codeError}</p>}
+              <label htmlFor={`${listId}-name`} className="mb-1 mt-2 block text-[11px] font-semibold text-slate-600">
+                Nom
+              </label>
+              <input
+                id={`${listId}-name`}
+                type="text"
+                required
+                value={name}
+                aria-invalid={Boolean(nameError)}
+                aria-describedby={nameError ? `${listId}-name-error` : undefined}
+                onChange={(event) => handleNameChange(event.target.value)}
+                className="h-8 w-full rounded-md border border-slate-300 bg-white px-2 text-xs focus:outline-hidden focus:ring-1 focus:ring-blue-400"
+              />
+              {nameError && <p id={`${listId}-name-error`} className="mt-1 text-[11px] text-red-600">{nameError}</p>}
+              {submitError && <p role="alert" className="mt-1 text-[11px] text-red-600">{submitError}</p>}
+              <div className="mt-3 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={cancelForm}
+                  className="rounded-md border border-slate-300 px-2.5 py-1 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="rounded-md bg-blue-600 px-2.5 py-1 text-[11px] font-semibold text-white hover:bg-blue-700 disabled:opacity-50"
+                >
+                  Ajouter
+                </button>
+              </div>
+            </form>
+          ) : (
+            <>
+              <div className="border-b border-slate-200 p-2">
+                <div className="flex h-8 items-center gap-2 rounded-md border border-slate-300 px-2 focus-within:ring-1 focus-within:ring-blue-400">
+                  <Search className="h-3.5 w-3.5 shrink-0 text-slate-400" aria-hidden="true" />
+                  <input
+                    ref={searchRef}
+                    type="text"
+                    role="searchbox"
+                    aria-label="Rechercher une destination"
+                    aria-autocomplete="list"
+                    aria-expanded="true"
+                    aria-controls={listId}
+                    aria-activedescendant={activeOption ? `${listId}-${activeIndex}` : undefined}
+                    value={search}
+                    onChange={(event) => {
+                      setSearch(event.target.value);
+                      setActiveIndex(0);
+                    }}
+                    onKeyDown={handleSearchKeyDown}
+                    placeholder="Rechercher…"
+                    className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-slate-400"
+                  />
+                </div>
+              </div>
+              {deleteError && (
+                <p role="alert" className="px-3 pt-2 text-[11px] text-red-600">
+                  {deleteError}
+                </p>
+              )}
+              <div id={listId} role="listbox" aria-label="Destinations" className="max-h-44 overflow-y-auto p-1">
+                {filteredOptions.length ? (
+                  filteredOptions.map((destination, index) => (
+                    <div
+                      role="group"
+                      aria-label={destination.code}
+                      key={destination.code}
+                      className="flex items-center rounded-md"
+                    >
+                      <button
+                        id={`${listId}-${index}`}
+                        type="button"
+                        role="option"
+                        aria-selected={destination.code.toUpperCase() === selectedCode}
+                        tabIndex={-1}
+                        onMouseEnter={() => setActiveIndex(index)}
+                        onKeyDown={handleOptionKeyDown}
+                        onClick={() => selectDestination(destination.code || undefined)}
+                        className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs ${
+                          index === activeIndex ||
+                          destination.code.toUpperCase() === selectedCode
+                            ? 'bg-blue-50 text-blue-800'
+                            : 'text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        <span className="w-4 shrink-0">
+                          {destination.code.toUpperCase() === selectedCode && (
+                            <Check
+                              className="h-3.5 w-3.5 text-blue-600"
+                              aria-hidden="true"
+                            />
+                          )}
+                        </span>
+                        <span className="truncate">
+                          {destination.code
+                            ? `${destination.code} · ${destination.label}`
+                            : destination.label}
+                        </span>
+                      </button>
+                      {destination.inCatalogue && !lectureSeule && (
+                        <button
+                          type="button"
+                          aria-label={`Supprimer ${destination.code} du catalogue`}
+                          title={`Supprimer ${destination.code} du catalogue`}
+                          disabled={deletingCode !== null}
+                          onClick={() => handleDelete(destination)}
+                          className="mr-1 rounded p-1 text-slate-400 hover:bg-red-50 hover:text-red-600 disabled:opacity-40"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" aria-hidden="true" />
+                        </button>
+                      )}
+                    </div>
+                  ))
+                ) : search.trim() ? (
+                  <button
+                    type="button"
+                    role="option"
+                    aria-selected="false"
+                    onClick={() => openForm(search.trim())}
+                    className="w-full rounded-md px-2 py-2 text-left text-xs text-blue-600 hover:bg-blue-50"
+                  >
+                    Créer "{search.trim()}"
+                  </button>
+                ) : (
+                  <p className="px-2 py-2 text-xs text-slate-500">Aucune destination</p>
+                )}
+              </div>
+              {!lectureSeule && (
+                <button
+                  type="button"
+                  onClick={() => openForm()}
+                  className="sticky bottom-0 flex w-full items-center gap-1.5 border-t border-slate-200 bg-white px-3 py-2 text-left text-xs font-semibold text-blue-600 hover:bg-blue-50"
+                >
+                  <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                  Ajouter une destination
+                </button>
+              )}
+            </>
+          )}
+        </div>,
+        document.body
+      )}
+    </span>
+  );
+};
+
+function normalizeDestinationSearch(value: string): string {
+  return value
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLocaleLowerCase();
+}
+
+function firstTwoLetters(value: string): string {
+  return [...value].filter((character) => /\p{L}/u.test(character)).slice(0, 2).join('').toUpperCase();
+}
+
 /** Le total d'un OF divisé en sous-OF est la somme de ses sous-OF. */
 function recalcOFDepuisSousOfs(of: OrdreFabrication): OrdreFabrication {
   const sous = of.sousOfs || [];
@@ -148,15 +631,23 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
   onChangeTotalDemandee,
   isAddingOF = false,
   onCloseAddOF,
+  lectureSeule: lectureSeuleProp = false,
 }) => {
   // Inspection de la carte (colonne Inspection du Suivi Global) : sert de
   // référence pour afficher l'avancement des contrôles de chaque OF.
   const { parCarte } = useInspectionsParCarte();
-  const lectureSeule = useLectureSeule();
+  const lectureSeule = useLectureSeule() || lectureSeuleProp;
   const [newQuantite, setNewQuantite] = useState<number>(50);
   const [newNbCases, setNewNbCases] = useState<number>(5);
   const [newCases, setNewCases] = useState<number[]>(() => normalizeCases(undefined, 5, 50));
   const [isCollapsed, setIsCollapsed] = useState(false);
+  const [destinations, setDestinations] = useState<DestinationCatalogue[]>(() =>
+    OF_DESTINATIONS.map(({ code, label }) => ({ code, label }))
+  );
+
+  useEffect(() => {
+    destinationApi.getAll().then(setDestinations);
+  }, []);
 
   const totalAlloue = ofs.reduce((sum, o) => sum + o.quantiteDemandee, 0);
   const totalFinie = ofs.reduce((sum, o) => sum + computeOfQuantiteFinie(o), 0);
@@ -185,6 +676,47 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
       setIsCollapsed(false);
     }
   }, [isAddingOF, isCollapsed]);
+
+  // Destinations proposées dans la combobox : le catalogue des pays (FR, US, ES,
+  // MX…) puis celles déjà portées par les OF de la carte (hors catalogue).
+  const optionsDestination = useMemo(() => {
+    const parCode = new Map<string, { label: string; inCatalogue: boolean }>();
+    for (const destination of destinations) {
+      parCode.set(destination.code.toUpperCase(), {
+        label: destination.label,
+        inCatalogue: true,
+      });
+    }
+    for (const o of ofs) {
+      const code = o.destination?.trim().toUpperCase();
+      if (code && !parCode.has(code)) parCode.set(code, { label: code, inCatalogue: false });
+    }
+    return [...parCode.entries()].map(([code, destination]) => ({
+      code,
+      label: destination.label,
+      inCatalogue: destination.inCatalogue,
+    }));
+  }, [destinations, ofs]);
+
+  const handleCreateDestination = async (
+    ofId: string,
+    destination: DestinationCatalogue
+  ) => {
+    const created = await destinationApi.create(destination.code, destination.label);
+    setDestinations((current) =>
+      current.some((item) => item.code.toUpperCase() === created.code.toUpperCase())
+        ? current
+        : [...current, created]
+    );
+    handleUpdateSingleOF(ofId, { destination: created.code });
+  };
+
+  const handleDeleteDestination = async (code: string) => {
+    await destinationApi.delete(code);
+    setDestinations((current) =>
+      current.filter((destination) => destination.code.toUpperCase() !== code.toUpperCase())
+    );
+  };
 
   const handleCreateOF = (e: React.FormEvent) => {
     e.preventDefault();
@@ -221,6 +753,9 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
     const nextOfs = ofs.map((o) => {
       if (o.id !== ofId) return o;
       const updated = { ...o, ...updates };
+      if (updates.statut !== undefined && updates.isLocked === undefined) {
+        updated.isLocked = updates.statut === 'TERMINE' || updates.statut === 'BLOQUE';
+      }
       const qteDemandee =
         updates.quantiteDemandee !== undefined
           ? Number(updates.quantiteDemandee)
@@ -234,6 +769,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
       if (qteFinie !== o.quantiteFinie && updates.statut === undefined) {
         if (qteFinie >= qteDemandee && qteDemandee > 0) {
           updated.statut = 'TERMINE';
+          updated.isLocked = true;
         } else if (qteFinie > 0 && o.statut === 'EN_ATTENTE') {
           updated.statut = 'EN_COURS';
         }
@@ -288,6 +824,9 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
       const nextSousOfs = (o.sousOfs || []).map((sof) => {
         if (sof.id !== sousOFId) return sof;
         const updated = { ...sof, ...updates };
+        if (updates.statut !== undefined && updates.isLocked === undefined) {
+          updated.isLocked = updates.statut === 'TERMINE' || updates.statut === 'BLOQUE';
+        }
         const nbCases = updated.nbCases || 5;
         const total =
           updates.quantiteDemandee !== undefined
@@ -452,6 +991,8 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
             const labelOF = ofItem.codeOF || `OF${displayIndex}`;
             const sousOfs = ofItem.sousOfs || [];
             const hasSubOfs = sousOfs.length > 0;
+            const isOfLocked =
+              ofItem.isLocked ?? (ofItem.statut === 'TERMINE' || ofItem.statut === 'BLOQUE');
             const ofNbCases = ofItem.nbCases || 5;
             const ofCases = normalizeCases(ofItem.casesEnCours, ofNbCases, ofItem.quantiteDemandee);
 
@@ -494,10 +1035,15 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
             return (
               <div
                 key={ofItem.id}
-                className="bg-white rounded-xl border border-slate-300 shadow-2xs overflow-hidden"
+                className={`bg-white rounded-xl border shadow-2xs overflow-hidden ${
+                  isOfLocked ? 'border-amber-300' : 'border-slate-300'
+                }`}
               >
                 <div className="p-1.5 bg-slate-100/70 border-b border-slate-200 flex flex-wrap items-center justify-between gap-1.5">
-                  <div className="flex items-center gap-1.5 flex-wrap">
+                  <fieldset
+                    disabled={lectureSeule || isOfLocked}
+                    className="flex items-center gap-1.5 flex-wrap"
+                  >
                     <div className="flex items-center gap-1">
                       <span className="font-bold text-slate-900 bg-white px-2 py-0.5 rounded text-[11px] border border-slate-300 shadow-2xs">
                         {labelOF}
@@ -505,7 +1051,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                       <div className="flex flex-col -space-y-1">
                         <button
                           type="button"
-                          disabled={index === 0}
+                          disabled={lectureSeule || isOfLocked || index === 0}
                           onClick={() => handleMoveOF(index, 'UP')}
                           title={`Monter ${labelOF} (plus prioritaire)`}
                           aria-label={`Monter ${labelOF}`}
@@ -515,7 +1061,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                         </button>
                         <button
                           type="button"
-                          disabled={index === ofs.length - 1}
+                          disabled={lectureSeule || isOfLocked || index === ofs.length - 1}
                           onClick={() => handleMoveOF(index, 'DOWN')}
                           title={`Descendre ${labelOF}`}
                           aria-label={`Descendre ${labelOF}`}
@@ -530,6 +1076,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                       defaultValue=""
                       placeholder="Nom de l'OF..."
                       onSave={(nom) => handleUpdateSingleOF(ofItem.id, { titre: nom })}
+                      disabled={lectureSeule || isOfLocked}
                       className="text-xs font-bold text-slate-900 bg-white border border-slate-200 rounded"
                     />
                     {hasSubOfs && (
@@ -537,12 +1084,57 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                         {sousOfs.length} sous-OF
                       </span>
                     )}
-                  </div>
+                  </fieldset>
 
                   {/* Actions de l'OF */}
                   <div className="flex items-center gap-1">
+                    <select
+                      value={ofItem.statut}
+                      disabled={lectureSeule}
+                      aria-label={`Statut de ${labelOF}`}
+                      title={`Statut de ${labelOF}`}
+                      onChange={(event) =>
+                        handleUpdateSingleOF(ofItem.id, {
+                          statut: event.target.value as CardStatus,
+                        })
+                      }
+                      className={`max-w-28 rounded border px-1.5 py-0.5 text-[10px] font-semibold ${
+                        lectureSeule ? 'cursor-default' : 'cursor-pointer'
+                      } ${getStatusBadge(ofItem.statut)}`}
+                    >
+                      <option value="EN_ATTENTE">En attente</option>
+                      <option value="EN_COURS">En cours</option>
+                      <option value="TERMINE">Terminé</option>
+                      <option value="BLOQUE">Bloqué</option>
+                    </select>
                     <button
                       type="button"
+                      disabled={lectureSeule}
+                      aria-label={isOfLocked ? `Déverrouiller ${labelOF}` : `Verrouiller ${labelOF}`}
+                      title={
+                        isOfLocked
+                          ? `Déverrouiller ${labelOF} pour le modifier`
+                          : `Verrouiller ${labelOF}`
+                      }
+                      onClick={() =>
+                        handleUpdateSingleOF(ofItem.id, { isLocked: !isOfLocked })
+                      }
+                      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[10px] font-semibold transition-colors disabled:cursor-default disabled:opacity-50 ${
+                        isOfLocked
+                          ? 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                          : 'border-slate-300 bg-white text-slate-500 hover:bg-slate-100'
+                      }`}
+                    >
+                      {isOfLocked ? (
+                        <Unlock className="h-3 w-3" aria-hidden="true" />
+                      ) : (
+                        <Lock className="h-3 w-3" aria-hidden="true" />
+                      )}
+                      {isOfLocked ? 'Déverrouiller' : 'Verrouiller'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={lectureSeule || isOfLocked}
                       onClick={() => handleDirectAddSousOF(ofItem.id)}
                       title={`Ajouter un sous-OF à ${labelOF}`}
                       className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded transition-colors shadow-2xs cursor-pointer"
@@ -552,6 +1144,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                     </button>
                     <button
                       type="button"
+                      disabled={lectureSeule || isOfLocked}
                       onClick={() => handleDeleteOF(ofItem.id)}
                       title={`Supprimer ${labelOF}`}
                       className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
@@ -561,7 +1154,10 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                   </div>
                 </div>
 
-                <div className="p-2 space-y-2">
+                <fieldset
+                  disabled={lectureSeule || isOfLocked}
+                  className="p-2 space-y-2 disabled:cursor-not-allowed"
+                >
                   {hasSubOfs ? (
                     <div className="space-y-1.5">
                       <div className="flex items-center justify-between text-[10px] font-bold text-slate-500 border-b border-slate-200 pb-0.5">
@@ -572,6 +1168,8 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                       </div>
 
                       {sousOfs.map((sof) => {
+                        const isSousOFLocked =
+                          sof.isLocked ?? (sof.statut === 'TERMINE' || sof.statut === 'BLOQUE');
                         const sofNbCases = sof.nbCases || 5;
                         const sofCases = normalizeCases(
                           sof.casesEnCours,
@@ -594,6 +1192,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                                 onSave={(nom) =>
                                   handleUpdateSousOF(ofItem.id, sof.id, { titre: nom })
                                 }
+                                disabled={isSousOFLocked}
                                 className="text-xs font-bold text-slate-900"
                               />
                               <div className="flex items-center gap-1 bg-white px-1.5 py-0.5 rounded border border-slate-300 shadow-2xs">
@@ -603,6 +1202,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                                 <input
                                   type="number"
                                   min={0}
+                                  disabled={isSousOFLocked}
                                   value={sof.quantiteDemandee}
                                   onChange={(e) =>
                                     handleUpdateSousOF(ofItem.id, sof.id, {
@@ -623,6 +1223,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                               </div>
                               <select
                                 value={sof.statut}
+                                disabled={isOfLocked}
                                 onChange={(e) =>
                                   handleUpdateSousOF(ofItem.id, sof.id, {
                                     statut: e.target.value as CardStatus,
@@ -639,6 +1240,37 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                               </select>
                               <button
                                 type="button"
+                                disabled={isOfLocked}
+                                aria-label={
+                                  isSousOFLocked
+                                    ? `Déverrouiller ${sof.codeSousOF}`
+                                    : `Verrouiller ${sof.codeSousOF}`
+                                }
+                                title={
+                                  isSousOFLocked
+                                    ? `Déverrouiller ${sof.codeSousOF} pour le modifier`
+                                    : `Verrouiller ${sof.codeSousOF}`
+                                }
+                                onClick={() =>
+                                  handleUpdateSousOF(ofItem.id, sof.id, {
+                                    isLocked: !isSousOFLocked,
+                                  })
+                                }
+                                className={`rounded border p-1 transition-colors disabled:cursor-default disabled:opacity-50 ${
+                                  isSousOFLocked
+                                    ? 'border-amber-300 bg-amber-50 text-amber-800'
+                                    : 'border-slate-300 bg-white text-slate-500 hover:bg-slate-100'
+                                }`}
+                              >
+                                {isSousOFLocked ? (
+                                  <Unlock className="h-3 w-3" aria-hidden="true" />
+                                ) : (
+                                  <Lock className="h-3 w-3" aria-hidden="true" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                disabled={isSousOFLocked}
                                 onClick={() => handleDeleteSousOF(ofItem.id, sof.id)}
                                 className="p-1 text-slate-400 hover:text-rose-600 rounded transition-colors cursor-pointer"
                                 title="Supprimer ce sous-OF"
@@ -662,6 +1294,7 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                               onChangeNbCases={(n) =>
                                 handleUpdateSousOF(ofItem.id, sof.id, { nbCases: n })
                               }
+                              disabled={isSousOFLocked}
                               showSelector={true}
                               total={sof.quantiteDemandee}
                             />
@@ -707,57 +1340,31 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                           </select>
                         </div>
                         <div className="flex items-center gap-2.5">
-                          {/* Le sélecteur se dimensionne sur le texte affiché : un
-                              calque invisible porte la largeur, le <select> le
-                              recouvre. La liste déroulante reste donc étroite pour
-                              « FR » et s'élargit pour « Destination ». */}
-                          <span className="relative inline-flex shrink-0">
-                            <span
-                              aria-hidden="true"
-                              className="invisible whitespace-nowrap rounded-md border border-transparent pl-2 pr-7 py-0.5 text-[11px] font-bold"
-                            >
-                              {ofItem.destination ?? 'Destination'}
-                            </span>
-                            <select
-                              value={ofItem.destination ?? ''}
-                              onChange={(e) =>
-                                handleUpdateSingleOF(ofItem.id, {
-                                  destination: (e.target.value || undefined) as
-                                    | DestinationOF
-                                    | undefined,
-                                })
-                              }
-                              title={
-                                ofItem.destination
-                                  ? `Destination : ${
-                                      OF_DESTINATIONS.find(
-                                        (d) => d.code === ofItem.destination
-                                      )?.label ?? ofItem.destination
-                                    }`
-                                  : 'Choisir la destination de cet OF'
-                              }
-                              style={{
-                                backgroundImage: CHEVRON_DESTINATION,
-                                backgroundRepeat: 'no-repeat',
-                                backgroundPosition: 'right 6px center',
-                                backgroundSize: '14px',
-                              }}
-                              className={`absolute inset-0 h-full w-full appearance-none text-[11px] font-bold rounded-md border pl-2 pr-7 py-0.5 cursor-pointer shadow-2xs ${
-                                ofItem.destination
-                                  ? OF_DESTINATIONS.find(
-                                      (d) => d.code === ofItem.destination
-                                    )?.classe ?? 'bg-white text-slate-700'
-                                  : 'bg-white text-slate-700'
-                              }`}
-                            >
-                              <option value="">Destination</option>
-                              {OF_DESTINATIONS.map((d) => (
-                                <option key={d.code} value={d.code} title={d.label}>
-                                  {d.code}
-                                </option>
-                              ))}
-                            </select>
-                          </span>
+                          {/* Combobox Destination : catalogue des pays (FR, US, ES,
+                              MX…) + destinations déjà utilisées, avec possibilité
+                              d'en ajouter une nouvelle via le bouton "+" qui
+                              bascule en mode édition inline. */}
+                          <DestinationCombo
+                            value={ofItem.destination}
+                            options={optionsDestination}
+                            onChange={(dest) =>
+                              handleUpdateSingleOF(ofItem.id, { destination: dest })
+                            }
+                            title={
+                              ofItem.destination
+                                ? `Destination : ${optionsDestination.find(
+                                    (destination) =>
+                                      destination.code.toUpperCase() ===
+                                      ofItem.destination?.toUpperCase()
+                                  )?.label ?? ofItem.destination}`
+                                : 'Choisir la destination de cet OF'
+                            }
+                            lectureSeule={lectureSeule || isOfLocked}
+                            onCreate={(destination) =>
+                              handleCreateDestination(ofItem.id, destination)
+                            }
+                            onDelete={handleDeleteDestination}
+                          />
                           {(nbControlesPasses > 0 || ccEnAttente) && (
                             <span
                               className={`inline-flex items-center gap-1.5 rounded-full pl-2 py-0.5 ${
@@ -821,12 +1428,13 @@ export const OFSubTable: React.FC<OFSubTableProps> = ({
                           })
                         }
                         onChangeNbCases={(n) => handleChangeNbCases(ofItem.id, n)}
+                        disabled={isOfLocked}
                         showSelector={true}
                         total={ofItem.quantiteDemandee}
                       />
                     </>
                   )}
-                </div>
+                </fieldset>
               </div>
             );
           })}

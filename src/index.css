@@ -92,13 +92,16 @@
   }
   to {
     opacity: 1;
-    transform: translateY(0) scale(1);
+    transform: none;
   }
 }
 
+/* Pas de `will-change: transform` ni de transform résiduel : ils créent un
+   containing block qui casse `position: fixed` des modales rendues dans la vue
+   (le fond s'affiche, mais le panneau est centré sur toute la hauteur de page). */
 .animate-page-in {
-  animation: page-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both;
-  will-change: opacity, transform;
+  animation: page-in 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: opacity;
 }
 
 

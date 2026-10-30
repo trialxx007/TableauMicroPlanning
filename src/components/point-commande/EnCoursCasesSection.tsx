@@ -9,6 +9,7 @@ interface EnCoursGridProps {
   showSelector?: boolean;
   total?: number;
   labels?: string[];
+  disabled?: boolean;
 }
 
 export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
@@ -19,6 +20,7 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
   showSelector = true,
   total,
   labels,
+  disabled = false,
 }) => {
   const [isPickerOpen, setIsPickerOpen] = useState(false);
   const pickerRef = useRef<HTMLDivElement>(null);
@@ -71,6 +73,10 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
   }, [isPickerOpen, placerMenu]);
 
   useEffect(() => {
+    if (disabled) setIsPickerOpen(false);
+  }, [disabled]);
+
+  useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (pickerRef.current && !pickerRef.current.contains(e.target as Node)) {
         setIsPickerOpen(false);
@@ -94,6 +100,7 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
               key={idx}
               type="number"
               min="0"
+              disabled={disabled}
               value={val === 0 ? '' : val}
               placeholder=""
               onChange={(e) => {
@@ -118,6 +125,7 @@ export const EnCoursGrid: React.FC<EnCoursGridProps> = ({
           <button
             ref={buttonRef}
             type="button"
+            disabled={disabled}
             onClick={() => setIsPickerOpen(!isPickerOpen)}
             className="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-white hover:bg-slate-100 text-slate-800 text-[10px] font-bold rounded border border-slate-400 shadow-2xs cursor-pointer transition-colors"
             title="Cliquer pour choisir le nombre de cases"
