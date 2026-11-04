@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   COULEURS_KANBAN_IDS,
+  estAttenteCloturee,
   estColonneBroderie,
   estColonneBrodeuse,
   estColonneLaboConfection,
@@ -14,6 +15,10 @@ import {
   KanbanColonne,
   KanbanDeplacement,
   KanbanAttente,
+  KanbanAttenteEtape,
+  KanbanAttenteStatut,
+  KanbanHistoriqueCategorie,
+  KanbanHistoriqueEntree,
   KanbanPersonne,
   KanbanSection,
 } from '../types/kanban.ts';
@@ -21,9 +26,9 @@ import { chargerKanban, KanbanEnvironnement, nouvelId, sauverKanban } from '../u
 import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
 import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
 import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
-import { dateISOFromDateTime, estDateISO, getDateISOSite, getNowParis, joursEntreDatesISO, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { dateISOFromDateTime, estDateISO, FUSEAU_HORAIRE, getDateISOSite, getNowParis, joursEntreDatesISO, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import { Profil } from '@/src/utils/auth.ts';
-import { AlertTriangle, Calendar, Check, ChevronLeft, ChevronRight, Clock, Copy, FileText, GitMerge, GripVertical, LayoutGrid, MoreHorizontal, Pause, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Copy, GitMerge, GripVertical, History, LayoutGrid, MoreHorizontal, Pause, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
 
 interface DeveloppementViewProps {
   onChangePage: (page: AppPage) => void;
@@ -34,11 +39,15 @@ interface DeveloppementViewProps {
 /** Élément en cours de glissement (carte ou colonne). */
 type DragInfo = { type: 'carte'; id: string } | { type: 'colonne'; id: string };
 
+/** Quick edit on card click, full card fields through the "…" button. */
+type ModeEdition = 'simple' | 'complet';
+
 /** Brouillon d'édition d'une carte (panneau modal). */
 interface BrouillonEdition {
   id: string;
   titre: string;
   etat: string;
+  description: string;
   traiteur: string;
   client: string;
   commercial: string;
@@ -75,16 +84,54 @@ function formatDateCourte(valeur: string | null | undefined): string {
   return `${jour} ${moisCourts[Number(mois) - 1] ?? mois}`;
 }
 
+/** Affiche une date ISO au format très court `JJ/MM`. */
+function formatDateJourMois(valeur: string | null | undefined): string {
+  return formatDateFr(valeur).slice(0, 5);
+}
+
+/** Affiche un horodatage d'étape d'attente au format français (`04/11/2026 14:32`). */
+function formatHorodatage(valeur: string | null | undefined): string {
+  if (!valeur) return '—';
+  // Étape amorcée depuis une date seule (anciennes données) : pas d'heure.
+  if (/^\d{4}-\d{2}-\d{2}$/.test(valeur)) return formatDateFr(valeur);
+  const date = new Date(valeur);
+  if (Number.isNaN(date.getTime())) return formatDateFr(valeur);
+  return new Intl.DateTimeFormat('fr-FR', {
+    timeZone: FUSEAU_HORAIRE,
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(date);
+}
+
+/** Construit une étape d'historique pour une période d'attente. */
+function etapeAttente(statut: KanbanAttenteStatut): KanbanAttenteEtape {
+  return { date: new Date().toISOString(), statut };
+}
+
+/** Construit une entrée du journal d'une carte. */
+function entreeHistorique(
+  categorie: KanbanHistoriqueCategorie,
+  description: string
+): KanbanHistoriqueEntree {
+  return {
+    id: `HIS-${Date.now().toString(36).toUpperCase()}-${Math.random()
+      .toString(36)
+      .slice(2, 6)
+      .toUpperCase()}`,
+    date: new Date().toISOString(),
+    categorie,
+    description,
+  };
+}
+
 /** Gap between the anchor card and the edit popover, and viewport safety margin. */
 const POPOVER_GAP = 12;
 const POPOVER_MARGE = 8;
 /** Preferred width of the compact card edit popover. */
 const POPOVER_LARGEUR = 460;
-
-/** Preset waiting reasons offered in the card edit panel. */
-const MOTIFS_ATTENTE = ['Attente de mesures client', 'Attente du brief client'];
-/** Sentinel option that reveals the free-text reason field. */
-const MOTIF_ATTENTE_AUTRE = 'Autre…';
 
 /** Construit une entrée d'historique de déplacement. */
 function entreeDeplacement(
@@ -139,12 +186,15 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   /** Colonne survolée pendant un glissement de colonne (surlignage ciblé). */
   const [rangeeCible, setRangeeCible] = useState<string | null>(null);
   const [edition, setEdition] = useState<BrouillonEdition | null>(null);
+  const [modeEdition, setModeEdition] = useState<ModeEdition>('simple');
   /** Card that opened the edit popover: the panel follows it while scrolling. */
   const [ancreEdition, setAncreEdition] = useState<HTMLElement | null>(null);
   /** Viewport coordinates computed from the anchor (popover presentation only). */
   const [positionEdition, setPositionEdition] = useState<{ top: number; left: number } | null>(null);
   /** Waiting periods are collapsed by default to keep the quick-edit panel short. */
   const [attenteDepliee, setAttenteDepliee] = useState(false);
+  /** Panneau de suivi ouvert : un seul à la fois pour ne pas encombrer le tableau. */
+  const [panneauSuivi, setPanneauSuivi] = useState<'attente' | 'historique' | null>(null);
   const panneauEditionRef = useRef<HTMLDivElement>(null);
   const [composerOuverte, setComposerOuverte] = useState<string | null>(null);
   const [composerNom, setComposerNom] = useState('');
@@ -269,6 +319,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   ): { niveau: 'orange' | 'rouge'; attente: KanbanAttente; jours: number } | null => {
     let alerte: { niveau: 'orange' | 'rouge'; attente: KanbanAttente; jours: number } | null = null;
     for (const attente of carte.attentes ?? []) {
+      if (estAttenteCloturee(attente)) continue;
       if (!estDateISO(attente.dateSortie)) continue;
       // Date de sortie dépassée : alerte rouge, même sans date d'entrée exploitable.
       const joursAvantSortie = -joursEntreDatesISO(attente.dateSortie);
@@ -303,10 +354,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     if (alarme || alerteAttente?.niveau === 'rouge' || echeanceAtteinte) {
       return 'alerte';
     }
-    const attenteEnCours = (carte.attentes ?? []).some((a) => {
-      if (!estDateISO(a.dateSortie)) return true;
-      return -joursEntreDatesISO(a.dateSortie) >= 0;
-    });
+    const attenteEnCours = (carte.attentes ?? []).some((a) => !estAttenteCloturee(a));
     const etapeAttente = (carte.etat ?? '').trim().toUpperCase().includes('ATTENTE');
     if (alerteAttente?.niveau === 'orange' || attenteEnCours || etapeAttente) {
       return 'attente';
@@ -775,6 +823,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             ordre: prev.cartes.filter((c) => c.colonneId === colonneId && memeZone(c)).length,
             creeLe: new Date().toISOString(),
             historiqueDeplacements: [entreeDeplacement(getDateISOSite(), colonneId, zone)],
+            historique: [entreeHistorique('carte', 'Carte créée')],
             attentes: [],
           },
         ],
@@ -782,11 +831,105 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     });
   };
 
-  const majCarte = (id: string, updates: Partial<KanbanCarte>) => {
+  const majCarte = (
+    id: string,
+    updates: Partial<KanbanCarte>,
+    entrees?: KanbanHistoriqueEntree[]
+  ) => {
     setData((prev) => ({
       ...prev,
-      cartes: prev.cartes.map((c) => (c.id === id ? { ...c, ...updates } : c)),
+      cartes: prev.cartes.map((c) =>
+        c.id === id
+          ? {
+              ...c,
+              ...updates,
+              ...(entrees?.length
+                ? { historique: [...(c.historique ?? []), ...entrees] }
+                : {}),
+            }
+          : c
+      ),
     }));
+  };
+
+  /** Applique une modification à une période d'attente précise d'une carte. */
+  const majAttente = (
+    carteId: string,
+    attenteId: string,
+    maj: (attente: KanbanAttente) => KanbanAttente,
+    description?: string
+  ) => {
+    setData((prev) => ({
+      ...prev,
+      cartes: prev.cartes.map((c) => {
+        if (c.id !== carteId) return c;
+        const attentes = (c.attentes ?? []).map((a) => (a.id === attenteId ? maj(a) : a));
+        const historique = c.historique ?? [];
+        const dejaJournalise =
+          !!description &&
+          historique.some(
+            (h) =>
+              h.description === description &&
+              dateISOFromDateTime(h.date) === getDateISOSite()
+          );
+        return {
+          ...c,
+          attentes,
+          ...(description && !dejaJournalise
+            ? { historique: [...historique, entreeHistorique('attente', description)] }
+            : {}),
+        };
+      }),
+    }));
+  };
+
+  /** Confirme qu'une attente est toujours en cours et journalise la vérification. */
+  const marquerAttenteEnCours = (carteId: string, attenteId: string) => {
+    const attente = data.cartes
+      .find((c) => c.id === carteId)
+      ?.attentes?.find((a) => a.id === attenteId);
+    if (!attente) return;
+    const motif = attente.libelle?.trim() || 'sans motif';
+    majAttente(
+      carteId,
+      attenteId,
+      (a) => {
+        const etapes = a.historique ?? [];
+        const derniere = etapes[etapes.length - 1];
+        const dejaVerifieeAujourdhui =
+          derniere?.statut === 'en-cours' &&
+          dateISOFromDateTime(derniere.date) === getDateISOSite();
+        return {
+          ...a,
+          statut: 'en-cours',
+          historique: dejaVerifieeAujourdhui ? etapes : [...etapes, etapeAttente('en-cours')],
+        };
+      },
+      `Attente « ${motif} » confirmée en cours`
+    );
+  };
+
+  /**
+   * Clôture une attente : elle quitte la zone ATTENTE, sa date de sortie est
+   * renseignée et ses étapes restent consultables dans la zone HISTORIQUE.
+   */
+  const cloturerAttente = (carteId: string, attenteId: string) => {
+    const attente = data.cartes
+      .find((c) => c.id === carteId)
+      ?.attentes?.find((a) => a.id === attenteId);
+    if (!attente || estAttenteCloturee(attente)) return;
+    const motif = attente.libelle?.trim() || 'sans motif';
+    majAttente(
+      carteId,
+      attenteId,
+      (a) => ({
+        ...a,
+        statut: 'cloture',
+        dateSortie: estDateISO(a.dateSortie) ? a.dateSortie : getDateISOSite(),
+        historique: [...(a.historique ?? []), etapeAttente('cloture')],
+      }),
+      `Attente « ${motif} » clôturée`
+    );
   };
 
   /** Deletes a card after confirmation; returns whether the card was removed. */
@@ -1078,14 +1221,23 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   /** Closes the edit panel and forgets its anchor. */
   const fermerEdition = useCallback(() => {
     setEdition(null);
+    setModeEdition('simple');
     setAncreEdition(null);
     setPositionEdition(null);
     setAttenteDepliee(false);
   }, []);
 
-  const ouvrirEdition = (carte: KanbanCarte, ancre?: HTMLElement | null) => {
+  const ouvrirEdition = (
+    carte: KanbanCarte,
+    ancre?: HTMLElement | null,
+    mode: ModeEdition = 'simple'
+  ) => {
+    setModeEdition(mode);
     // Clicking the card that is already open must not discard the draft.
-    if (edition?.id === carte.id) return;
+    if (edition?.id === carte.id) {
+      setAncreEdition(ancre ?? null);
+      return;
+    }
     setAncreEdition(ancre ?? null);
     setPositionEdition(null);
     setAttenteDepliee(false);
@@ -1093,6 +1245,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       id: carte.id,
       titre: carte.titre,
       etat: carte.etat ?? '',
+      description: carte.description ?? '',
       traiteur: carte.traiteur ?? '',
       client: carte.client ?? '',
       commercial: carte.commercial ?? '',
@@ -1107,26 +1260,149 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
 
   const enregistrerEdition = () => {
     if (!edition) return;
-    const titre = edition.titre.trim();
-    majCarte(edition.id, {
-      titre: titre || 'Tâche sans titre',
-      etat: edition.etat.trim() || undefined,
-      traiteur: edition.traiteur.trim() || undefined,
-      client: edition.client.trim() || undefined,
-      commercial: edition.commercial.trim() || undefined,
-      remarques: edition.remarques.trim() || undefined,
-      couleur: edition.couleur,
-      date: edition.dateEcheance || undefined,
-      dateExpedition: edition.dateExpedition || undefined,
-      attentes: edition.attentes
-        .filter((a) => a.dateEntree)
-        .map((a) => ({
-          id: a.id,
-          libelle: a.libelle?.trim() || undefined,
-          dateEntree: a.dateEntree,
-          ...(a.dateSortie ? { dateSortie: a.dateSortie } : {}),
-        })),
-    });
+    const titre = edition.titre.trim() || 'Tâche sans titre';
+    const attentes: KanbanAttente[] = edition.attentes
+      .filter((a) => a.dateEntree)
+      .map((a) => ({
+        id: a.id,
+        libelle: a.libelle?.trim() || undefined,
+        dateEntree: a.dateEntree,
+        ...(a.dateSortie ? { dateSortie: a.dateSortie } : {}),
+        statut: a.statut ?? 'en-cours',
+        ...(a.historique?.length ? { historique: a.historique } : {}),
+      }));
+
+    // Journalise chaque modification avant d'appliquer la mise à jour.
+    const entrees: KanbanHistoriqueEntree[] = [];
+    const journaliser = (categorie: KanbanHistoriqueCategorie, description: string) => {
+      entrees.push(entreeHistorique(categorie, description));
+    };
+    const carteAvant = data.cartes.find((c) => c.id === edition.id);
+    if (carteAvant) {
+      if (titre !== carteAvant.titre) {
+        journaliser('carte', `Titre modifié : « ${carteAvant.titre} » → « ${titre} »`);
+      }
+      if ((carteAvant.description ?? '') !== edition.description.trim()) {
+        journaliser('carte', 'Description modifiée');
+      }
+      const champs: [string, string, string][] = [
+        ['État', carteAvant.etat ?? '', edition.etat.trim()],
+        ['Traiteur', carteAvant.traiteur ?? '', edition.traiteur.trim()],
+        ['Client', carteAvant.client ?? '', edition.client.trim()],
+        ['Commercial', carteAvant.commercial ?? '', edition.commercial.trim()],
+      ];
+      for (const [libelle, avant, apres] of champs) {
+        if (avant !== apres) {
+          journaliser(
+            'carte',
+            `${libelle} modifié : « ${avant || '—'} » → « ${apres || '—'} »`
+          );
+        }
+      }
+      if ((carteAvant.couleur ?? 'jaune') !== edition.couleur) {
+        journaliser(
+          'carte',
+          `Couleur modifiée : ${KANBAN_COULEURS[carteAvant.couleur ?? 'jaune'].label} → ${
+            KANBAN_COULEURS[edition.couleur].label
+          }`
+        );
+      }
+      if ((carteAvant.date ?? '') !== (edition.dateEcheance ?? '')) {
+        journaliser(
+          'carte',
+          `Échéance modifiée : ${formatDateFr(carteAvant.date)} → ${formatDateFr(
+            edition.dateEcheance
+          )}`
+        );
+      }
+      if ((carteAvant.dateExpedition ?? '') !== (edition.dateExpedition ?? '')) {
+        journaliser(
+          'carte',
+          `Expédition modifiée : ${formatDateFr(carteAvant.dateExpedition)} → ${formatDateFr(
+            edition.dateExpedition
+          )}`
+        );
+      }
+      if ((carteAvant.remarques ?? '') !== edition.remarques.trim()) {
+        journaliser('carte', 'Remarques modifiées');
+      }
+
+      const avantParId = new Map((carteAvant.attentes ?? []).map((a) => [a.id, a]));
+      const apresParId = new Map(attentes.map((a) => [a.id, a]));
+      for (const attente of attentes) {
+        if (avantParId.has(attente.id)) continue;
+        journaliser(
+          'attente',
+          `Attente ajoutée : « ${attente.libelle ?? 'sans motif'} » (entrée ${formatDateFr(
+            attente.dateEntree
+          )})`
+        );
+      }
+      for (const attente of carteAvant.attentes ?? []) {
+        if (apresParId.has(attente.id)) continue;
+        journaliser(
+          'attente',
+          `Attente supprimée : « ${attente.libelle?.trim() || 'sans motif'} »`
+        );
+      }
+      for (const attente of attentes) {
+        const avant = avantParId.get(attente.id);
+        if (!avant) continue;
+        const motif = attente.libelle ?? 'sans motif';
+        const avantStatut = avant.statut ?? 'en-cours';
+        const apresStatut = attente.statut ?? 'en-cours';
+        if (avantStatut !== apresStatut) {
+          journaliser(
+            'attente',
+            `Attente « ${motif} » ${
+              apresStatut === 'cloture' ? 'clôturée' : 'remise en cours'
+            }`
+          );
+        }
+        if ((avant.libelle ?? '') !== (attente.libelle ?? '')) {
+          journaliser(
+            'attente',
+            `Motif d'attente modifié : « ${avant.libelle?.trim() || '—'} » → « ${
+              attente.libelle ?? '—'
+            } »`
+          );
+        }
+        if ((avant.dateEntree ?? '') !== (attente.dateEntree ?? '')) {
+          journaliser(
+            'attente',
+            `Date d'entrée d'attente modifiée : ${formatDateFr(
+              avant.dateEntree
+            )} → ${formatDateFr(attente.dateEntree)}`
+          );
+        }
+        if ((avant.dateSortie ?? '') !== (attente.dateSortie ?? '')) {
+          journaliser(
+            'attente',
+            `Date de sortie d'attente modifiée : ${formatDateFr(
+              avant.dateSortie
+            )} → ${formatDateFr(attente.dateSortie)}`
+          );
+        }
+      }
+    }
+
+    majCarte(
+      edition.id,
+      {
+        titre,
+        etat: edition.etat.trim() || undefined,
+        description: edition.description.trim() || undefined,
+        traiteur: edition.traiteur.trim() || undefined,
+        client: edition.client.trim() || undefined,
+        commercial: edition.commercial.trim() || undefined,
+        remarques: edition.remarques.trim() || undefined,
+        couleur: edition.couleur,
+        date: edition.dateEcheance || undefined,
+        dateExpedition: edition.dateExpedition || undefined,
+        attentes,
+      },
+      entrees
+    );
     fermerEdition();
   };
 
@@ -1134,7 +1410,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
 
   const carteEdition = edition ? data.cartes.find((c) => c.id === edition.id) : undefined;
 
-  /** Existing values used to populate the selects (no new data fields). */
+  /** Existing values used to populate the full-edit selects (no new data fields). */
   const valeursTraiteur = Array.from(
     new Set(data.cartes.map((c) => c.traiteur?.trim()).filter((v): v is string => !!v))
   ).sort((a, b) => a.localeCompare(b, 'fr'));
@@ -1149,19 +1425,12 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     ? getAlarmeInfo(carteEdition).dateEntree ?? carteEdition.dateEntreeZone ?? carteEdition.creeLe
     : undefined;
   const dateDeplacementISO = dateDeplacementEdition?.slice(0, 10);
-  const colonneEdition = carteEdition
-    ? data.colonnes.find((c) => c.id === carteEdition.colonneId)
-    : undefined;
-  const sectionEdition =
-    carteEdition?.sectionId && colonneEdition?.sections
-      ? colonneEdition.sections.find((s) => s.id === carteEdition.sectionId)
-      : undefined;
-  const emplacementEdition = sectionEdition
-    ? `${colonneEdition?.titre ?? ''} · ${sectionEdition.titre}`
-    : colonneEdition?.titre ?? '';
 
   const erreurExpedition =
-    edition?.dateExpedition && dateDeplacementISO && edition.dateExpedition < dateDeplacementISO
+    modeEdition === 'complet' &&
+    edition?.dateExpedition &&
+    dateDeplacementISO &&
+    edition.dateExpedition < dateDeplacementISO
       ? "La date d'expédition doit être postérieure ou égale à la date de déplacement."
       : null;
 
@@ -1178,6 +1447,8 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       libelle: a.libelle ?? '',
       dateEntree: a.dateEntree ?? '',
       dateSortie: a.dateSortie ?? '',
+      statut: a.statut ?? 'en-cours',
+      historique: (a.historique ?? []).map((h) => ({ date: h.date, statut: h.statut })),
     }));
 
   const editionModifiee = !!(
@@ -1185,6 +1456,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     carteEdition &&
     (edition.titre !== carteEdition.titre ||
       edition.etat !== (carteEdition.etat ?? '') ||
+      edition.description !== (carteEdition.description ?? '') ||
       edition.traiteur !== (carteEdition.traiteur ?? '') ||
       edition.client !== (carteEdition.client ?? '') ||
       edition.commercial !== (carteEdition.commercial ?? '') ||
@@ -1196,7 +1468,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
         JSON.stringify(normaliserAttentes(carteEdition.attentes ?? [])))
   );
 
-  const enregistrementAutorise = !!edition && !formulaireInvalide && editionModifiee;
+  const enregistrementAutorise = !!edition && !formulaireInvalide;
 
   // Keep the latest save handler without re-subscribing the keyboard listener.
   const enregistrerEditionRef = useRef(enregistrerEdition);
@@ -1210,9 +1482,15 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       if (event.key === 'Escape') {
         event.preventDefault();
         fermerEdition();
-      } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+      } else if (event.key === 'Enter' && !event.shiftKey) {
+        const cible = event.target;
+        if (event.isComposing || (cible instanceof HTMLElement && cible.closest('button'))) {
+          return;
+        }
         event.preventDefault();
-        if (!formulaireInvalide && editionModifiee) enregistrerEditionRef.current();
+        if (formulaireInvalide) return;
+        if (editionModifiee) enregistrerEditionRef.current();
+        else fermerEdition();
       }
     };
     window.addEventListener('keydown', onKeyDown);
@@ -1314,6 +1592,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     const lignes = [
       `Titre : ${carte.titre}`,
       carte.etat ? `Étape : ${carte.etat}` : null,
+      carte.description ? `Description : ${carte.description}` : null,
       carte.traiteur ? `Traiteur : ${carte.traiteur}` : null,
       carte.client ? `Client : ${carte.client}` : null,
       carte.commercial ? `Commercial : ${carte.commercial}` : null,
@@ -1335,13 +1614,12 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       const alarmeInfo = getAlarmeInfo(carte);
       const alarme = alarmeInfo.active;
       const { diffZone, diffTotal } = alarmeInfo;
-      const dateDeplacementFr = formatDateFr(alarmeInfo.dateEntree ?? carte.dateEntreeZone ?? carte.creeLe);
       const postIt = KANBAN_COULEURS[carte.couleur ?? 'jaune'];
       const alerteAttente = getAlerteAttente(carte);
       const attenteEstOrange = alerteAttente?.niveau === 'orange';
       const attenteEstRouge = alerteAttente?.niveau === 'rouge';
       const attenteJours = alerteAttente?.jours ?? 0;
-      const attenteOuverte = (carte.attentes ?? []).find((a) => !estDateISO(a.dateSortie));
+      const attenteOuverte = (carte.attentes ?? []).find((a) => !estAttenteCloturee(a));
       const echeanceJours = estDateISO(carte.date) ? -joursEntreDatesISO(carte.date) : null;
       const retardJours = alarmeInfo.type === 'global' ? diffTotal : diffZone;
 
@@ -1363,7 +1641,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       } else if (attenteEstOrange) {
         alerteIcone = <Pause className="h-3.5 w-3.5 shrink-0" />;
         alerteTexte = `Attente${alerteAttente?.attente.libelle ? ` : ${alerteAttente.attente.libelle}` : ''} · ${attenteJours} j`;
-        alerteClasses = 'bg-slate-100 text-slate-600';
+        alerteClasses = 'bg-orange-100 text-orange-800 ring-1 ring-orange-300';
       } else if (attenteOuverte) {
         alerteIcone = <Pause className="h-3.5 w-3.5 shrink-0" />;
         alerteTexte = `Attente${attenteOuverte.libelle ? ` : ${attenteOuverte.libelle}` : ''}`;
@@ -1382,7 +1660,9 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
         alerteClasses = 'bg-amber-100 text-amber-800';
       }
 
-      const proprietaire = [carte.client, carte.traiteur].filter(Boolean).join(' · ');
+      const proprietaire = [carte.client, carte.traiteur].filter(Boolean).join(' / ');
+      const description = carte.description?.trim();
+      const remarque = carte.remarques?.trim();
       return (
         <div
           key={carte.id}
@@ -1392,12 +1672,31 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           onDragEnd={arreterDrag}
           onDragOver={(e) => survolCarte(e, carte, position, zone.sectionId)}
           onClick={(e) => ouvrirEdition(carte, e.currentTarget)}
-          className={`group/carte relative w-full cursor-pointer rounded-xl border p-3.5 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md ${postIt.fond} ${postIt.bordure} ${
+          className={`w-full cursor-pointer rounded-xl border p-3.5 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md ${postIt.fond} ${postIt.bordure} ${
             enDrag ? 'opacity-40' : ''
           }`}
         >
           <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0">
+            <div className="flex shrink-0 flex-col gap-0.5 text-[10px] font-semibold leading-tight text-slate-500">
+              <span title={`Création : ${formatDateFr(carte.creeLe)}`}>
+                {formatDateJourMois(carte.creeLe)}
+              </span>
+              <span title={`Expédition : ${formatDateFr(carte.dateExpedition)}`}>
+                {formatDateJourMois(carte.dateExpedition)}
+              </span>
+            </div>
+            {alerteTexte !== 'Aucune alerte' && (
+              <div
+                className={`inline-flex max-w-[65%] items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${alerteClasses}`}
+              >
+                {alerteIcone}
+                <span className="min-w-0 truncate">{alerteTexte}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="mt-1 flex items-start justify-between gap-2">
+            <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold leading-snug text-slate-900">
                 {carte.titre}
               </p>
@@ -1412,7 +1711,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                 if (estArchive) copierCarte(carte);
                 else {
                   const ancre = e.currentTarget.closest<HTMLElement>('[data-carte-id]');
-                  ouvrirEdition(carte, ancre ?? e.currentTarget);
+                  ouvrirEdition(carte, ancre ?? e.currentTarget, 'complet');
                 }
               }}
               title={
@@ -1420,7 +1719,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                   ? copieOk === carte.id
                     ? 'Copié !'
                     : 'Copier la carte'
-                  : 'Ouvrir la fiche'
+                  : 'Ouvrir la fiche complète'
               }
               className="shrink-0 rounded-md p-1 text-slate-400 transition-colors hover:bg-white/70 hover:text-slate-700"
             >
@@ -1436,19 +1735,52 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             </button>
           </div>
 
-          <span
-            className={`mt-2 inline-flex items-center gap-1.5 rounded-full border ${postIt.bordure} bg-white/70 px-2 py-0.5 text-[10px] font-semibold text-slate-700`}
-          >
-            <FileText className="h-3 w-3 shrink-0 text-slate-500" />
-            {postIt.label}
-          </span>
-
-          <div
-            className={`mt-2.5 flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-[11px] font-semibold ${alerteClasses}`}
-          >
-            {alerteIcone}
-            <span className="min-w-0 truncate">{alerteTexte}</span>
-          </div>
+          {(description || remarque || (carte.attentes?.length ?? 0) > 0) && (
+            <div className="mt-1.5 space-y-1">
+              {description && (
+                <p className="line-clamp-2 text-[11px] leading-snug text-slate-600">
+                  {description}
+                </p>
+              )}
+              {remarque && (
+                <p className="line-clamp-2 text-[11px] italic leading-snug text-slate-500">
+                  Remarque : {remarque}
+                </p>
+              )}
+              {(carte.attentes ?? []).map((attente) => {
+                const cloturee = estAttenteCloturee(attente);
+                return (
+                  <div
+                    key={attente.id}
+                    className="flex items-center gap-1 text-[10px] font-semibold text-slate-600"
+                  >
+                    <span className="min-w-0 truncate">
+                      en attente : {attente.libelle?.trim() || 'sans motif'} °{' '}
+                      {formatDateJourMois(attente.dateSortie)} °
+                    </span>
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (cloturee) marquerAttenteEnCours(carte.id, attente.id);
+                        else cloturerAttente(carte.id, attente.id);
+                      }}
+                      onMouseDown={(e) => e.stopPropagation()}
+                      title={cloturee ? "Remettre l'attente en cours" : "Clôturer l'attente"}
+                      aria-label={cloturee ? "Remettre l'attente en cours" : "Clôturer l'attente"}
+                      className="shrink-0 rounded p-0.5 transition-colors hover:bg-white/70"
+                    >
+                      {cloturee ? (
+                        <Check className="h-3 w-3 text-emerald-600" />
+                      ) : (
+                        <X className="h-3 w-3 text-orange-500" />
+                      )}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
 
           <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-black/5 pt-2 text-[11px]">
             <span className="min-w-0 truncate text-slate-500">
@@ -1458,23 +1790,6 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             <span className="shrink-0 font-medium text-slate-500">
               Éch. {formatDateCourte(carte.date ?? carte.dateExpedition)}
             </span>
-          </div>
-
-          <div className="pointer-events-none absolute inset-x-2 bottom-2 z-20 hidden rounded-lg border border-white/10 bg-slate-900/95 p-2 text-[9px] leading-tight text-white shadow-xl backdrop-blur-sm group-hover/carte:block">
-            <div>
-              <span className="text-white/60">Création :</span>{' '}
-              <span className="font-semibold">{formatDateFr(carte.creeLe)}</span>
-            </div>
-            <div>
-              <span className="text-white/60">Dernier déplacement :</span>{' '}
-              <span className="font-semibold">{dateDeplacementFr}</span>
-            </div>
-            <div>
-              <span className="text-white/60">Expédition :</span>{' '}
-              <span className="font-semibold">
-                {carte.dateExpedition ? formatDateFr(carte.dateExpedition) : '—'}
-              </span>
-            </div>
           </div>
         </div>
       );
@@ -2015,7 +2330,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
         </div>
         <div className="rounded-xl border border-slate-200/80 bg-white/60 overflow-hidden">
           <div className={`${grille} bg-slate-50 border-b border-slate-200`}>
-            {['Chaîne', 'Développement client', 'Chaîne', 'Développement initiatives'].map(
+            {['Brodeuse', 'Développement client', 'Brodeuse', 'Développement initiatives'].map(
               (titre, i) => (
                 <div
                   key={`${titre}-${i}`}
@@ -2030,7 +2345,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           </div>
           {nbLignes === 0 && (
             <div className="px-3 py-3 text-center text-[11px] text-slate-400">
-              Aucune personne : ajoutez une chaîne de chaque côté ci-dessous.
+              Aucune personne : ajoutez une brodeuse de chaque côté ci-dessous.
             </div>
           )}
           {Array.from({ length: nbLignes }, (_, i) => (
@@ -2057,12 +2372,26 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
    * CONFECTION » : une tuile par brodeuse, affectation par glisser-déposer.
    */
   const renduBrodeuse = (colonne: KanbanColonne) => {
-    const section = colonne.sections?.find((s) => estSectionBrodeuse(s));
+    let section = colonne.sections?.find((s) => estSectionBrodeuse(s));
+    // Création d’une section par défaut pour les colonnes PATRONNAGE / PUNCHING
+    if (
+      !section &&
+      (colonne.titre?.includes('PATRONNAGE') || colonne.titre?.includes('PUNCHING'))
+    ) {
+      section = { id: `sec-${colonne.id}`, titre: colonne.titre, personnes: [] } as any;
+    }
     const personnes = trierParOrdre(section?.personnes ?? []);
     const nbCartes = section
       ? data.cartes.filter((c) => c.colonneId === colonne.id && c.sectionId === section.id).length
       : 0;
-    const estLabo = estColonneLaboConfection(colonne);
+    const estLabo = true;
+    // Libellé de la colonne selon son titre
+    const libelleBrodeuse =
+      colonne.titre?.includes('PATRONNAGE')
+        ? 'PATRONNIER'
+        : colonne.titre?.includes('PUNCHING')
+          ? 'AGENT PUNCHING'
+          : 'Brodeuse';
     // Cartes présentes dans la colonne mais pas encore affectées à une brodeuse.
     const nonAssignees = trierParOrdre(
       data.cartes.filter(
@@ -2140,7 +2469,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             <>
               <div className="grid grid-cols-[11rem_minmax(0,1fr)] border-b border-slate-200 bg-slate-50">
                 <div className="border-r border-slate-200 px-2 py-1.5 text-[10px] font-extrabold uppercase tracking-wider text-violet-700">
-                  Brodeuse
+                  {libelleBrodeuse}
                 </div>
                 <div className="px-2 py-1.5 text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
                   Modèles
@@ -2377,6 +2706,292 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     );
   };
 
+  /**
+   * Zone de suivi. « ATTENTE » regroupe les périodes encore ouvertes ;
+   * « HISTORIQUE », à sa droite, journalise toutes les modifications des
+   * cartes. Les entrées liées à une attente sont encadrées en rose.
+   */
+  const renduZoneAttente = () => {
+    const attentesEnCours: { carte: KanbanCarte; attente: KanbanAttente }[] = [];
+    for (const carte of data.cartes) {
+      for (const attente of carte.attentes ?? []) {
+        if (!estAttenteCloturee(attente)) attentesEnCours.push({ carte, attente });
+      }
+    }
+
+    if (data.cartes.length === 0) return null;
+
+    const resteJours = (attente: KanbanAttente): number | null =>
+      estDateISO(attente.dateSortie) ? -joursEntreDatesISO(attente.dateSortie) : null;
+
+    attentesEnCours.sort((a, b) => {
+      const resteA = resteJours(a.attente);
+      const resteB = resteJours(b.attente);
+      if (resteA === null && resteB === null) return a.attente.dateEntree.localeCompare(b.attente.dateEntree);
+      if (resteA === null) return 1;
+      if (resteB === null) return -1;
+      return resteA - resteB;
+    });
+
+    const decrireDeplacement = (deplacement: KanbanDeplacement): string => {
+      const colonne = data.colonnes.find((c) => c.id === deplacement.colonneId);
+      const section = deplacement.sectionId
+        ? colonne?.sections?.find((s) => s.id === deplacement.sectionId)
+        : undefined;
+      const personne = deplacement.personneId
+        ? section?.personnes?.find((p) => p.id === deplacement.personneId)
+        : undefined;
+      const lieu = [colonne?.titre, section?.titre, personne?.titre]
+        .filter((v): v is string => !!v)
+        .join(' · ');
+      return `Déplacée vers ${lieu || 'une autre zone'}`;
+    };
+
+    const evenements: {
+      id: string;
+      carte: KanbanCarte;
+      date: string;
+      categorie: KanbanHistoriqueCategorie;
+      description: string;
+    }[] = [];
+    for (const carte of data.cartes) {
+      for (const entree of carte.historique ?? []) {
+        evenements.push({
+          id: entree.id,
+          carte,
+          date: entree.date,
+          categorie: entree.categorie,
+          description: entree.description,
+        });
+      }
+      // La première entrée de déplacement correspond à la création : elle est
+      // déjà couverte par « Carte créée ».
+      (carte.historiqueDeplacements ?? []).slice(1).forEach((deplacement, index) => {
+        evenements.push({
+          id: `${carte.id}-dep-${index + 1}`,
+          carte,
+          date: deplacement.date,
+          categorie: 'carte',
+          description: decrireDeplacement(deplacement),
+        });
+      });
+    }
+    evenements.sort((a, b) => {
+      const dateA = new Date(a.date).getTime();
+      const dateB = new Date(b.date).getTime();
+      return (Number.isNaN(dateB) ? 0 : dateB) - (Number.isNaN(dateA) ? 0 : dateA);
+    });
+
+    return (
+      <div className="border-b border-slate-200 bg-slate-50">
+        <div className="px-4 py-3 sm:px-6">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              aria-expanded={panneauSuivi === 'attente'}
+              aria-controls="zone-suivi-attente"
+              onClick={() =>
+                setPanneauSuivi((actuel) => (actuel === 'attente' ? null : 'attente'))
+              }
+              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-extrabold uppercase tracking-wide transition-colors cursor-pointer ${
+                panneauSuivi === 'attente'
+                  ? 'border-orange-300 bg-orange-50 text-orange-700'
+                  : 'border-slate-200 bg-white text-slate-600 hover:border-orange-200 hover:text-orange-700'
+              }`}
+            >
+              <Pause className="h-3.5 w-3.5" />
+              Attente
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ${
+                  panneauSuivi === 'attente'
+                    ? 'bg-orange-100 text-orange-700'
+                    : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {attentesEnCours.length}
+              </span>
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform ${
+                  panneauSuivi === 'attente' ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            <button
+              type="button"
+              aria-expanded={panneauSuivi === 'historique'}
+              aria-controls="zone-suivi-historique"
+              onClick={() =>
+                setPanneauSuivi((actuel) => (actuel === 'historique' ? null : 'historique'))
+              }
+              className={`inline-flex items-center gap-2 rounded-lg border px-3 py-2 text-xs font-extrabold uppercase tracking-wide transition-colors cursor-pointer ${
+                panneauSuivi === 'historique'
+                  ? 'border-slate-300 bg-slate-100 text-slate-700'
+                  : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <History className="h-3.5 w-3.5" />
+              Historique
+              <span
+                className={`rounded-full px-2 py-0.5 text-[10px] font-bold tabular-nums ${
+                  panneauSuivi === 'historique'
+                    ? 'bg-slate-200 text-slate-700'
+                    : 'bg-slate-100 text-slate-600'
+                }`}
+              >
+                {evenements.length}
+              </span>
+              <ChevronDown
+                className={`h-3.5 w-3.5 transition-transform ${
+                  panneauSuivi === 'historique' ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+          </div>
+
+          {panneauSuivi === 'attente' && (
+            <div
+              id="zone-suivi-attente"
+              className="mt-2 max-h-72 space-y-2 overflow-y-auto rounded-xl border border-orange-200 bg-white p-2 shadow-xs"
+            >
+              {attentesEnCours.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-[11px] text-slate-400">
+                  Aucune attente en cours.
+                </p>
+              ) : (
+                attentesEnCours.map(({ carte, attente }) => {
+                  const reste = resteJours(attente);
+                  const enRetard = reste !== null && reste < 0;
+                  const badge =
+                    reste === null
+                      ? { texte: 'Sans sortie', classes: 'bg-slate-100 text-slate-600' }
+                      : enRetard
+                        ? { texte: `Retard de ${-reste} j`, classes: 'bg-red-100 text-red-700' }
+                        : reste === 0
+                          ? { texte: "Sortie aujourd'hui", classes: 'bg-amber-100 text-amber-800' }
+                          : { texte: `Sortie dans ${reste} j`, classes: 'bg-slate-100 text-slate-600' };
+
+                  return (
+                    <article
+                      key={`${carte.id}-${attente.id}`}
+                      className="rounded-lg border border-slate-200 bg-slate-50/70 p-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-semibold text-slate-900">
+                            {carte.titre}
+                          </p>
+                          <p className="mt-0.5 truncate text-[11px] text-slate-500">
+                            Motif : {attente.libelle?.trim() || '—'}
+                          </p>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${badge.classes}`}
+                        >
+                          {badge.texte}
+                        </span>
+                      </div>
+
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+                        <div>
+                          <span className="block font-bold uppercase tracking-wide text-slate-400">
+                            Entrée
+                          </span>
+                          <span className="font-semibold text-slate-700">
+                            {formatDateFr(attente.dateEntree)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="block font-bold uppercase tracking-wide text-slate-400">
+                            Sortie
+                          </span>
+                          <span className="font-semibold text-slate-700">
+                            {formatDateFr(attente.dateSortie)}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="mt-2 flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => marquerAttenteEnCours(carte.id, attente.id)}
+                          title="Confirmer que l’attente est toujours en cours"
+                          className="inline-flex items-center gap-1 rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 transition-colors hover:bg-emerald-100 cursor-pointer"
+                        >
+                          <Pause className="h-3 w-3" />
+                          En cours
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => cloturerAttente(carte.id, attente.id)}
+                          title="Clôturer l’attente et l’archiver dans l’historique"
+                          className="inline-flex items-center gap-1 rounded-md border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-600 transition-colors hover:border-emerald-300 hover:text-emerald-700 cursor-pointer"
+                        >
+                          <Check className="h-3 w-3" />
+                          Clôturé
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          )}
+
+          {panneauSuivi === 'historique' && (
+            <div
+              id="zone-suivi-historique"
+              className="mt-2 max-h-72 space-y-2 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-xs"
+            >
+              {evenements.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-4 text-center text-[11px] text-slate-400">
+                  Aucune modification enregistrée.
+                </p>
+              ) : (
+                evenements.map((evenement) => {
+                  const estAttente = evenement.categorie === 'attente';
+                  return (
+                    <article
+                      key={evenement.id}
+                      className={`rounded-lg border p-2.5 ${
+                        estAttente
+                          ? 'border-2 border-rose-300 bg-rose-50'
+                          : 'border-slate-200 bg-slate-50/70'
+                      }`}
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-xs font-semibold text-slate-900">
+                            {evenement.carte.titre}
+                          </p>
+                          <p className="mt-0.5 text-[11px] leading-snug text-slate-600">
+                            {evenement.description}
+                          </p>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            estAttente
+                              ? 'bg-rose-100 text-rose-700'
+                              : 'bg-slate-200 text-slate-600'
+                          }`}
+                        >
+                          {estAttente ? 'Attente' : 'Carte'}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-[10px] font-medium text-slate-400">
+                        {formatHorodatage(evenement.date)}
+                      </p>
+                    </article>
+                  );
+                })
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
     <div className="kanban-app min-h-screen bg-slate-50 text-slate-800 flex flex-col">
       {/* Bandeau haut : titre, date/heure, sélecteur de vue (même trame que les autres vues) */}
@@ -2538,6 +3153,8 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
               </div>
             </div>
           </div>
+
+          {renduZoneAttente()}
 
           {/* Tableau kanban : rangée horizontale de colonnes */}
           <div className="flex-1 overflow-x-auto overflow-y-auto">
@@ -2751,18 +3368,11 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             positionEdition ? 'animate-popover-in' : 'invisible'
           }`}
         >
-          {/* Header: title, move info, close */}
+          {/* Header: mode title, close */}
           <div className="flex h-11 shrink-0 items-center gap-2 border-b border-slate-100 pl-4 pr-3">
             <h2 className="m-0 shrink-0 text-xs font-bold uppercase tracking-[0.05em] text-slate-900">
-              Modifier la carte
+              {modeEdition === 'complet' ? 'Fiche complète' : 'Modifier la carte'}
             </h2>
-            <span className="inline-flex min-w-0 items-center gap-1.5 rounded-full bg-brand-soft px-2.5 py-[3px] text-[11px] font-medium text-brand-strong">
-              <Clock className="h-3 w-3 shrink-0" />
-              <span className="truncate">
-                Déplacée le {formatDateFr(dateDeplacementISO)}
-                {emplacementEdition ? ` · ${emplacementEdition}` : ''}
-              </span>
-            </span>
             <button
               type="button"
               onClick={fermerEdition}
@@ -2776,148 +3386,22 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           {/* Scrollable body: keeps header and footer visible. */}
           <div className="min-h-0 flex-1 overflow-y-auto">
             <div className="@container flex flex-col gap-[9px] px-4 pb-2.5 pt-3">
-              {/* Main fields */}
-              <div className="space-y-[9px]">
-                {/* Title + stage */}
-                <div className="grid grid-cols-1 gap-2.5 @min-[400px]:grid-cols-[minmax(0,1fr)_auto]">
-                  <div className="min-w-0">
-                    <label htmlFor="carte-titre" className="kanban-label">
-                      Titre
+              {modeEdition === 'simple' ? (
+                <div className="space-y-[9px]">
+                  <div>
+                    <label htmlFor="carte-etape" className="kanban-label">
+                      Étape
                     </label>
                     <input
-                      id="carte-titre"
+                      id="carte-etape"
                       autoFocus
-                      value={edition.titre}
-                      onChange={(event) => setEdition({ ...edition, titre: event.target.value })}
+                      value={edition.etat}
+                      onChange={(event) => setEdition({ ...edition, etat: event.target.value })}
                       className="kanban-field"
-                      placeholder="Titre de la tâche"
+                      placeholder="Saisir l’étape…"
                     />
                   </div>
-                  <div className="min-w-0">
-                    <span className="kanban-label">Étape</span>
-                    <div
-                      role="group"
-                      aria-label="Étape"
-                      className="inline-flex h-[30px] w-full items-center gap-0.5 rounded-[7px] bg-slate-100 p-0.5 @min-[400px]:w-auto"
-                    >
-                      {(['proto', 'dt'] as const).map((etape) => (
-                        <button
-                          key={etape}
-                          type="button"
-                          aria-pressed={edition.etat === etape}
-                          onClick={() => setEdition({ ...edition, etat: etape })}
-                          className={`h-full min-w-[44px] flex-1 rounded-[5px] px-3 text-[11px] font-semibold uppercase tracking-[0.04em] transition-colors @min-[400px]:flex-none ${
-                            edition.etat === etape
-                              ? 'bg-brand font-bold text-white'
-                              : 'text-slate-600 hover:bg-white'
-                          }`}
-                        >
-                          {etape}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
 
-                {/* Traiteur / Client / Commercial */}
-                <div className="grid grid-cols-1 gap-2.5 @min-[400px]:grid-cols-[1fr_1.2fr_1fr]">
-                  <div>
-                    <label htmlFor="carte-traiteur" className="kanban-label">
-                      Traiteur
-                    </label>
-                    <select
-                      id="carte-traiteur"
-                      value={edition.traiteur}
-                      onChange={(event) => setEdition({ ...edition, traiteur: event.target.value })}
-                      className="kanban-field"
-                    >
-                      <option value="">—</option>
-                      {edition.traiteur && !valeursTraiteur.includes(edition.traiteur) && (
-                        <option value={edition.traiteur}>{edition.traiteur}</option>
-                      )}
-                      {valeursTraiteur.map((valeur) => (
-                        <option key={valeur} value={valeur}>
-                          {valeur}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="carte-client" className="kanban-label">
-                      Client
-                    </label>
-                    <input
-                      id="carte-client"
-                      list="clients-suggestions"
-                      value={edition.client}
-                      onChange={(event) => setEdition({ ...edition, client: event.target.value })}
-                      className="kanban-field"
-                      placeholder="Nom du client"
-                    />
-                    <datalist id="clients-suggestions">
-                      {suggestionsClient.map((valeur) => (
-                        <option key={valeur} value={valeur} />
-                      ))}
-                    </datalist>
-                  </div>
-                  <div>
-                    <label htmlFor="carte-commercial" className="kanban-label">
-                      Commercial
-                    </label>
-                    <select
-                      id="carte-commercial"
-                      value={edition.commercial}
-                      onChange={(event) =>
-                        setEdition({ ...edition, commercial: event.target.value })
-                      }
-                      className="kanban-field"
-                    >
-                      <option value="">—</option>
-                      {edition.commercial && !valeursCommercial.includes(edition.commercial) && (
-                        <option value={edition.commercial}>{edition.commercial}</option>
-                      )}
-                      {valeursCommercial.map((valeur) => (
-                        <option key={valeur} value={valeur}>
-                          {valeur}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                {/* Type */}
-                <div>
-                  <span className="kanban-label">Type</span>
-                  <div role="group" aria-label="Type de carte" className="flex h-7 items-center gap-2">
-                    {COULEURS_KANBAN_IDS.map((couleurId) => {
-                      const actif = edition.couleur === couleurId;
-                      const couleur = KANBAN_COULEURS[couleurId];
-                      return (
-                        <button
-                          key={couleurId}
-                          type="button"
-                          aria-pressed={actif}
-                          aria-label={couleur.label}
-                          title={couleur.label}
-                          onClick={() => setEdition({ ...edition, couleur: couleurId })}
-                          className={`grid h-6 w-6 shrink-0 place-items-center rounded-md transition-shadow ${couleur.point} ${
-                            actif
-                              ? 'ring-2 ring-slate-900 ring-offset-2'
-                              : 'hover:ring-2 hover:ring-slate-300'
-                          }`}
-                        >
-                          {actif && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
-                        </button>
-                      );
-                    })}
-                    <span className="ml-1.5 truncate text-xs font-medium text-slate-500">
-                      {KANBAN_COULEURS[edition.couleur].label}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Dates */}
-                <div className="grid grid-cols-2 gap-2.5">
                   <div>
                     <label htmlFor="carte-echeance" className="kanban-label">
                       Échéance
@@ -2932,47 +3416,233 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                       className="kanban-field"
                     />
                   </div>
+
                   <div>
-                    <label htmlFor="carte-expedition" className="kanban-label">
-                      Expédition
+                    <label htmlFor="carte-remarques" className="kanban-label">
+                      Remarque
                     </label>
-                    <input
-                      id="carte-expedition"
-                      type="date"
-                      value={edition.dateExpedition ?? ''}
+                    <textarea
+                      id="carte-remarques"
+                      rows={3}
+                      value={edition.remarques}
                       onChange={(event) =>
-                        setEdition({ ...edition, dateExpedition: event.target.value || undefined })
+                        setEdition({ ...edition, remarques: event.target.value })
                       }
-                      className={`kanban-field ${erreurExpedition ? 'kanban-field-error' : ''}`}
-                      aria-invalid={!!erreurExpedition}
-                      aria-describedby={erreurExpedition ? 'erreur-expedition' : undefined}
+                      className="kanban-field kanban-textarea"
+                      placeholder="Remarque…"
                     />
-                    {erreurExpedition && (
-                      <p
-                        id="erreur-expedition"
-                        className="mt-1 text-[11px] font-medium text-rose-600"
-                      >
-                        {erreurExpedition}
-                      </p>
-                    )}
                   </div>
                 </div>
+              ) : (
+                <div className="space-y-[9px]">
+                  <div className="grid grid-cols-1 gap-2.5 @min-[400px]:grid-cols-2">
+                    <div className="min-w-0">
+                      <label htmlFor="carte-titre" className="kanban-label">
+                        Titre
+                      </label>
+                      <input
+                        id="carte-titre"
+                        autoFocus
+                        value={edition.titre}
+                        onChange={(event) =>
+                          setEdition({ ...edition, titre: event.target.value })
+                        }
+                        className="kanban-field"
+                        placeholder="Titre de la tâche"
+                      />
+                    </div>
+                    <div className="min-w-0">
+                      <label htmlFor="carte-etape" className="kanban-label">
+                        Étape
+                      </label>
+                      <input
+                        id="carte-etape"
+                        value={edition.etat}
+                        onChange={(event) => setEdition({ ...edition, etat: event.target.value })}
+                        className="kanban-field"
+                        placeholder="Saisir l’étape…"
+                      />
+                    </div>
+                  </div>
 
-                {/* Notes */}
-                <div>
-                  <label htmlFor="carte-remarques" className="kanban-label">
-                    Remarques
-                  </label>
-                  <textarea
-                    id="carte-remarques"
-                    rows={2}
-                    value={edition.remarques}
-                    onChange={(event) => setEdition({ ...edition, remarques: event.target.value })}
-                    className="kanban-field kanban-textarea"
-                    placeholder="Remarques libres…"
-                  />
+                  <div>
+                    <label htmlFor="carte-description" className="kanban-label">
+                      Description
+                    </label>
+                    <textarea
+                      id="carte-description"
+                      rows={2}
+                      value={edition.description}
+                      onChange={(event) =>
+                        setEdition({ ...edition, description: event.target.value })
+                      }
+                      className="kanban-field kanban-textarea"
+                      placeholder="Description de la carte…"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 gap-2.5 @min-[400px]:grid-cols-[1fr_1.2fr_1fr]">
+                    <div>
+                      <label htmlFor="carte-traiteur" className="kanban-label">
+                        Traiteur
+                      </label>
+                      <select
+                        id="carte-traiteur"
+                        value={edition.traiteur}
+                        onChange={(event) =>
+                          setEdition({ ...edition, traiteur: event.target.value })
+                        }
+                        className="kanban-field"
+                      >
+                        <option value="">—</option>
+                        {edition.traiteur && !valeursTraiteur.includes(edition.traiteur) && (
+                          <option value={edition.traiteur}>{edition.traiteur}</option>
+                        )}
+                        {valeursTraiteur.map((valeur) => (
+                          <option key={valeur} value={valeur}>
+                            {valeur}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label htmlFor="carte-client" className="kanban-label">
+                        Client
+                      </label>
+                      <input
+                        id="carte-client"
+                        list="clients-suggestions"
+                        value={edition.client}
+                        onChange={(event) => setEdition({ ...edition, client: event.target.value })}
+                        className="kanban-field"
+                        placeholder="Nom du client"
+                      />
+                      <datalist id="clients-suggestions">
+                        {suggestionsClient.map((valeur) => (
+                          <option key={valeur} value={valeur} />
+                        ))}
+                      </datalist>
+                    </div>
+                    <div>
+                      <label htmlFor="carte-commercial" className="kanban-label">
+                        Commercial
+                      </label>
+                      <select
+                        id="carte-commercial"
+                        value={edition.commercial}
+                        onChange={(event) =>
+                          setEdition({ ...edition, commercial: event.target.value })
+                        }
+                        className="kanban-field"
+                      >
+                        <option value="">—</option>
+                        {edition.commercial && !valeursCommercial.includes(edition.commercial) && (
+                          <option value={edition.commercial}>{edition.commercial}</option>
+                        )}
+                        {valeursCommercial.map((valeur) => (
+                          <option key={valeur} value={valeur}>
+                            {valeur}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <span className="kanban-label">Type</span>
+                    <div
+                      role="group"
+                      aria-label="Type de carte"
+                      className="flex h-7 items-center gap-2"
+                    >
+                      {COULEURS_KANBAN_IDS.map((couleurId) => {
+                        const actif = edition.couleur === couleurId;
+                        const couleur = KANBAN_COULEURS[couleurId];
+                        return (
+                          <button
+                            key={couleurId}
+                            type="button"
+                            aria-pressed={actif}
+                            aria-label={couleur.label}
+                            title={couleur.label}
+                            onClick={() => setEdition({ ...edition, couleur: couleurId })}
+                            className={`grid h-6 w-6 shrink-0 place-items-center rounded-md transition-shadow ${couleur.point} ${
+                              actif
+                                ? 'ring-2 ring-slate-900 ring-offset-2'
+                                : 'hover:ring-2 hover:ring-slate-300'
+                            }`}
+                          >
+                            {actif && <Check className="h-3.5 w-3.5 text-white" strokeWidth={3} />}
+                          </button>
+                        );
+                      })}
+                      <span className="ml-1.5 truncate text-xs font-medium text-slate-500">
+                        {KANBAN_COULEURS[edition.couleur].label}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label htmlFor="carte-echeance" className="kanban-label">
+                        Échéance
+                      </label>
+                      <input
+                        id="carte-echeance"
+                        type="date"
+                        value={edition.dateEcheance ?? ''}
+                        onChange={(event) =>
+                          setEdition({ ...edition, dateEcheance: event.target.value || undefined })
+                        }
+                        className="kanban-field"
+                      />
+                    </div>
+                    <div>
+                      <label htmlFor="carte-expedition" className="kanban-label">
+                        Expédition
+                      </label>
+                      <input
+                        id="carte-expedition"
+                        type="date"
+                        value={edition.dateExpedition ?? ''}
+                        onChange={(event) =>
+                          setEdition({
+                            ...edition,
+                            dateExpedition: event.target.value || undefined,
+                          })
+                        }
+                        className={`kanban-field ${erreurExpedition ? 'kanban-field-error' : ''}`}
+                        aria-invalid={!!erreurExpedition}
+                        aria-describedby={erreurExpedition ? 'erreur-expedition' : undefined}
+                      />
+                      {erreurExpedition && (
+                        <p
+                          id="erreur-expedition"
+                          className="mt-1 text-[11px] font-medium text-rose-600"
+                        >
+                          {erreurExpedition}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <label htmlFor="carte-remarques" className="kanban-label">
+                      Remarques
+                    </label>
+                    <textarea
+                      id="carte-remarques"
+                      rows={2}
+                      value={edition.remarques}
+                      onChange={(event) =>
+                        setEdition({ ...edition, remarques: event.target.value })
+                      }
+                      className="kanban-field kanban-textarea"
+                      placeholder="Remarques libres…"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
 
               {/* Waiting periods: collapsed by default, one click to expand. */}
               <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
@@ -3001,6 +3671,8 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                           {
                             id: `ATT-${Date.now().toString(36).toUpperCase()}`,
                             dateEntree: getDateISOSite(),
+                            statut: 'en-cours',
+                            historique: [etapeAttente('en-cours')],
                           },
                         ],
                       });
@@ -3020,10 +3692,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                       </p>
                     )}
                   {edition.attentes.map((attente, index) => {
-                    const libelle = attente.libelle?.trim() ?? '';
-                    const motifConnu = MOTIFS_ATTENTE.includes(libelle);
-                    const valeurSelect = libelle === '' ? MOTIF_ATTENTE_AUTRE : libelle;
-                    const enCours = !attente.dateSortie;
+                    const enCours = !estAttenteCloturee(attente);
                     const duree = attente.dateEntree
                       ? Math.max(
                           0,
@@ -3037,31 +3706,27 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                         key={attente.id}
                         className="rounded-lg border border-slate-200 bg-slate-50 p-2"
                       >
-                        <div className="flex items-center gap-2">
-                          <select
-                            aria-label={`Motif de l’attente ${index + 1}`}
-                            value={motifConnu || libelle === '' ? valeurSelect : libelle}
-                            onChange={(event) => {
-                              const valeur = event.target.value;
-                              const attentes = [...edition.attentes];
-                              attentes[index] = {
-                                ...attente,
-                                libelle: valeur === MOTIF_ATTENTE_AUTRE ? '' : valeur,
-                              };
-                              setEdition({ ...edition, attentes });
-                            }}
-                            className="kanban-field-compact min-w-0 flex-1"
-                          >
-                            {MOTIFS_ATTENTE.map((motif) => (
-                              <option key={motif} value={motif}>
-                                {motif}
-                              </option>
-                            ))}
-                            {libelle !== '' && !motifConnu && (
-                              <option value={libelle}>{libelle}</option>
-                            )}
-                            <option value={MOTIF_ATTENTE_AUTRE}>{MOTIF_ATTENTE_AUTRE}</option>
-                          </select>
+                        <div className="flex items-end gap-2">
+                          <div className="min-w-0 flex-1">
+                            <label
+                              htmlFor={`attente-motif-${attente.id}`}
+                              className="kanban-label-compact"
+                            >
+                              Motif
+                            </label>
+                            <input
+                              id={`attente-motif-${attente.id}`}
+                              aria-label={`Motif de l’attente ${index + 1}`}
+                              value={attente.libelle ?? ''}
+                              onChange={(event) => {
+                                const attentes = [...edition.attentes];
+                                attentes[index] = { ...attente, libelle: event.target.value };
+                                setEdition({ ...edition, attentes });
+                              }}
+                              placeholder="Motif de l’attente…"
+                              className="kanban-field-compact w-full"
+                            />
+                          </div>
                           <button
                             type="button"
                             aria-label="Supprimer cette attente"
@@ -3078,20 +3743,6 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                             <Trash2 className="h-4 w-4" />
                           </button>
                         </div>
-
-                        {(!motifConnu || libelle === '') && (
-                          <input
-                            aria-label={`Motif personnalisé de l’attente ${index + 1}`}
-                            value={attente.libelle ?? ''}
-                            onChange={(event) => {
-                              const attentes = [...edition.attentes];
-                              attentes[index] = { ...attente, libelle: event.target.value };
-                              setEdition({ ...edition, attentes });
-                            }}
-                            placeholder="Précisez le motif…"
-                            className="kanban-field-compact mt-2 w-full"
-                          />
-                        )}
 
                         <div className="mt-2 grid grid-cols-2 gap-2">
                           <div>
@@ -3126,7 +3777,6 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                               id={`attente-sortie-${attente.id}`}
                               type="date"
                               value={attente.dateSortie ?? ''}
-                              disabled={enCours}
                               aria-invalid={!!erreurAttente}
                               onChange={(event) => {
                                 const attentes = [...edition.attentes];
@@ -3136,7 +3786,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                                 };
                                 setEdition({ ...edition, attentes });
                               }}
-                              className={`kanban-field-compact w-full disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400 ${
+                              className={`kanban-field-compact w-full ${
                                 erreurAttente ? 'kanban-field-error' : ''
                               }`}
                             />
@@ -3154,12 +3804,21 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                               checked={enCours}
                               onChange={(event) => {
                                 const attentes = [...edition.attentes];
+                                const statut: KanbanAttenteStatut = event.target.checked
+                                  ? 'en-cours'
+                                  : 'cloture';
                                 attentes[index] = {
                                   ...attente,
-                                  // Checking "En cours" clears the exit date; unchecking seeds it with today.
+                                  statut,
+                                  // La sortie est conservée si elle existe ; sinon la
+                                  // clôture renseigne la date du jour.
                                   dateSortie: event.target.checked
-                                    ? undefined
+                                    ? attente.dateSortie
                                     : attente.dateSortie || getDateISOSite(),
+                                  historique: [
+                                    ...(attente.historique ?? []),
+                                    etapeAttente(statut),
+                                  ],
                                 };
                                 setEdition({ ...edition, attentes });
                               }}

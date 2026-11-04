@@ -116,12 +116,31 @@ export interface KanbanColonne {
   sections?: KanbanSection[];
 }
 
-/** Période d'attente avec date d'entrée/sortie. */
+/** Statut d'une période d'attente, contrôlé depuis la zone « ATTENTE ». */
+export type KanbanAttenteStatut = 'en-cours' | 'cloture';
+
+/** Étape enregistrée dans l'historique d'une période d'attente. */
+export interface KanbanAttenteEtape {
+  /** Date ISO (`YYYY-MM-DD` ou horodatage). */
+  date: string;
+  statut: KanbanAttenteStatut;
+}
+
+/** Période d'attente avec date d'entrée/sortie et suivi de son statut. */
 export interface KanbanAttente {
   id: string;
   libelle?: string;
   dateEntree: string;
   dateSortie?: string;
+  /** Absent = attente encore en cours (compatibilité avec les anciennes données). */
+  statut?: KanbanAttenteStatut;
+  /** Étapes successives de l'attente (en cours / clôturée). */
+  historique?: KanbanAttenteEtape[];
+}
+
+/** Vrai si la période d'attente a été clôturée manuellement. */
+export function estAttenteCloturee(attente: KanbanAttente): boolean {
+  return attente.statut === 'cloture';
 }
 
 /** Une entrée d'historique : arrivée d'une carte dans une colonne/section. */
@@ -133,12 +152,26 @@ export interface KanbanDeplacement {
   personneId?: string;
 }
 
+/** Catégorie d'une entrée du journal d'une carte. */
+export type KanbanHistoriqueCategorie = 'carte' | 'attente';
+
+/** Modification enregistrée dans le journal d'une carte. */
+export interface KanbanHistoriqueEntree {
+  id: string;
+  /** Date ISO (`YYYY-MM-DD` ou horodatage). */
+  date: string;
+  categorie: KanbanHistoriqueCategorie;
+  description: string;
+}
+
 /** Une carte (tâche de développement) placée dans une colonne. */
 export interface KanbanCarte {
   id: string;
   titre: string;
   /** Étape de la carte (ex: "En cours", "En attente", "Terminé"…). */
   etat?: string;
+  /** Description libre de la carte. */
+  description?: string;
   /** Traiteur qui traite le modèle. */
   traiteur?: string;
   /** Nom du client pour ce modèle. */
@@ -163,6 +196,8 @@ export interface KanbanCarte {
   dateEntreeZone?: string;
   /** Historique des entrées dans les colonnes/sections (création incluse). */
   historiqueDeplacements?: KanbanDeplacement[];
+  /** Journal des modifications (création, édition, attentes…). */
+  historique?: KanbanHistoriqueEntree[];
   /** Périodes d'attente (avec date d'entrée/sortie). */
   attentes?: KanbanAttente[];
   ordre: number;

@@ -3,12 +3,16 @@ import {
   estColonneBroderie,
   estColonneBrodeuse,
   estSectionBroderieMain,
+  KanbanAttente,
+  KanbanAttenteEtape,
+  KanbanAttenteStatut,
   KanbanBloc,
   KanbanCarte,
   KanbanColonne,
   KanbanCouleurId,
   KanbanData,
   KanbanDeplacement,
+  KanbanHistoriqueEntree,
   KanbanPersonne,
   KanbanSection,
 } from '../types/kanban.ts';
@@ -416,20 +420,79 @@ export function chargerKanban(): KanbanData {
       ) {
         historiqueDeplacements.push(entreeCourante);
       }
-      const attentes = Array.isArray((k as any).attentes)
+      const attentes: KanbanAttente[] | undefined = Array.isArray((k as any).attentes)
         ? (k as any).attentes
             .filter((a: any) => a && estDateISO(a.dateEntree))
-            .map((a: any, i: number) => ({
-              id: typeof a.id === 'string' ? a.id : `ATT-${i}-${Date.now().toString(36)}`,
-              ...(typeof a.libelle === 'string' && a.libelle.trim() ? { libelle: a.libelle.trim() } : {}),
-              dateEntree: a.dateEntree.slice(0, 10),
-              ...(estDateISO(a.dateSortie) ? { dateSortie: a.dateSortie.slice(0, 10) } : {}),
-            }))
+            .map((a: any, i: number): KanbanAttente => {
+              const statut: KanbanAttenteStatut = a.statut === 'cloture' ? 'cloture' : 'en-cours';
+              const historique: KanbanAttenteEtape[] = Array.isArray(a.historique)
+                ? a.historique
+                    .filter(
+                      (h: any) =>
+                        h &&
+                        typeof h.date === 'string' &&
+                        (h.statut === 'en-cours' || h.statut === 'cloture')
+                    )
+                    .map((h: any) => ({ date: h.date, statut: h.statut }))
+                : [];
+              // Anciennes données : on amorce l'historique avec l'entrée en attente.
+              if (historique.length === 0) {
+                historique.push({ date: a.dateEntree.slice(0, 10), statut });
+              }
+              return {
+                id: typeof a.id === 'string' ? a.id : `ATT-${i}-${Date.now().toString(36)}`,
+                ...(typeof a.libelle === 'string' && a.libelle.trim()
+                  ? { libelle: a.libelle.trim() }
+                  : {}),
+                dateEntree: a.dateEntree.slice(0, 10),
+                ...(estDateISO(a.dateSortie) ? { dateSortie: a.dateSortie.slice(0, 10) } : {}),
+                statut,
+                historique,
+              };
+            })
         : undefined;
+      // Journal des modifications : on conserve les entrées valides. Pour les
+      // cartes antérieures au journal, on amorce avec la création et les étapes
+      // d'attente déjà connues.
+      const historique: KanbanHistoriqueEntree[] = [];
+      if (Array.isArray((k as any).historique)) {
+        for (const h of (k as any).historique) {
+          if (!h || !estDateISO(h.date) || typeof h.description !== 'string') continue;
+          const description = h.description.trim();
+          if (!description) continue;
+          historique.push({
+            id: typeof h.id === 'string' && h.id ? h.id : nouvelId(),
+            date: h.date,
+            categorie: h.categorie === 'attente' ? 'attente' : 'carte',
+            description,
+          });
+        }
+      }
+      if (historique.length === 0) {
+        historique.push({
+          id: nouvelId(),
+          date: creeLe,
+          categorie: 'carte',
+          description: 'Carte créée',
+        });
+        for (const attente of attentes ?? []) {
+          for (const etape of attente.historique ?? []) {
+            historique.push({
+              id: nouvelId(),
+              date: etape.date,
+              categorie: 'attente',
+              description: `Attente « ${attente.libelle?.trim() || 'sans motif'} » ${
+                etape.statut === 'cloture' ? 'clôturée' : 'en cours'
+              }`,
+            });
+          }
+        }
+      }
       cartesValides.push({
         id: k.id,
         titre: k.titre,
         etat: typeof k.etat === 'string' ? k.etat : undefined,
+        description: typeof k.description === 'string' ? k.description : undefined,
         traiteur: typeof k.traiteur === 'string' ? k.traiteur : undefined,
         client: typeof k.client === 'string' ? k.client : undefined,
         commercial: typeof k.commercial === 'string' ? k.commercial : undefined,
@@ -445,6 +508,7 @@ export function chargerKanban(): KanbanData {
         date: typeof k.date === 'string' && k.date ? k.date : undefined,
         dateEntreeZone,
         historiqueDeplacements,
+        historique,
         ...(attentes && attentes.length ? { attentes } : {}),
         ordre: typeof k.ordre === 'number' ? k.ordre : cartesValides.length,
         creeLe,
