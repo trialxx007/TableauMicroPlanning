@@ -13,27 +13,27 @@ export const KANBAN_COULEURS: Record<
 > = {
   blanc: {
     label: 'Commande client',
-    point: 'bg-sky-500',
-    fond: 'bg-sky-100',
-    bordure: 'border-sky-300',
+    point: 'bg-white ring-1 ring-slate-300',
+    fond: 'bg-white',
+    bordure: 'border-slate-200',
   },
   jaune: {
     label: 'RobRAK essai',
-    point: 'bg-amber-500',
-    fond: 'bg-amber-100',
-    bordure: 'border-amber-300',
+    point: 'bg-yellow-300',
+    fond: 'bg-yellow-200',
+    bordure: 'border-yellow-300',
   },
   vert: {
     label: 'RobRAK client',
-    point: 'bg-emerald-500',
-    fond: 'bg-emerald-100',
-    bordure: 'border-emerald-300',
+    point: 'bg-green-400',
+    fond: 'bg-green-200',
+    bordure: 'border-green-300',
   },
   bleu: {
     label: 'Keep',
-    point: 'bg-slate-400',
-    fond: 'bg-slate-200',
-    bordure: 'border-slate-300',
+    point: 'bg-blue-400',
+    fond: 'bg-blue-200',
+    bordure: 'border-blue-300',
   },
 };
 
@@ -41,6 +41,24 @@ export const COULEURS_KANBAN_IDS = Object.keys(KANBAN_COULEURS) as KanbanCouleur
 
 /** Côté du tableau de la section BRODERIE MAIN auquel appartient une personne. */
 export type KanbanBloc = 'client' | 'initiatives';
+
+/** Statut de disponibilité d'une personne (brodeuse / patronnier / agent punching). */
+export type KanbanStatutPersonne = 'RM' | 'Recup' | 'Mater' | 'Abs' | 'Conge' | 'Present';
+
+/** Statuts proposés sous le nom d'une personne, avec leur libellé affiché. */
+export const KANBAN_STATUTS_PERSONNE: { id: KanbanStatutPersonne; label: string }[] = [
+  { id: 'RM', label: 'RM' },
+  { id: 'Recup', label: 'Récup' },
+  { id: 'Mater', label: 'C.matérnité' },
+  { id: 'Abs', label: 'Abs' },
+  { id: 'Conge', label: 'Congé' },
+  { id: 'Present', label: 'Present(e)' },
+];
+
+/** Vrai si la valeur est un statut de personne connu. */
+export function estStatutPersonne(value: unknown): value is KanbanStatutPersonne {
+  return KANBAN_STATUTS_PERSONNE.some((s) => s.id === value);
+}
 
 /**
  * Personne d'une section à affectation : BRODERIE MAIN (bloc client /
@@ -51,6 +69,8 @@ export interface KanbanPersonne {
   titre: string;
   /** Côté client/initiatives ; absent pour une brodeuse. */
   bloc?: KanbanBloc;
+  /** Statut de disponibilité affiché sous le nom ; absent = non renseigné. */
+  statut?: KanbanStatutPersonne;
   ordre: number;
 }
 
@@ -98,12 +118,18 @@ export function estColonneLaboConfection(colonne: { titre: string }): boolean {
 }
 
 /**
- * Colonne dédiée aux brodeuses (« BRODERIE MACHINE », « LABO CONFECTION »).
- * Elle peut cohabiter avec d'autres sections (dont BRODERIE MAIN).
+ * Colonne dédiée aux brodeuses (« BRODERIE MACHINE », « LABO CONFECTION »,
+ * « PATRONNAGE », « PUNCHING »). Elle peut cohabiter avec d'autres sections
+ * (dont BRODERIE MAIN).
  */
 export function estColonneBrodeuse(colonne: { titre: string; sections?: { titre: string }[] }): boolean {
   const t = colonne.titre.trim().toUpperCase().replace(/\s+/g, ' ');
-  return t.includes('BRODERIE MACHINE') || estColonneLaboConfection(colonne);
+  return (
+    t.includes('BRODERIE MACHINE') ||
+    estColonneLaboConfection(colonne) ||
+    t.includes('PATRONNAGE') ||
+    t.includes('PUNCHING')
+  );
 }
 
 /** Une colonne du tableau kanban (type liste Trello). */

@@ -24,6 +24,8 @@ import {
   updateCardData,
   getSuiviGlobalLayout,
   setSuiviGlobalLayout,
+  getKanbanBoard,
+  setKanbanBoard,
   journaliser,
   listerJournal,
   viderJournal,
@@ -870,6 +872,62 @@ apiRouter.post(
         return res.status(400).json({ success: false, error: 'rows doit être un tableau' });
       }
       setSuiviGlobalLayout(rows);
+      res.status(204).end();
+    } catch (err) {
+      res.status(500).json({ success: false, error: (err as Error).message });
+    }
+  }
+);
+
+/* ------------------------------------------------------------------ kanban développement */
+
+// GET tableau Développement sauvegardé (null si aucun)
+apiRouter.get('/kanban', (_req: Request, res: Response) => {
+  try {
+    const data = getKanbanBoard();
+    res.json({ success: true, data: data ?? null });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
+// PUT tableau Développement (remplace tout le contenu)
+apiRouter.put('/kanban', (req: Request, res: Response) => {
+  try {
+    const data = req.body?.data ?? req.body;
+    if (
+      !data ||
+      typeof data !== 'object' ||
+      !Array.isArray((data as { colonnes?: unknown }).colonnes) ||
+      !Array.isArray((data as { cartes?: unknown }).cartes)
+    ) {
+      return res.status(400).json({ success: false, error: 'Données kanban invalides' });
+    }
+    setKanbanBoard(data);
+    res.json({ success: true, message: 'Tableau Développement sauvegardé' });
+  } catch (err) {
+    res.status(500).json({ success: false, error: (err as Error).message });
+  }
+});
+
+// POST tableau Développement : utilisé par navigator.sendBeacon à la fermeture de
+// page (corps text/plain non lu par express.json, on parse donc le corps brut).
+apiRouter.post(
+  '/kanban',
+  express.text({ type: '*/*', limit: '4mb' }),
+  (req: Request, res: Response) => {
+    try {
+      const parsed = typeof req.body === 'string' ? JSON.parse(req.body) : req.body;
+      const data = parsed?.data ?? parsed;
+      if (
+        !data ||
+        typeof data !== 'object' ||
+        !Array.isArray((data as { colonnes?: unknown }).colonnes) ||
+        !Array.isArray((data as { cartes?: unknown }).cartes)
+      ) {
+        return res.status(400).json({ success: false, error: 'Données kanban invalides' });
+      }
+      setKanbanBoard(data);
       res.status(204).end();
     } catch (err) {
       res.status(500).json({ success: false, error: (err as Error).message });

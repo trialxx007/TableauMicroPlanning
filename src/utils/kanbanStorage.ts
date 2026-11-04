@@ -3,6 +3,7 @@ import {
   estColonneBroderie,
   estColonneBrodeuse,
   estSectionBroderieMain,
+  estStatutPersonne,
   KanbanAttente,
   KanbanAttenteEtape,
   KanbanAttenteStatut,
@@ -319,10 +320,12 @@ export function chargerKanban(): KanbanData {
                 p.bloc === 'client' || p.bloc === 'initiatives' ? p.bloc : undefined;
               // Une section BRODERIE MAIN exige un bloc ; les autres non.
               if (!pbloc && estMain) continue;
+              const pstatut = estStatutPersonne(p.statut) ? p.statut : undefined;
               pv.push({
                 id: p.id,
                 titre: p.titre,
                 ...(pbloc ? { bloc: pbloc } : {}),
+                ...(pstatut ? { statut: pstatut } : {}),
                 ordre: typeof p.ordre === 'number' ? p.ordre : pv.length,
               });
             }
@@ -527,5 +530,38 @@ export function sauverKanban(data: KanbanData): void {
   } catch {
     // Quota plein ou navigateur en navigation privée : le tableau reste utilisable
     // en mémoire pour la session en cours.
+  }
+}
+
+/**
+ * Charge le tableau Développement partagé depuis le serveur (SQLite). Renvoie
+ * `null` si aucun tableau n'a encore été sauvegardé ou si le serveur est
+ * indisponible : le localStorage sert alors de repli.
+ */
+export async function chargerKanbanServeur(): Promise<KanbanData | null> {
+  try {
+    const res = await fetch('/api/v1/kanban');
+    if (!res.ok) return null;
+    const json = (await res.json()) as { success?: boolean; data?: unknown };
+    const data = json?.data;
+    if (!json?.success || !data || typeof data !== 'object') return null;
+    const { colonnes, cartes } = data as Partial<KanbanData>;
+    if (!Array.isArray(colonnes) || !Array.isArray(cartes) || colonnes.length === 0) return null;
+    return data as KanbanData;
+  } catch {
+    return null;
+  }
+}
+
+/** Sauvegarde le tableau Développement côté serveur (partagé entre postes). */
+export async function sauverKanbanServeur(data: KanbanData): Promise<void> {
+  try {
+    await fetch('/api/v1/kanban', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ data }),
+    });
+  } catch {
+    // Serveur indisponible : le localStorage reste la sauvegarde locale.
   }
 }

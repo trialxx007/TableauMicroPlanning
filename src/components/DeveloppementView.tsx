@@ -8,6 +8,7 @@ import {
   estSectionBrodeuse,
   estSectionBroderieMain,
   KANBAN_COULEURS,
+  KANBAN_STATUTS_PERSONNE,
   KanbanBloc,
   KanbanCarte,
   KanbanCouleurId,
@@ -21,8 +22,9 @@ import {
   KanbanHistoriqueEntree,
   KanbanPersonne,
   KanbanSection,
+  KanbanStatutPersonne,
 } from '../types/kanban.ts';
-import { chargerKanban, KanbanEnvironnement, nouvelId, sauverKanban } from '../utils/kanbanStorage.ts';
+import { chargerKanban, chargerKanbanServeur, KanbanEnvironnement, nouvelId, sauverKanban, sauverKanbanServeur } from '../utils/kanbanStorage.ts';
 import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
 import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
 import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
@@ -38,6 +40,16 @@ interface DeveloppementViewProps {
 
 /** Élément en cours de glissement (carte ou colonne). */
 type DragInfo = { type: 'carte'; id: string } | { type: 'colonne'; id: string };
+
+/** Couleurs des pastilles de statut d'une personne, par statut. */
+const STATUT_PERSONNE_ACTIF: Record<KanbanStatutPersonne, string> = {
+  RM: 'bg-violet-600 border-violet-600 text-white',
+  Recup: 'bg-sky-600 border-sky-600 text-white',
+  Mater: 'bg-pink-600 border-pink-600 text-white',
+  Abs: 'bg-rose-600 border-rose-600 text-white',
+  Conge: 'bg-orange-500 border-orange-500 text-white',
+  Present: 'bg-emerald-600 border-emerald-600 text-white',
+};
 
 /** Quick edit on card click, full card fields through the "…" button. */
 type ModeEdition = 'simple' | 'complet';
@@ -226,6 +238,42 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   // Évite de réécrire le localStorage au simple montage (ou après un HMR) :
   // on ne sauvegarde que lorsque les données ont réellement changé.
   const derniereSauvegarde = useRef(JSON.stringify(board.data));
+  /** Dernière donnée en mémoire, pour les sauvegardes asynchrones. */
+  const donneesActuelles = useRef(board.data);
+  donneesActuelles.current = board.data;
+  /** Vrai dès qu'une modification locale a été sauvegardée. */
+  const modifieDepuisMontage = useRef(false);
+
+  // Charge la sauvegarde partagée du serveur au montage. Si le serveur n'a pas
+  // encore de tableau, on y pousse l'état local (ou le tableau de démarrage),
+  // pour que la première saisie soit elle aussi persistée côté serveur.
+  useEffect(() => {
+    let annule = false;
+    void (async () => {
+      const serveur = await chargerKanbanServeur();
+      if (annule) return;
+      // Une modification locale est arrivée pendant le chargement : elle est
+      // prioritaire, on ne l'écrase pas avec une sauvegarde serveur plus ancienne.
+      if (modifieDepuisMontage.current) {
+        void sauverKanbanServeur(donneesActuelles.current);
+        return;
+      }
+      if (serveur) {
+        const serialise = JSON.stringify(serveur);
+        if (serialise !== derniereSauvegarde.current) {
+          derniereSauvegarde.current = serialise;
+          setBoard((prev) => ({ ...prev, data: serveur }));
+        }
+      } else {
+        void sauverKanbanServeur(donneesActuelles.current);
+      }
+    })();
+    return () => {
+      annule = true;
+    };
+    // Chargement unique au montage : `board.data` n'est lu que pour l'amorçage.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     // L'environnement Direction est une vue du tableau Développement : les
@@ -233,8 +281,12 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     // la même sauvegarde.
     const serialise = JSON.stringify(board.data);
     if (serialise === derniereSauvegarde.current) return;
+    modifieDepuisMontage.current = true;
     sauverKanban(board.data);
     derniereSauvegarde.current = serialise;
+    // Sauvegarde partagée côté serveur (SQLite) : c'est elle qui rend les
+    // données durables et accessibles depuis les autres postes.
+    void sauverKanbanServeur(board.data);
   }, [board.data]);
 
   useEffect(() => {
@@ -606,6 +658,65 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       ),
     }));
   };
+
+  /** Change le statut d'une personne (re-cliquer sur le statut actif l'efface). */
+  const changerStatutPersonne = (
+    colonneId: string,
+    sectionId: string,
+    personneId: string,
+    statut: KanbanStatutPersonne | undefined
+  ) => {
+    setData((prev) => ({
+      ...prev,
+      colonnes: prev.colonnes.map((c) =>
+        c.id === colonneId
+          ? {
+              ...c,
+              sections: c.sections?.map((s) =>
+                s.id === sectionId
+                  ? {
+                      ...s,
+                      personnes: s.personnes?.map((p) =>
+                        p.id === personneId ? { ...p, statut } : p
+                      ),
+                    }
+                  : s
+              ),
+            }
+          : c
+      ),
+    }));
+  };
+
+  /** Pastilles de statut affichées sous le nom d'une personne. */
+  const renduStatutsPersonne = (
+    colonneId: string,
+    sectionId: string,
+    personne: KanbanPersonne
+  ) => (
+    <div className="mt-1 flex flex-wrap gap-1">
+      {KANBAN_STATUTS_PERSONNE.map((s) => {
+        const actif = personne.statut === s.id;
+        return (
+          <button
+            key={s.id}
+            type="button"
+            onClick={() =>
+              changerStatutPersonne(colonneId, sectionId, personne.id, actif ? undefined : s.id)
+            }
+            title={actif ? `${s.label} (statut actuel)` : s.label}
+            className={`cursor-pointer rounded-full border px-1.5 py-0.5 text-[9px] font-bold leading-none transition-colors ${
+              actif
+                ? STATUT_PERSONNE_ACTIF[s.id]
+                : 'border-slate-200 bg-white text-slate-500 hover:border-slate-300 hover:bg-slate-50'
+            }`}
+          >
+            {s.label}
+          </button>
+        );
+      })}
+    </div>
+  );
 
   /* --------------------------- Brodeuses (BRODERIE MACHINE / LABO CONFECTION) -------------------------- */
 
@@ -2264,6 +2375,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
               <Trash2 className="w-3 h-3" />
             </button>
           </div>
+          {renduStatutsPersonne(colonne.id, section.id, personne)}
         </div>
       );
     };
@@ -2372,14 +2484,10 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
    * CONFECTION » : une tuile par brodeuse, affectation par glisser-déposer.
    */
   const renduBrodeuse = (colonne: KanbanColonne) => {
-    let section = colonne.sections?.find((s) => estSectionBrodeuse(s));
-    // Création d’une section par défaut pour les colonnes PATRONNAGE / PUNCHING
-    if (
-      !section &&
-      (colonne.titre?.includes('PATRONNAGE') || colonne.titre?.includes('PUNCHING'))
-    ) {
-      section = { id: `sec-${colonne.id}`, titre: colonne.titre, personnes: [] } as any;
-    }
+    const section = colonne.sections?.find((s) => estSectionBrodeuse(s));
+    // Sans section « Brodeuses », la zone « Non assignées » accepte les dépôts
+    // tant que la colonne n'a pas d'autres sections (ex. PATRONNAGE).
+    const peutDeposerNon = !!section || !colonne.sections?.length;
     const personnes = trierParOrdre(section?.personnes ?? []);
     const nbCartes = section
       ? data.cartes.filter((c) => c.colonneId === colonne.id && c.sectionId === section.id).length
@@ -2392,6 +2500,9 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
         : colonne.titre?.includes('PUNCHING')
           ? 'AGENT PUNCHING'
           : 'Brodeuse';
+    const estBrodeuse = libelleBrodeuse === 'Brodeuse';
+    const libelleUnitaire = estBrodeuse ? 'une brodeuse' : `un ${libelleBrodeuse}`;
+    const libelleNom = estBrodeuse ? 'Nom de la brodeuse' : 'Nom';
     // Cartes présentes dans la colonne mais pas encore affectées à une brodeuse.
     const nonAssignees = trierParOrdre(
       data.cartes.filter(
@@ -2410,6 +2521,39 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
 
     return (
       <div className="space-y-2">
+        <div
+          onDragOver={(e) => {
+            if (!peutDeposerNon || drag?.type !== 'carte') return;
+            survolZone(e, colonne.id, section?.id, nonAssignees.length);
+          }}
+          onDrop={(e) => {
+            if (!peutDeposerNon || drag?.type !== 'carte') return;
+            deposerDansZone(e, colonne.id, section?.id, nonAssignees.length);
+          }}
+          className={`rounded-xl border p-1.5 transition-all ${
+            surligneNon ? 'border-violet-400 ring-2 ring-violet-200 bg-violet-50/60' : 'border-slate-200/80 bg-white/50'
+          }`}
+        >
+          <div className="flex items-center gap-1 px-1 pb-1">
+            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
+              Non assignées
+            </span>
+            <span className="ml-auto text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-1.5 py-0.5 tabular-nums shrink-0">
+              {nonAssignees.length}
+            </span>
+          </div>
+          <div className="flex flex-col gap-2 content-start min-h-[4rem] px-1">
+            {nonAssignees.length === 0 ? (
+              <div className="w-full rounded-lg border border-dashed border-slate-300/80 px-3 py-3 text-center text-[11px] text-slate-400">
+                {section ? 'Déposez une carte ici pour la désassigner' : 'Aucune carte en attente'}
+              </div>
+            ) : (
+              rendreCartes({ sectionId: section?.id }, nonAssignees)
+            )}
+            {peutDeposerNon && rendreComposer(colonne, { sectionId: section?.id })}
+          </div>
+        </div>
+
         {section && (
           <div className="flex items-center gap-1 px-1 pb-1">
             <EditableItemName
@@ -2432,38 +2576,6 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           </div>
         )}
 
-        <div
-          onDragOver={(e) => {
-            if (!section || drag?.type !== 'carte') return;
-            survolZone(e, colonne.id, section.id, nonAssignees.length);
-          }}
-          onDrop={(e) => {
-            if (!section || drag?.type !== 'carte') return;
-            deposerDansZone(e, colonne.id, section.id, nonAssignees.length);
-          }}
-          className={`rounded-xl border p-1.5 transition-all ${
-            surligneNon ? 'border-violet-400 ring-2 ring-violet-200 bg-violet-50/60' : 'border-slate-200/80 bg-white/50'
-          }`}
-        >
-          <div className="flex items-center gap-1 px-1 pb-1">
-            <span className="text-[10px] font-extrabold uppercase tracking-wider text-slate-500">
-              Non assignées
-            </span>
-            <span className="ml-auto text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-1.5 py-0.5 tabular-nums shrink-0">
-              {nonAssignees.length}
-            </span>
-          </div>
-          <div className="flex flex-col gap-2 content-start min-h-[4rem] px-1">
-            {nonAssignees.length === 0 ? (
-              <div className="w-full rounded-lg border border-dashed border-slate-300/80 px-3 py-3 text-center text-[11px] text-slate-400">
-                {section ? 'Déposez une carte ici pour la désassigner' : 'Aucune carte en attente'}
-              </div>
-            ) : (
-              rendreCartes({ sectionId: section?.id }, nonAssignees)
-            )}
-          </div>
-        </div>
-
         <div className="rounded-xl border border-slate-200/80 bg-white/60 overflow-hidden">
           {estLabo ? (
             <>
@@ -2477,7 +2589,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
               </div>
               {personnes.length === 0 ? (
                 <div className="px-3 py-4 text-center text-[11px] text-slate-400">
-                  Aucune brodeuse : ajoutez-en une ci-dessous.
+                  {estBrodeuse ? 'Aucune brodeuse : ajoutez-en une ci-dessous.' : `Aucun ${libelleBrodeuse} : ajoutez-en un ci-dessous.`}
                 </div>
               ) : (
                 personnes.map((personne) => {
@@ -2508,17 +2620,18 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                           <EditableItemName
                             value={personne.titre}
                             onSave={(titre) => renommerPersonne(colonne.id, section.id, personne.id, titre)}
-                            placeholder="Nom de la brodeuse"
+                            placeholder={libelleNom}
                             className="min-w-0"
                           />
                           <span className="mt-1 inline-block text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-1.5 py-0.5 tabular-nums">
                             {nb}
                           </span>
+                          {renduStatutsPersonne(colonne.id, section.id, personne)}
                         </div>
                         <button
                           type="button"
                           onClick={() => supprimerBrodeuse(colonne.id, personne.id)}
-                          title="Supprimer la brodeuse"
+                          title={estBrodeuse ? 'Supprimer la brodeuse' : `Supprimer ${libelleBrodeuse}`}
                           className="shrink-0 p-1 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
                         >
                           <Trash2 className="w-3 h-3" />
@@ -2534,7 +2647,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             </>
           ) : personnes.length === 0 ? (
             <div className="px-3 py-4 text-center text-[11px] text-slate-400">
-              Aucune brodeuse : ajoutez-en une ci-dessous.
+              {estBrodeuse ? 'Aucune brodeuse : ajoutez-en une ci-dessous.' : `Aucun ${libelleBrodeuse} : ajoutez-en un ci-dessous.`}
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-200">
@@ -2546,7 +2659,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                       onSave={(titre) => {
                         if (section) renommerPersonne(colonne.id, section.id, personne.id, titre);
                       }}
-                      placeholder="Nom de la brodeuse"
+                      placeholder={libelleNom}
                       className="min-w-0"
                     />
                     <span className="text-[10px] font-bold text-slate-500 bg-white border border-slate-200 rounded-full px-1.5 py-0.5 tabular-nums shrink-0">
@@ -2560,7 +2673,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                     <button
                       type="button"
                       onClick={() => supprimerBrodeuse(colonne.id, personne.id)}
-                      title="Supprimer la brodeuse"
+                      title={estBrodeuse ? 'Supprimer la brodeuse' : `Supprimer ${libelleBrodeuse}`}
                       className="ml-auto p-1 rounded text-slate-300 hover:text-rose-600 hover:bg-rose-50 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -2578,7 +2691,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
               className="w-full inline-flex items-center justify-center gap-1 text-[11px] font-semibold text-slate-500 hover:text-violet-700 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
-              Ajouter une brodeuse
+              Ajouter {libelleUnitaire}
             </button>
           </div>
         </div>

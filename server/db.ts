@@ -112,6 +112,13 @@ function initSchema(conn: DatabaseSync): void {
       details TEXT
     );
 
+    -- Tableau Développement (kanban) partagé entre postes, stocké en JSON.
+    CREATE TABLE IF NOT EXISTS kanban_board (
+      id      TEXT PRIMARY KEY,
+      data    TEXT NOT NULL,
+      maj_le  TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_card_jalons_card ON card_jalons(card_id);
     CREATE INDEX IF NOT EXISTS idx_journal_at ON journal_modifications(at DESC);
   `);
@@ -758,6 +765,31 @@ export function setSuiviGlobalLayout(rows: unknown[]): void {
     INSERT INTO suivi_global_layout (id, data, maj_le) VALUES ('global', ?, ?)
     ON CONFLICT(id) DO UPDATE SET data = excluded.data, maj_le = excluded.maj_le
   `).run(JSON.stringify({ rows }), now());
+}
+
+/* ------------------------------------------------------ kanban développement */
+
+/** Tableau Développement (colonnes + cartes), unique et partagé. */
+export function getKanbanBoard(): unknown | undefined {
+  const conn = getDb();
+  const row = conn.prepare("SELECT data FROM kanban_board WHERE id = 'dev'").get() as
+    | { data: string }
+    | undefined;
+  if (!row) return undefined;
+  try {
+    return JSON.parse(row.data) as unknown;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Remplace la sauvegarde du tableau Développement. */
+export function setKanbanBoard(data: unknown): void {
+  const conn = getDb();
+  conn.prepare(`
+    INSERT INTO kanban_board (id, data, maj_le) VALUES ('dev', ?, ?)
+    ON CONFLICT(id) DO UPDATE SET data = excluded.data, maj_le = excluded.maj_le
+  `).run(JSON.stringify(data), now());
 }
 
 /* ------------------------------------------------------- journal (audit) */
