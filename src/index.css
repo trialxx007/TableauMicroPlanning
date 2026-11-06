@@ -315,6 +315,27 @@
   animation: carte-posee 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+@keyframes carte-deplacee {
+  0% {
+    opacity: 0.55;
+    transform: translateY(10px) scale(0.97);
+    box-shadow: 0 0 0 0 rgba(109, 74, 255, 0);
+  }
+  45% {
+    opacity: 1;
+    transform: translateY(-3px) scale(1.015);
+    box-shadow: 0 0 0 4px rgba(109, 74, 255, 0.24), 0 12px 24px rgba(109, 74, 255, 0.18);
+  }
+  100% {
+    transform: translateY(0) scale(1);
+    box-shadow: 0 0 0 0 rgba(109, 74, 255, 0);
+  }
+}
+
+.animate-carte-deplacee {
+  animation: carte-deplacee 0.62s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
 /* Case survolée par une carte en cours de glisser : cible de dépôt. */
 .case-cible-depot {
   outline: 2px solid rgba(59, 130, 246, 0.7);
@@ -347,6 +368,7 @@
   .animate-popover-in,
   .animate-carte-in,
   .animate-carte-posee,
+  .animate-carte-deplacee,
   .animate-erreur-login,
   .starry-rise,
   .animate-page-in {

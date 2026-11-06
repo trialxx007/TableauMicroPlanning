@@ -226,6 +226,8 @@ export interface KanbanCarte {
   historique?: KanbanHistoriqueEntree[];
   /** Périodes d'attente (avec date d'entrée/sortie). */
   attentes?: KanbanAttente[];
+  /** Alertes libres ajoutées depuis le popover de la carte. */
+  alertes?: string[];
   ordre: number;
   /** Date de création au format ISO. */
   creeLe: string;

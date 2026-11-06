@@ -30,7 +30,7 @@ import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
 import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
 import { dateISOFromDateTime, estDateISO, FUSEAU_HORAIRE, getDateISOSite, getNowParis, joursEntreDatesISO, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import { Profil } from '@/src/utils/auth.ts';
-import { AlertTriangle, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Copy, GitMerge, GripVertical, History, LayoutGrid, MoreHorizontal, Pause, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Copy, GitMerge, GripVertical, History, LayoutGrid, MoreHorizontal, MoveRight, Pause, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
 
 interface DeveloppementViewProps {
   onChangePage: (page: AppPage) => void;
@@ -40,6 +40,30 @@ interface DeveloppementViewProps {
 
 /** Élément en cours de glissement (carte ou colonne). */
 type DragInfo = { type: 'carte'; id: string } | { type: 'colonne'; id: string };
+
+interface AlerteCarteOuverte {
+  anchor: HTMLButtonElement;
+  carteId: string;
+  titreCarte: string;
+  titreAlerte: string;
+  details: string;
+  classes: string;
+  icone: React.ReactNode;
+}
+
+interface DestinationDeplacement {
+  key: string;
+  colonneId: string;
+  sectionId?: string;
+  personneId?: string;
+  label: string;
+}
+
+interface DeplacementOuvert {
+  anchor: HTMLButtonElement;
+  carteId: string;
+  destinationKey: string;
+}
 
 /** Couleurs des pastilles de statut d'une personne, par statut. */
 const STATUT_PERSONNE_ACTIF: Record<KanbanStatutPersonne, string> = {
@@ -65,8 +89,6 @@ interface BrouillonEdition {
   commercial: string;
   remarques: string;
   couleur: KanbanCouleurId;
-  /** Date d'échéance (optionnelle) */
-  dateEcheance?: string;
   /** Date d'expédition (optionnelle) */
   dateExpedition?: string;
   attentes: KanbanAttente[];
@@ -185,6 +207,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     }));
   };
   const [drag, setDrag] = useState<DragInfo | null>(null);
+  const [carteAnimeeId, setCarteAnimeeId] = useState<string | null>(null);
   const [colonneCible, setColonneCible] = useState<string | null>(null);
   /** Où déposer la carte : `colonneId` (+ `sectionId` si la colonne est scindée, `personneId` pour BRODERIE MAIN). */
   const [insertion, setInsertion] = useState<{
@@ -205,9 +228,17 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   const [positionEdition, setPositionEdition] = useState<{ top: number; left: number } | null>(null);
   /** Waiting periods are collapsed by default to keep the quick-edit panel short. */
   const [attenteDepliee, setAttenteDepliee] = useState(false);
+  const [alerteOuverte, setAlerteOuverte] = useState<AlerteCarteOuverte | null>(null);
+  const [positionAlerte, setPositionAlerte] = useState<{ top: number; left: number } | null>(null);
+  const [deplacementOuvert, setDeplacementOuvert] = useState<DeplacementOuvert | null>(null);
+  const [positionDeplacement, setPositionDeplacement] = useState<{ top: number; left: number } | null>(null);
+  const [composerAlerteOuvert, setComposerAlerteOuvert] = useState(false);
+  const [texteAlerte, setTexteAlerte] = useState('');
   /** Panneau de suivi ouvert : un seul à la fois pour ne pas encombrer le tableau. */
   const [panneauSuivi, setPanneauSuivi] = useState<'attente' | 'historique' | null>(null);
   const panneauEditionRef = useRef<HTMLDivElement>(null);
+  const panneauAlerteRef = useRef<HTMLDivElement>(null);
+  const panneauDeplacementRef = useRef<HTMLDivElement>(null);
   const [composerOuverte, setComposerOuverte] = useState<string | null>(null);
   const [composerNom, setComposerNom] = useState('');
   const [composerEtat, setComposerEtat] = useState('');
@@ -1338,6 +1369,149 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     setAttenteDepliee(false);
   }, []);
 
+  const fermerAlerte = useCallback(() => {
+    setAlerteOuverte(null);
+    setPositionAlerte(null);
+    setComposerAlerteOuvert(false);
+    setTexteAlerte('');
+  }, []);
+
+  const ajouterAlerte = (carteId: string) => {
+    const texte = texteAlerte.trim();
+    if (!texte) return;
+    const carte = data.cartes.find((item) => item.id === carteId);
+    if (!carte) return;
+    majCarte(carteId, { alertes: [...(carte.alertes ?? []), texte] }, [
+      entreeHistorique('carte', `Alerte ajoutée : ${texte}`),
+    ]);
+    setTexteAlerte('');
+    setComposerAlerteOuvert(false);
+  };
+
+  const supprimerAlerte = (carteId: string, index: number) => {
+    const carte = data.cartes.find((item) => item.id === carteId);
+    const texte = carte?.alertes?.[index];
+    if (!carte || texte === undefined) return;
+    majCarte(carteId, { alertes: carte.alertes?.filter((_, i) => i !== index) }, [
+      entreeHistorique('carte', `Alerte supprimée : ${texte}`),
+    ]);
+  };
+
+  const placerAlerte = useCallback(() => {
+    if (!alerteOuverte) return;
+    if (!alerteOuverte.anchor.isConnected) {
+      fermerAlerte();
+      return;
+    }
+
+    const rect = alerteOuverte.anchor.getBoundingClientRect();
+    const panneau = panneauAlerteRef.current;
+    const largeur = panneau?.offsetWidth ?? 280;
+    const hauteur = panneau?.offsetHeight ?? 160;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = rect.right + POPOVER_GAP;
+    if (left + largeur + POPOVER_MARGE > vw) {
+      left = Math.max(POPOVER_MARGE, rect.left - POPOVER_GAP - largeur);
+    }
+    let top = rect.top;
+    if (top + hauteur + POPOVER_MARGE > vh) top = vh - hauteur - POPOVER_MARGE;
+    top = clamp(top, POPOVER_MARGE, Math.max(POPOVER_MARGE, vh - hauteur - POPOVER_MARGE));
+    setPositionAlerte((position) =>
+      position?.top === top && position.left === left ? position : { top, left }
+    );
+  }, [alerteOuverte, fermerAlerte]);
+
+  useLayoutEffect(() => {
+    if (alerteOuverte) placerAlerte();
+  }, [alerteOuverte, placerAlerte]);
+
+  useEffect(() => {
+    if (!alerteOuverte) return;
+    const onMove = () => placerAlerte();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') fermerAlerte();
+    };
+    const onMouseDown = (event: MouseEvent) => {
+      const cible = event.target as Node | null;
+      if (!cible || panneauAlerteRef.current?.contains(cible) || alerteOuverte.anchor.contains(cible)) return;
+      fermerAlerte();
+    };
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    window.addEventListener('keydown', onKeyDown);
+    document.addEventListener('mousedown', onMouseDown);
+    return () => {
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+      window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('mousedown', onMouseDown);
+    };
+  }, [alerteOuverte, fermerAlerte, placerAlerte]);
+
+  const fermerDeplacement = useCallback(() => {
+    setDeplacementOuvert(null);
+    setPositionDeplacement(null);
+  }, []);
+
+  const placerDeplacement = useCallback(() => {
+    if (!deplacementOuvert) return;
+    if (!deplacementOuvert.anchor.isConnected) {
+      fermerDeplacement();
+      return;
+    }
+
+    const rect = deplacementOuvert.anchor.getBoundingClientRect();
+    const panneau = panneauDeplacementRef.current;
+    const largeur = panneau?.offsetWidth ?? 300;
+    const hauteur = panneau?.offsetHeight ?? 220;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let left = rect.right + POPOVER_GAP;
+    if (left + largeur + POPOVER_MARGE > vw) {
+      left = Math.max(POPOVER_MARGE, rect.left - POPOVER_GAP - largeur);
+    }
+    let top = rect.top;
+    if (top + hauteur + POPOVER_MARGE > vh) top = vh - hauteur - POPOVER_MARGE;
+    top = clamp(top, POPOVER_MARGE, Math.max(POPOVER_MARGE, vh - hauteur - POPOVER_MARGE));
+    setPositionDeplacement((position) =>
+      position?.top === top && position.left === left ? position : { top, left }
+    );
+  }, [deplacementOuvert, fermerDeplacement]);
+
+  useLayoutEffect(() => {
+    if (deplacementOuvert) placerDeplacement();
+  }, [deplacementOuvert, placerDeplacement]);
+
+  useEffect(() => {
+    if (!deplacementOuvert) return;
+    const onMove = () => placerDeplacement();
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') fermerDeplacement();
+    };
+    const onMouseDown = (event: MouseEvent) => {
+      const cible = event.target as Node | null;
+      if (
+        !cible ||
+        panneauDeplacementRef.current?.contains(cible) ||
+        deplacementOuvert.anchor.contains(cible)
+      ) {
+        return;
+      }
+      fermerDeplacement();
+    };
+    window.addEventListener('scroll', onMove, true);
+    window.addEventListener('resize', onMove);
+    window.addEventListener('keydown', onKeyDown);
+    document.addEventListener('mousedown', onMouseDown);
+    return () => {
+      window.removeEventListener('scroll', onMove, true);
+      window.removeEventListener('resize', onMove);
+      window.removeEventListener('keydown', onKeyDown);
+      document.removeEventListener('mousedown', onMouseDown);
+    };
+  }, [deplacementOuvert, fermerDeplacement, placerDeplacement]);
+
   const ouvrirEdition = (
     carte: KanbanCarte,
     ancre?: HTMLElement | null,
@@ -1363,7 +1537,6 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       remarques: carte.remarques ?? '',
       // La couleur affichée sert de défaut : le post-it a toujours une couleur.
       couleur: carte.couleur ?? 'jaune',
-      dateEcheance: carte.date,
       dateExpedition: carte.dateExpedition,
       attentes: (carte.attentes ?? []).map((a) => ({ ...a })),
     });
@@ -1416,14 +1589,6 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           `Couleur modifiée : ${KANBAN_COULEURS[carteAvant.couleur ?? 'jaune'].label} → ${
             KANBAN_COULEURS[edition.couleur].label
           }`
-        );
-      }
-      if ((carteAvant.date ?? '') !== (edition.dateEcheance ?? '')) {
-        journaliser(
-          'carte',
-          `Échéance modifiée : ${formatDateFr(carteAvant.date)} → ${formatDateFr(
-            edition.dateEcheance
-          )}`
         );
       }
       if ((carteAvant.dateExpedition ?? '') !== (edition.dateExpedition ?? '')) {
@@ -1508,7 +1673,6 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
         commercial: edition.commercial.trim() || undefined,
         remarques: edition.remarques.trim() || undefined,
         couleur: edition.couleur,
-        date: edition.dateEcheance || undefined,
         dateExpedition: edition.dateExpedition || undefined,
         attentes,
       },
@@ -1520,6 +1684,12 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   /* --------------------- Card edit panel (presentation) -------------------- */
 
   const carteEdition = edition ? data.cartes.find((c) => c.id === edition.id) : undefined;
+  const carteAlerte = alerteOuverte
+    ? data.cartes.find((carte) => carte.id === alerteOuverte.carteId)
+    : undefined;
+  const carteDeplacement = deplacementOuvert
+    ? data.cartes.find((carte) => carte.id === deplacementOuvert.carteId)
+    : undefined;
 
   /** Existing values used to populate the full-edit selects (no new data fields). */
   const valeursTraiteur = Array.from(
@@ -1573,7 +1743,6 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       edition.commercial !== (carteEdition.commercial ?? '') ||
       edition.remarques !== (carteEdition.remarques ?? '') ||
       edition.couleur !== (carteEdition.couleur ?? 'jaune') ||
-      (edition.dateEcheance ?? '') !== (carteEdition.date ?? '') ||
       (edition.dateExpedition ?? '') !== (carteEdition.dateExpedition ?? '') ||
       JSON.stringify(normaliserAttentes(edition.attentes)) !==
         JSON.stringify(normaliserAttentes(carteEdition.attentes ?? [])))
@@ -1716,6 +1885,165 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     setTimeout(() => setCopieOk(null), 1200);
   };
 
+  const destinationsCarte = (carte: KanbanCarte): DestinationDeplacement[] => {
+    const destinations: DestinationDeplacement[] = [];
+    for (const colonne of trierParOrdre(data.colonnes)) {
+      const sections = trierParOrdre(colonne.sections ?? []);
+      const estBrodeuse = estColonneBrodeuse(colonne);
+      const estBroderieMain = estColonneBroderie(colonne);
+      const zones = estBrodeuse
+        ? sections.filter(
+            (section) => !estSectionBrodeuse(section) && !estSectionBroderieMain(section)
+          )
+        : sections.filter((section) => !estBroderieMain || !estSectionBroderieMain(section));
+
+      for (const section of zones) {
+        destinations.push({
+          key: `${colonne.id}::${section.id}`,
+          colonneId: colonne.id,
+          sectionId: section.id,
+          label: `${colonne.titre} · ${section.titre}`,
+        });
+      }
+
+      if (estBrodeuse) {
+        const section = sections.find((item) => estSectionBrodeuse(item));
+        if (section) {
+          destinations.push({
+            key: `${colonne.id}::${section.id}::non-assignee`,
+            colonneId: colonne.id,
+            sectionId: section.id,
+            label: `${colonne.titre} · Non assignées`,
+          });
+          for (const personne of trierParOrdre(section.personnes ?? [])) {
+            destinations.push({
+              key: `${colonne.id}::${section.id}::${personne.id}`,
+              colonneId: colonne.id,
+              sectionId: section.id,
+              personneId: personne.id,
+              label: `${colonne.titre} · ${personne.titre}`,
+            });
+          }
+        } else if (sections.length === 0) {
+          destinations.push({
+            key: `${colonne.id}::non-assignee`,
+            colonneId: colonne.id,
+            label: `${colonne.titre} · Non assignées`,
+          });
+        }
+      } else if (estBroderieMain || sections.some(estSectionBroderieMain)) {
+        for (const section of sections.filter(estSectionBroderieMain)) {
+          for (const personne of trierParOrdre(section.personnes ?? [])) {
+            destinations.push({
+              key: `${colonne.id}::${section.id}::${personne.id}`,
+              colonneId: colonne.id,
+              sectionId: section.id,
+              personneId: personne.id,
+              label: `${colonne.titre} · ${personne.titre}`,
+            });
+          }
+        }
+        if (sections.length === 0) {
+          destinations.push({
+            key: colonne.id,
+            colonneId: colonne.id,
+            label: colonne.titre,
+          });
+        }
+      } else if (sections.length === 0) {
+        destinations.push({
+          key: `${colonne.id}`,
+          colonneId: colonne.id,
+          label: colonne.titre,
+        });
+      }
+    }
+
+    return destinations.filter(
+      (destination) =>
+        destination.colonneId !== carte.colonneId ||
+        (destination.sectionId ?? undefined) !== (carte.sectionId ?? undefined) ||
+        (destination.personneId ?? undefined) !== (carte.personneId ?? undefined)
+    );
+  };
+
+  const destinationsDeplacement = carteDeplacement
+    ? destinationsCarte(carteDeplacement)
+    : [];
+
+  const executerDeplacement = (carteId: string, destinationKey: string) => {
+    const carte = data.cartes.find((item) => item.id === carteId);
+    if (!carte) return;
+    const destination = destinationsCarte(carte).find((item) => item.key === destinationKey);
+    if (!destination) return;
+
+    setCarteAnimeeId(null);
+    window.requestAnimationFrame(() => {
+      setCarteAnimeeId(carteId);
+    });
+
+    if (destination.personneId && destination.sectionId) {
+      const colonne = data.colonnes.find((item) => item.id === destination.colonneId);
+      const section = colonne?.sections?.find((item) => item.id === destination.sectionId);
+      const personnesCartes = data.cartes.filter(
+        (item) =>
+          item.id !== carteId &&
+          item.colonneId === destination.colonneId &&
+          item.sectionId === destination.sectionId &&
+          item.personneId === destination.personneId
+      );
+      if (section && estSectionBroderieMain(section)) {
+        deplacerCartePersonne(
+          carteId,
+          destination.colonneId,
+          destination.sectionId,
+          destination.personneId,
+          personnesCartes.length
+        );
+      } else {
+        deplacerCarteBrodeuse(
+          carteId,
+          destination.colonneId,
+          destination.sectionId,
+          destination.personneId,
+          personnesCartes.length
+        );
+      }
+    } else {
+      const cartesZone = data.cartes.filter(
+        (item) =>
+          item.id !== carteId &&
+          item.colonneId === destination.colonneId &&
+          (item.sectionId ?? undefined) === (destination.sectionId ?? undefined)
+      );
+      deplacerCarte(
+        carteId,
+        destination.colonneId,
+        destination.sectionId,
+        cartesZone.length
+      );
+    }
+    const indexDestination = colonnes.findIndex(
+      (colonne) => colonne.id === destination.colonneId
+    );
+    if (indexDestination >= 0) {
+      allerPageEtapes(Math.floor(indexDestination / ETAPES_PAR_PAGE));
+      window.requestAnimationFrame(() => {
+        window.requestAnimationFrame(() => {
+          const colonneDestination = Array.from(
+            document.querySelectorAll<HTMLElement>('[data-kanban-column]')
+          ).find((element) => element.dataset.kanbanColumn === destination.colonneId);
+          colonneDestination?.scrollIntoView({
+            behavior: 'smooth',
+            block: 'nearest',
+            inline: 'center',
+          });
+        });
+      });
+    }
+    fermerDeplacement();
+  };
+
   /** Post-its d'une zone : formes carrées, 2 par ligne, édition via la fiche. */
   const rendreCartes = (zone: { sectionId?: string }, cartesZone: KanbanCarte[]) =>
     cartesZone.map((carte, position) => {
@@ -1771,6 +2099,42 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
         alerteClasses = 'bg-amber-100 text-amber-800';
       }
 
+      let detailsAlerte = '';
+      if (attenteEstRouge && alerteAttente) {
+        detailsAlerte = `L'attente « ${alerteAttente.attente.libelle?.trim() || 'sans motif'} » a dépassé sa date de sortie du ${formatDateFr(alerteAttente.attente.dateSortie)}.`;
+      } else if (alarme) {
+        detailsAlerte =
+          alarmeInfo.type === 'global'
+            ? `La carte est dans l'étape « ${colonneCarte?.titre ?? '—'} » depuis ${diffTotal} jours. Le délai global de 12 jours pour atteindre la dernière étape est dépassé.`
+            : `La carte est dans l'étape « ${colonneCarte?.titre ?? '—'} » depuis ${diffZone} jours, au-delà du seuil de ${alarmeInfo.seuilZone} jours.`;
+      } else if (echeanceJours !== null && echeanceJours < 0) {
+        detailsAlerte = `L'échéance du ${formatDateFr(carte.date)} est dépassée de ${-echeanceJours} jour${-echeanceJours > 1 ? 's' : ''}.`;
+      } else if (attenteEstOrange && alerteAttente) {
+        detailsAlerte = `L'attente « ${alerteAttente.attente.libelle?.trim() || 'sans motif'} » arrive à sa date de sortie le ${formatDateFr(alerteAttente.attente.dateSortie)}.`;
+      } else if (attenteOuverte) {
+        detailsAlerte = `Une attente est en cours${attenteOuverte.libelle?.trim() ? ` : « ${attenteOuverte.libelle.trim()} »` : ''}${attenteOuverte.dateSortie ? ` jusqu'au ${formatDateFr(attenteOuverte.dateSortie)}` : ''}.`;
+      } else if (echeanceJours !== null) {
+        detailsAlerte = `L'échéance est fixée au ${formatDateFr(carte.date)}.`;
+      }
+
+      const alertesManuelles = carte.alertes ?? [];
+      const aAlerteAutomatique = alerteTexte !== 'Aucune alerte';
+      const texteBoutonAlerte = aAlerteAutomatique
+        ? alerteTexte
+        : alertesManuelles.length > 0
+          ? `Alertes ajoutées · ${alertesManuelles.length}`
+          : 'Ajouter une alerte';
+      const classesBoutonAlerte = aAlerteAutomatique
+        ? alerteClasses
+        : alertesManuelles.length > 0
+          ? 'bg-rose-100 text-rose-800'
+          : 'bg-white/80 text-slate-500 ring-1 ring-slate-200';
+      const iconeBoutonAlerte = aAlerteAutomatique
+        ? alerteIcone
+        : alertesManuelles.length > 0
+          ? <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+          : <Plus className="h-3.5 w-3.5 shrink-0" />;
+
       const proprietaire = [carte.client, carte.traiteur].filter(Boolean).join(' / ');
       const description = carte.description?.trim();
       const remarque = carte.remarques?.trim();
@@ -1785,25 +2149,76 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           onClick={(e) => ouvrirEdition(carte, e.currentTarget)}
           className={`w-full cursor-pointer rounded-xl border p-3.5 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md ${postIt.fond} ${postIt.bordure} ${
             enDrag ? 'opacity-40' : ''
-          }`}
+          } ${carteAnimeeId === carte.id ? 'animate-carte-deplacee' : ''}`}
         >
           <div className="flex items-start justify-between gap-2">
-            <div className="flex shrink-0 flex-col gap-0.5 text-[10px] font-semibold leading-tight text-slate-500">
-              <span title={`Création : ${formatDateFr(carte.creeLe)}`}>
+            <div className="flex shrink-0 flex-col items-start gap-1 text-[10px] leading-tight">
+              <span
+                title={`Création : ${formatDateFr(carte.creeLe)}`}
+                className="inline-flex items-center gap-1 rounded-md border border-violet-200 bg-white/80 px-1.5 py-1 font-bold text-violet-800"
+              >
+                <Calendar aria-hidden="true" className="h-3 w-3" />
+                <span>Créée</span>
                 {formatDateJourMois(carte.creeLe)}
               </span>
-              <span title={`Expédition : ${formatDateFr(carte.dateExpedition)}`}>
+              <span
+                title={`Expédition : ${formatDateFr(carte.dateExpedition)}`}
+                className="font-semibold text-slate-500"
+              >
                 {formatDateJourMois(carte.dateExpedition)}
               </span>
             </div>
-            {alerteTexte !== 'Aucune alerte' && (
-              <div
-                className={`inline-flex max-w-[65%] items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-semibold ${alerteClasses}`}
+            <div className="flex min-w-0 items-start justify-end gap-1">
+              <button
+                type="button"
+                aria-haspopup="dialog"
+                aria-expanded={alerteOuverte?.carteId === carte.id}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  const anchor = event.currentTarget;
+                  if (alerteOuverte?.carteId === carte.id) {
+                    fermerAlerte();
+                    return;
+                  }
+                  setAlerteOuverte({
+                    anchor,
+                    carteId: carte.id,
+                    titreCarte: carte.titre,
+                    titreAlerte: texteBoutonAlerte,
+                    details: aAlerteAutomatique
+                      ? detailsAlerte
+                      : alertesManuelles.length > 0
+                        ? 'Cette carte contient des alertes ajoutées manuellement.'
+                        : 'Aucune alerte automatique actuellement.',
+                    classes: classesBoutonAlerte,
+                    icone: iconeBoutonAlerte,
+                  });
+                }}
+                className={`inline-flex max-w-[65%] cursor-pointer items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-bold transition-shadow hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-violet-400 ${classesBoutonAlerte}`}
               >
-                {alerteIcone}
-                <span className="min-w-0 truncate">{alerteTexte}</span>
-              </div>
-            )}
+                {iconeBoutonAlerte}
+                <span className="min-w-0 truncate">{texteBoutonAlerte}</span>
+              </button>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  const anchor = event.currentTarget;
+                  if (deplacementOuvert?.carteId === carte.id) {
+                    fermerDeplacement();
+                    return;
+                  }
+                  fermerAlerte();
+                  setPositionDeplacement(null);
+                  setDeplacementOuvert({ anchor, carteId: carte.id, destinationKey: '' });
+                }}
+                aria-label={`Déplacer ${carte.titre}`}
+                title="Déplacer le post-it"
+                className="shrink-0 rounded-md p-1 text-slate-400 transition-colors hover:bg-white/70 hover:text-violet-700"
+              >
+                <ArrowLeftRight className="h-4 w-4" />
+              </button>
+            </div>
           </div>
 
           <div className="mt-1 flex items-start justify-between gap-2">
@@ -1894,12 +2309,58 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           )}
 
           <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-black/5 pt-2 text-[11px]">
-            <span className="min-w-0 truncate text-slate-500">
-              Étape :{' '}
-              <span className="font-medium text-slate-700">{carte.etat?.trim() || '—'}</span>
-            </span>
-            <span className="shrink-0 font-medium text-slate-500">
-              Éch. {formatDateCourte(carte.date ?? carte.dateExpedition)}
+            <div className="flex min-w-0 items-center gap-1.5">
+              <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-slate-500">
+                Statut
+              </span>
+              <span
+                className={`min-w-0 truncate rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                  carte.etat?.trim()
+                    ? 'border border-violet-200 bg-violet-100 text-violet-800'
+                    : 'border border-slate-200 bg-slate-100 text-slate-500'
+                }`}
+              >
+                {carte.etat?.trim() || '—'}
+              </span>
+            </div>
+            <span
+              title={`Échéance : ${formatDateFr(carte.date)}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                const input = event.currentTarget.querySelector('input');
+                if (input?.showPicker) input.showPicker();
+                else input?.click();
+              }}
+              className="relative inline-flex w-[58px] shrink-0 cursor-pointer items-center gap-1 overflow-hidden rounded-md border border-slate-200 bg-white/75 px-1 py-0.5 font-semibold text-slate-700"
+            >
+              <Calendar aria-hidden="true" className="h-3 w-3 text-violet-600" />
+              <span className="whitespace-nowrap text-[10px]">
+                {carte.date ? formatDateJourMois(carte.date) : 'JJ/MM'}
+              </span>
+              <input
+                type="date"
+                aria-label={`Modifier l’échéance de ${carte.titre}`}
+                title="Modifier l’échéance"
+                value={carte.date ?? ''}
+                onClick={(event) => event.stopPropagation()}
+                onDragStart={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+                onChange={(event) => {
+                  event.stopPropagation();
+                  const date = event.target.value;
+                  if (date === (carte.date ?? '')) return;
+                  majCarte(carte.id, { date: date || undefined }, [
+                    entreeHistorique(
+                      'carte',
+                      `Échéance modifiée : ${formatDateFr(carte.date)} → ${formatDateFr(date)}`
+                    ),
+                  ]);
+                }}
+                tabIndex={-1}
+                className="pointer-events-none absolute inset-0 h-full w-full opacity-0"
+              />
             </span>
           </div>
         </div>
@@ -3284,6 +3745,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             const colonneEnCible = rangeeCible === colonne.id && drag?.type === 'colonne';
             const sections = colonne.sections?.length ? colonne.sections : undefined;
             const aBrodeuse = estColonneBrodeuse(colonne);
+            const estPatronnage = colonne.titre.toUpperCase().includes('PATRONNAGE');
             // Colonne dédiée BRODERIE MAIN : son tableau 4 colonnes est rattaché à la colonne.
             const estMainDediee = estColonneBroderie(colonne) && !aBrodeuse;
             const sectionMain = estMainDediee
@@ -3294,13 +3756,20 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             return (
               <section
                 key={colonne.id}
+                data-kanban-column={colonne.id}
                 onDragOver={(e) => {
                   survolRangee(e, colonne.id, indexColonne);
                   survolEnteteColonne(e, colonne);
                 }}
                 onDrop={(e) => deposerSurColonne(e, colonne)}
                 className={`group/col ${
-                  aBroderieMain || aBrodeuse ? 'w-[50rem]' : 'w-72'
+                  aBroderieMain
+                    ? 'w-[34rem]'
+                    : aBrodeuse
+                      ? estPatronnage
+                        ? 'w-[22rem]'
+                        : 'w-[26rem]'
+                      : 'w-72'
                 } shrink-0 bg-slate-100/80 rounded-2xl border transition-all ${
                   enCible || colonneEnCible
                     ? 'border-violet-400 ring-2 ring-violet-200 bg-violet-50/60'
@@ -3516,21 +3985,6 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                   </div>
 
                   <div>
-                    <label htmlFor="carte-echeance" className="kanban-label">
-                      Échéance
-                    </label>
-                    <input
-                      id="carte-echeance"
-                      type="date"
-                      value={edition.dateEcheance ?? ''}
-                      onChange={(event) =>
-                        setEdition({ ...edition, dateEcheance: event.target.value || undefined })
-                      }
-                      className="kanban-field"
-                    />
-                  </div>
-
-                  <div>
                     <label htmlFor="carte-remarques" className="kanban-label">
                       Remarque
                     </label>
@@ -3696,20 +4150,6 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                   </div>
 
                   <div className="grid grid-cols-2 gap-2.5">
-                    <div>
-                      <label htmlFor="carte-echeance" className="kanban-label">
-                        Échéance
-                      </label>
-                      <input
-                        id="carte-echeance"
-                        type="date"
-                        value={edition.dateEcheance ?? ''}
-                        onChange={(event) =>
-                          setEdition({ ...edition, dateEcheance: event.target.value || undefined })
-                        }
-                        className="kanban-field"
-                      />
-                    </div>
                     <div>
                       <label htmlFor="carte-expedition" className="kanban-label">
                         Expédition
@@ -3985,6 +4425,224 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                 <Check className="h-3.5 w-3.5" />
                 Enregistrer
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {deplacementOuvert && carteDeplacement && (
+        <div
+          ref={panneauDeplacementRef}
+          role="dialog"
+          aria-label={`Déplacer le post-it ${carteDeplacement.titre}`}
+          style={{
+            top: positionDeplacement?.top ?? 0,
+            left: positionDeplacement?.left ?? 0,
+            width: `min(300px, calc(100vw - ${POPOVER_MARGE * 2}px))`,
+            maxHeight: `calc(100vh - ${POPOVER_MARGE * 2}px)`,
+          }}
+          className={`fixed z-[70] overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-2xl ${
+            positionDeplacement ? 'animate-popover-in' : 'invisible'
+          }`}
+        >
+          <div className="flex items-start gap-2 border-b border-slate-100 px-3 py-2.5">
+            <MoveRight className="mt-0.5 h-4 w-4 shrink-0 text-violet-600" />
+            <div className="min-w-0 flex-1">
+              <h2 className="m-0 text-[11px] font-bold uppercase tracking-wide text-slate-800">
+                Déplacer le post-it
+              </h2>
+              <p className="mt-0.5 truncate text-xs font-semibold text-slate-500">
+                {carteDeplacement.titre}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={fermerDeplacement}
+              aria-label="Fermer le déplacement"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="space-y-2.5 p-3">
+            <label
+              htmlFor="destination-post-it"
+              className="block text-[10px] font-bold uppercase tracking-wide text-slate-500"
+            >
+              Choisir une partie
+            </label>
+            <select
+              id="destination-post-it"
+              autoFocus
+              value={deplacementOuvert.destinationKey}
+              onChange={(event) =>
+                setDeplacementOuvert((ouvert) =>
+                  ouvert ? { ...ouvert, destinationKey: event.target.value } : ouvert
+                )
+              }
+              className="w-full rounded-md border border-slate-200 bg-white px-2.5 py-2 text-xs font-medium text-slate-700 outline-none focus:border-violet-400 focus:ring-2 focus:ring-violet-100"
+            >
+              <option value="">Choisir une destination…</option>
+              {destinationsDeplacement.map((destination) => (
+                <option key={destination.key} value={destination.key}>
+                  {destination.label}
+                </option>
+              ))}
+            </select>
+            <div className="flex justify-end gap-1.5">
+              <button
+                type="button"
+                onClick={fermerDeplacement}
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-semibold text-slate-600 hover:bg-slate-50"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                disabled={!deplacementOuvert.destinationKey}
+                onClick={() =>
+                  executerDeplacement(
+                    deplacementOuvert.carteId,
+                    deplacementOuvert.destinationKey
+                  )
+                }
+                className="inline-flex items-center gap-1 rounded-md bg-brand px-2.5 py-1.5 text-[11px] font-bold text-white hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <MoveRight className="h-3 w-3" />
+                Déplacer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {alerteOuverte && (
+        <div
+          ref={panneauAlerteRef}
+          role="dialog"
+          aria-label={`Détail de l'alerte pour ${alerteOuverte.titreCarte}`}
+          style={{
+            top: positionAlerte?.top ?? 0,
+            left: positionAlerte?.left ?? 0,
+            width: `min(280px, calc(100vw - ${POPOVER_MARGE * 2}px))`,
+          }}
+          className={`fixed z-[70] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl ${
+            positionAlerte ? 'animate-popover-in' : 'invisible'
+          }`}
+        >
+          <div className="flex items-start gap-2 border-b border-slate-100 px-3 py-2.5">
+            <div className={`mt-0.5 rounded-md p-1 ${alerteOuverte.classes}`}>
+              {alerteOuverte.icone}
+            </div>
+            <div className="min-w-0 flex-1">
+              <h2 className="m-0 text-[11px] font-bold uppercase tracking-wide text-slate-800">
+                Détail de l’alerte
+              </h2>
+              <p className="mt-0.5 truncate text-xs font-semibold text-slate-500">
+                {alerteOuverte.titreCarte}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={fermerAlerte}
+              aria-label="Fermer le détail de l’alerte"
+              className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+          <div className="p-3">
+            <div className={`flex items-start gap-2 rounded-lg px-2.5 py-2 ${alerteOuverte.classes}`}>
+              {alerteOuverte.icone}
+              <div className="min-w-0">
+                <p className="text-xs font-bold">{alerteOuverte.titreAlerte}</p>
+                <p className="mt-1 text-[11px] leading-relaxed">{alerteOuverte.details}</p>
+              </div>
+            </div>
+            <div className="mt-3">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="m-0 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                  Alertes ajoutées{carteAlerte?.alertes?.length ? ` (${carteAlerte.alertes.length})` : ''}
+                </h3>
+                <button
+                  type="button"
+                  aria-label="Ajouter une alerte"
+                  title="Ajouter une alerte"
+                  onClick={() => {
+                    setComposerAlerteOuvert((ouvert) => !ouvert);
+                    setTexteAlerte('');
+                  }}
+                  className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-slate-200 bg-white text-slate-500 transition-colors hover:border-violet-300 hover:bg-violet-50 hover:text-violet-700"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {carteAlerte?.alertes?.length ? (
+                <ul className="mt-2 space-y-1.5">
+                  {carteAlerte.alertes.map((alerte, index) => (
+                    <li
+                      key={`${index}-${alerte}`}
+                      className="flex items-start gap-2 rounded-lg border border-rose-100 bg-rose-50 px-2.5 py-2"
+                    >
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-rose-600" />
+                      <span className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[11px] font-medium text-rose-800">
+                        {alerte}
+                      </span>
+                      <button
+                        type="button"
+                        aria-label="Supprimer cette alerte"
+                        title="Supprimer cette alerte"
+                        onClick={() => supprimerAlerte(alerteOuverte.carteId, index)}
+                        className="shrink-0 rounded p-0.5 text-slate-400 transition-colors hover:bg-white hover:text-rose-600"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-2 rounded-lg border border-dashed border-slate-200 px-2.5 py-2 text-[11px] text-slate-400">
+                  Aucune alerte ajoutée.
+                </p>
+              )}
+              {composerAlerteOuvert && (
+                <div className="mt-2 space-y-1.5">
+                  <textarea
+                    autoFocus
+                    value={texteAlerte}
+                    onChange={(event) => setTexteAlerte(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                        event.preventDefault();
+                        ajouterAlerte(alerteOuverte.carteId);
+                      }
+                    }}
+                    rows={2}
+                    aria-label="Texte de la nouvelle alerte"
+                    placeholder="Saisir une alerte…"
+                    className="w-full resize-none rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs text-slate-700 outline-none focus:border-violet-300 focus:ring-1 focus:ring-violet-200"
+                  />
+                  <div className="flex justify-end gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setComposerAlerteOuvert(false);
+                        setTexteAlerte('');
+                      }}
+                      className="rounded-md px-2 py-1 text-[10px] font-semibold text-slate-500 hover:bg-slate-100"
+                    >
+                      Annuler
+                    </button>
+                    <button
+                      type="button"
+                      disabled={!texteAlerte.trim()}
+                      onClick={() => ajouterAlerte(alerteOuverte.carteId)}
+                      className="inline-flex items-center gap-1 rounded-md bg-brand px-2 py-1 text-[10px] font-bold text-white hover:bg-brand-strong disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Ajouter
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
