@@ -220,6 +220,8 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   const [insertionColonne, setInsertionColonne] = useState<number | null>(null);
   /** Colonne survolée pendant un glissement de colonne (surlignage ciblé). */
   const [rangeeCible, setRangeeCible] = useState<string | null>(null);
+  /** Page d'étapes survolée pendant un glissement de colonne (dépôt inter-pages). */
+  const [pageCible, setPageCible] = useState<number | null>(null);
   const [edition, setEdition] = useState<BrouillonEdition | null>(null);
   const [modeEdition, setModeEdition] = useState<ModeEdition>('simple');
   /** Card that opened the edit popover: the panel follows it while scrolling. */
@@ -336,6 +338,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     setInsertion(null);
     setInsertionColonne(null);
     setRangeeCible(null);
+    setPageCible(null);
     setNouvelleColonne(false);
     // Les deux environnements partagent les mêmes cartes : seul l'affichage change.
     setBoard((prev) => ({ ...prev, environnement: env }));
@@ -518,6 +521,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     setInsertion(null);
     setInsertionColonne(null);
     setRangeeCible(null);
+    setPageCible(null);
   };
 
   /* ------------------------------- Colonnes ------------------------------ */
@@ -939,6 +943,25 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     });
   };
 
+  /**
+   * Déplace une colonne à la dernière place d'une page d'étapes. Sert au
+   * dépôt sur une pastille de pagination, seule façon d'atteindre une page
+   * dont les colonnes ne sont pas visibles pendant le glissement.
+   */
+  const deplacerColonneVersPage = (colonneId: string, page: number) => {
+    setData((prev) => {
+      const liste = trierParOrdre(prev.colonnes);
+      const origine = liste.findIndex((c) => c.id === colonneId);
+      if (origine === -1) return prev;
+      const sans = liste.filter((c) => c.id !== colonneId);
+      const cible = clamp((page + 1) * ETAPES_PAR_PAGE - 1, 0, sans.length);
+      const ordonnees = [...sans.slice(0, cible), liste[origine], ...sans.slice(cible)].map(
+        (c, i) => ({ ...c, ordre: i })
+      );
+      return { ...prev, colonnes: ordonnees };
+    });
+  };
+
   /* -------------------------------- Cartes ------------------------------- */
 
   const ajouterCarte = (
@@ -1263,6 +1286,26 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     const premiere = colonne.sections?.[0]?.id;
     const nb = premiere ? cartesDeSection(colonne, premiere).length : cartesDe(colonne.id).length;
     setInsertion({ colonneId: colonne.id, sectionId: premiere, index: nb });
+  };
+
+  /** Survol d'une pastille de pagination pendant un glissement de colonne. */
+  const survolPage = (e: React.DragEvent, page: number) => {
+    if (drag?.type !== 'colonne') return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    setPageCible(page);
+  };
+
+  /** Chute sur une pastille de pagination : la colonne rejoint la fin de cette page. */
+  const deposerSurPage = (e: React.DragEvent, page: number) => {
+    if (drag?.type !== 'colonne') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const index = Math.min((page + 1) * ETAPES_PAR_PAGE, colonnes.length);
+    deplacerColonneVersPage(drag.id, page);
+    arreterDrag();
+    allerPageEtapes(page);
   };
 
   const survolRangee = (e: React.DragEvent, colonneId: string, index: number) => {
@@ -3719,9 +3762,9 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                         aria-label={`Étapes ${debut} à ${fin}`}
                         aria-selected={active}
                         onClick={() => allerPageEtapes(i)}
-                        className={`h-1.5 cursor-pointer rounded-full transition-all ${
-                          active ? 'w-6 bg-brand' : 'w-3 bg-slate-300 hover:bg-slate-400'
-                        }`}
+                        onDragOver={(e) => survolPage(e, i)}
+                        onDrop={(e) => deposerSurPage(e, i)}
+                        className={`h-1.5 cursor-pointer rounded-full transition-all p-2 ${active ? 'w-6 bg-brand' : 'w-3 bg-slate-300 hover:bg-slate-400'} ${pageCible !== null && pageCible === i ? 'scale-105' : ''}`}
                       />
                     );
                   })}
@@ -4203,24 +4246,35 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                       )}
                     </div>
                   </div>
-
-                  <div>
-                    <label htmlFor="carte-remarques" className="kanban-label">
-                      Remarques
-                    </label>
-                    <textarea
-                      id="carte-remarques"
-                      rows={2}
-                      value={edition.remarques}
-                      onChange={(event) =>
-                        setEdition({ ...edition, remarques: event.target.value })
-                      }
-                      className="kanban-field kanban-textarea"
-                      placeholder="Remarques libres…"
-                    />
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <div>
+                      <label htmlFor="carte-creation" className="kanban-label">
+                        Création
+                      </label>
+                      <input
+                        id="carte-creation"
+                        type="date"
+                        value={edition.dateCreation ?? ''}
+                        onChange={(event) =>
+                          setEdition({
+                            ...edition,
+                            dateCreation: event.target.value || undefined,
+                          })
+                        }
+                        className={`kanban-field ${erreurExpedition ? 'kanban-field-error' : ''}`}
+                        aria-invalid={!!erreurExpedition}
+                        aria-describedby={erreurExpedition ? 'erreur-expedition' : undefined}
+                      />
+                      {erreurExpedition && (
+                        <p
+                          id="erreur-expedition"
+                          className="mt-1 text-[11px] font-medium text-rose-600"
+                        >
+                          {erreurExpedition}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                </div>
-              )}
 
               {/* Waiting periods: collapsed by default, one click to expand. */}
               <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
