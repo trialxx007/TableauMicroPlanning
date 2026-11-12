@@ -28,7 +28,7 @@ import { chargerKanban, chargerKanbanServeur, KanbanEnvironnement, nouvelId, sau
 import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
 import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
 import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
-import { dateISOFromDateTime, estDateISO, FUSEAU_HORAIRE, getDateISOSite, getNowParis, joursEntreDatesISO, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
+import { dateISOFromDateTime, estDateISO, FUSEAU_HORAIRE, getDateISOSite, getNowParis, joursEntreDatesISO, joursOuvresEntreDatesISO, joursOuvresHorsPeriodes, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import { Profil } from '@/src/utils/auth.ts';
 import { AlertTriangle, ArrowLeftRight, Calendar, Check, ChevronDown, ChevronLeft, ChevronRight, Clock, Copy, GitMerge, GripVertical, History, LayoutGrid, MoreHorizontal, MoveRight, Pause, Plus, Scissors, SquareKanban, Trash2, X } from 'lucide-react';
 
@@ -371,8 +371,21 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     const seuilZone = estBroderieMain ? 4 : 2;
     const dateEntree = estDateISO(carte.dateEntreeZone) ? carte.dateEntreeZone : dateISOFromDateTime(carte.creeLe);
     const creation = dateISOFromDateTime(carte.creeLe);
-    const diffZone = dateEntree ? joursEntreDatesISO(dateEntree) : 0;
-    const diffTotal = creation ? joursEntreDatesISO(creation) : diffZone;
+    // Les périodes d'attente gèlent le compteur de l'étape : leurs jours ne
+    // sont pas comptés. Le samedi et le dimanche sont exclus du décompte.
+    const diffZone = dateEntree
+      ? joursOuvresHorsPeriodes(
+          dateEntree,
+          getDateISOSite(),
+          (carte.attentes ?? []).map((attente) => ({
+            debut: attente.dateEntree,
+            // Une attente non clôturée gèle jusqu'à aujourd'hui, même si une
+            // date de sortie prévisionnelle est renseignée.
+            fin: estAttenteCloturee(attente) ? attente.dateSortie : undefined,
+          }))
+        )
+      : 0;
+    const diffTotal = creation ? joursOuvresEntreDatesISO(creation) : diffZone;
     const derniereColonne = data.colonnes.reduce((max, c) => (c.ordre > max.ordre ? c : max), data.colonnes[0]);
     const estDerniereColonne = Boolean(derniereColonne && carte.colonneId === derniereColonne.id);
     const inactive = { active: false, type: null as null, diffZone, seuilZone, diffTotal, estBroderieMain, dateEntree, estDerniereColonne };
@@ -431,13 +444,15 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   /** Répartit une carte dans les 3 onglets de l'environnement Direction. */
   const categorieDirection = (carte: KanbanCarte): 'alerte' | 'attente' | 'encours' => {
     const alerteAttente = getAlerteAttente(carte);
-    const alarme = getAlarmeInfo(carte).active;
+    const alarmeInfo = getAlarmeInfo(carte);
+    const attenteEnCours = (carte.attentes ?? []).some((a) => !estAttenteCloturee(a));
+    // Une attente en cours écrase l'alerte 2j/4j de l'étape.
+    const alarme = alarmeInfo.active && !(attenteEnCours && alarmeInfo.type === 'zone');
     const echeanceAtteinte =
       estDateISO(carte.date) && joursEntreDatesISO(carte.date) >= 0;
     if (alarme || alerteAttente?.niveau === 'rouge' || echeanceAtteinte) {
       return 'alerte';
     }
-    const attenteEnCours = (carte.attentes ?? []).some((a) => !estAttenteCloturee(a));
     const etapeAttente = (carte.etat ?? '').trim().toUpperCase().includes('ATTENTE');
     if (alerteAttente?.niveau === 'orange' || attenteEnCours || etapeAttente) {
       return 'attente';
@@ -460,11 +475,12 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       if (retardEcheance >= 0) return 300_000 + retardEcheance * 100;
     }
     const alarme = getAlarmeInfo(carte);
+    const attenteEnCours = (carte.attentes ?? []).some((a) => !estAttenteCloturee(a));
     const retardGlobal = !alarme.estDerniereColonne && alarme.diffTotal >= 12;
     if (retardGlobal) {
       return 200_000 + Math.max(0, alarme.diffTotal - 12) * 100;
     }
-    if (alarme.diffZone >= alarme.seuilZone) {
+    if (alarme.diffZone >= alarme.seuilZone && !attenteEnCours) {
       return 100_000 + Math.max(0, alarme.diffZone - alarme.seuilZone) * 100;
     }
     return 0;
@@ -528,19 +544,21 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   };
 
   /**
-   * Scinde une colonne simple en 2 sections empilées. Si le titre contient
-   * « / » (ex. « Punching/PDF »), il est découpé en deux titres de section.
-   * Les cartes déjà présentes passent en section du haut.
+   * Scinde une colonne simple en 4 sections empilées. Les parties du titre
+   * séparées par « / » (ex. « Punching/PDF/… ») nomment les sections ; les
+   * parties manquantes s'appellent « Partie N ». Les cartes déjà présentes
+   * passent dans la section du haut.
    */
   const scinderColonne = (id: string) => {
     setData((prev) => {
       const colonne = prev.colonnes.find((c) => c.id === id);
       if (!colonne || colonne.sections?.length) return prev;
       const parties = colonne.titre.split('/').map((p) => p.trim()).filter(Boolean);
-      const sections: KanbanSection[] = [
-        { id: nouvelId(), titre: parties[0] || 'Partie 1', ordre: 0 },
-        { id: nouvelId(), titre: parties[1] || 'Partie 2', ordre: 1 },
-      ];
+      const sections: KanbanSection[] = Array.from({ length: 4 }, (_, index) => ({
+        id: nouvelId(),
+        titre: parties[index] || `Partie ${index + 1}`,
+        ordre: index,
+      }));
       return {
         colonnes: prev.colonnes.map((c) => (c.id === id ? { ...c, sections } : c)),
         cartes: prev.cartes.map((k) =>
@@ -1594,7 +1612,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       if ((carteAvant.dateExpedition ?? '') !== (edition.dateExpedition ?? '')) {
         journaliser(
           'carte',
-          `Expédition modifiée : ${formatDateFr(carteAvant.dateExpedition)} → ${formatDateFr(
+          `Envoi modifié : ${formatDateFr(carteAvant.dateExpedition)} → ${formatDateFr(
             edition.dateExpedition
           )}`
         );
@@ -1712,7 +1730,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     edition?.dateExpedition &&
     dateDeplacementISO &&
     edition.dateExpedition < dateDeplacementISO
-      ? "La date d'expédition doit être postérieure ou égale à la date de déplacement."
+      ? "La date d'envoi doit être postérieure ou égale à la date de déplacement."
       : null;
 
   const erreursAttentes: (string | null)[] = (edition?.attentes ?? []).map((a) =>
@@ -1877,7 +1895,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       carte.client ? `Client : ${carte.client}` : null,
       carte.commercial ? `Commercial : ${carte.commercial}` : null,
       carte.date ? `Date d'échéance : ${formatDateFr(carte.date)}` : null,
-      carte.dateExpedition ? `Date d'expédition : ${formatDateFr(carte.dateExpedition)}` : null,
+      carte.dateExpedition ? `Date d'envoi : ${formatDateFr(carte.dateExpedition)}` : null,
       carte.remarques ? `Remarques : ${carte.remarques}` : null,
     ].filter(Boolean).join('\n');
     navigator.clipboard.writeText(lignes);
@@ -2059,6 +2077,11 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       const attenteEstRouge = alerteAttente?.niveau === 'rouge';
       const attenteJours = alerteAttente?.jours ?? 0;
       const attenteOuverte = (carte.attentes ?? []).find((a) => !estAttenteCloturee(a));
+      const attenteEnCours = !!attenteOuverte;
+      // L'alerte d'attente en cours écrase l'alerte 2j/4j de l'étape ; l'alerte
+      // globale (12 jours) reste visible.
+      const alarmeAffichee =
+        alarme && (alarmeInfo.type === 'global' || (alarmeInfo.type === 'zone' && !attenteEnCours));
       const echeanceJours = estDateISO(carte.date) ? -joursEntreDatesISO(carte.date) : null;
       const retardJours = alarmeInfo.type === 'global' ? diffTotal : diffZone;
 
@@ -2069,7 +2092,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
         alerteIcone = <AlertTriangle className="h-3.5 w-3.5 shrink-0" />;
         alerteTexte = `Attente en retard${alerteAttente?.attente.libelle ? ` · ${alerteAttente.attente.libelle}` : ''} · ${attenteJours} j`;
         alerteClasses = 'bg-red-100 text-red-700';
-      } else if (alarme) {
+      } else if (alarmeAffichee) {
         alerteIcone = <AlertTriangle className="h-3.5 w-3.5 shrink-0" />;
         alerteTexte = `${retardJours} jour${retardJours > 1 ? 's' : ''} de retard`;
         alerteClasses = 'bg-red-100 text-red-700';
@@ -2102,7 +2125,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       let detailsAlerte = '';
       if (attenteEstRouge && alerteAttente) {
         detailsAlerte = `L'attente « ${alerteAttente.attente.libelle?.trim() || 'sans motif'} » a dépassé sa date de sortie du ${formatDateFr(alerteAttente.attente.dateSortie)}.`;
-      } else if (alarme) {
+      } else if (alarmeAffichee) {
         detailsAlerte =
           alarmeInfo.type === 'global'
             ? `La carte est dans l'étape « ${colonneCarte?.titre ?? '—'} » depuis ${diffTotal} jours. Le délai global de 12 jours pour atteindre la dernière étape est dépassé.`
@@ -2162,9 +2185,11 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                 {formatDateJourMois(carte.creeLe)}
               </span>
               <span
-                title={`Expédition : ${formatDateFr(carte.dateExpedition)}`}
-                className="font-semibold text-slate-500"
+                title={`Envoi : ${formatDateFr(carte.dateExpedition)}`}
+                className="inline-flex items-center gap-1 rounded-md border border-violet-200 bg-white/80 px-1.5 py-1 font-bold text-violet-800"
               >
+                <Calendar aria-hidden="true" className="h-3 w-3" />
+                <span>Envoi</span>
                 {formatDateJourMois(carte.dateExpedition)}
               </span>
             </div>
@@ -2526,7 +2551,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             />
           </label>
           <label className="flex items-center gap-1 text-[10px] font-bold text-slate-500 uppercase">
-            Date d'expédition
+            Date d'envoi
             <input
               type="date"
               value={composerDateExpedition}
@@ -3813,7 +3838,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                       <button
                         type="button"
                         onClick={() => scinderColonne(colonne.id)}
-                        title="Scinder la colonne en 2 sections empilées"
+                        title="Scinder la colonne en 4 sections empilées"
                         className="p-1 rounded text-slate-300 hover:text-violet-600 hover:bg-violet-50 transition-colors cursor-pointer shrink-0"
                       >
                         <Scissors className="w-3.5 h-3.5" />
@@ -4152,7 +4177,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                   <div className="grid grid-cols-2 gap-2.5">
                     <div>
                       <label htmlFor="carte-expedition" className="kanban-label">
-                        Expédition
+                        Envoi
                       </label>
                       <input
                         id="carte-expedition"

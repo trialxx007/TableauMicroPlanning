@@ -30,17 +30,72 @@ export function dateISOFromDateTime(valeur: string): string | null {
   return getDateISOSite(date);
 }
 
+/** Convertit une date `YYYY-MM-DD` en horodatage UTC (minuit). */
+function parseDateISOUT(valeur: string): number | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(valeur);
+  if (!m) return null;
+  return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
 /** Nombre de jours calendaires entre une date `YYYY-MM-DD` et une référence. */
 export function joursEntreDatesISO(depuis: string, jusqua = getDateISOSite()): number {
-  const parse = (valeur: string) => {
-    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(valeur);
-    if (!m) return null;
-    return Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  };
-  const debut = parse(depuis);
-  const fin = parse(jusqua);
+  const debut = parseDateISOUT(depuis);
+  const fin = parseDateISOUT(jusqua);
   if (debut === null || fin === null) return 0;
   return Math.round((fin - debut) / 86400000);
+}
+
+/**
+ * Compte les jours ouvrés (lundi → vendredi) de l'intervalle
+ * (depuis, jusqua]. Le samedi et le dimanche sont exclus. Le résultat est
+ * signé quand `jusqua` précède `depuis`, comme `joursEntreDatesISO`.
+ */
+function compterJoursOuvres(
+  depuis: string,
+  jusqua: string,
+  estExclu?: (horodatage: number) => boolean
+): number {
+  const debut = parseDateISOUT(depuis);
+  const fin = parseDateISOUT(jusqua);
+  if (debut === null || fin === null || debut === fin) return 0;
+  const sens = fin > debut ? 1 : -1;
+  const bas = Math.min(debut, fin);
+  const haut = Math.max(debut, fin);
+  let jours = 0;
+  for (let temps = bas + 86400000; temps <= haut; temps += 86400000) {
+    const jourSemaine = new Date(temps).getUTCDay();
+    if (jourSemaine === 0 || jourSemaine === 6) continue;
+    if (estExclu?.(temps)) continue;
+    jours += 1;
+  }
+  return jours * sens;
+}
+
+/** Nombre de jours ouvrés (hors samedi/dimanche) entre deux dates ISO. */
+export function joursOuvresEntreDatesISO(depuis: string, jusqua = getDateISOSite()): number {
+  return compterJoursOuvres(depuis, jusqua);
+}
+
+/**
+ * Jours ouvrés entre deux dates en ignorant les périodes d'attente fournies
+ * (bornes incluses) : le compteur reste gelé pendant ces périodes.
+ */
+export function joursOuvresHorsPeriodes(
+  depuis: string,
+  jusqua: string,
+  periodes: { debut: string; fin?: string }[]
+): number {
+  const bornes = periodes
+    .map((periode) => ({
+      debut: parseDateISOUT(periode.debut),
+      fin: periode.fin ? parseDateISOUT(periode.fin) : null,
+    }))
+    .filter((periode): periode is { debut: number; fin: number | null } => periode.debut !== null);
+  return compterJoursOuvres(depuis, jusqua, (temps) =>
+    bornes.some(
+      ({ debut, fin }) => temps >= debut && temps <= (fin ?? Number.POSITIVE_INFINITY)
+    )
+  );
 }
 
 export function getNowParis() {
