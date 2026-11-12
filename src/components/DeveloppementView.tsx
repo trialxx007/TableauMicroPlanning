@@ -4471,6 +4471,8 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                   </div>
                 )}
               </div>
+                </div>
+              )}
             </div>
           </div>
 
