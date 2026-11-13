@@ -3,7 +3,7 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import type { CardItem, CardJalon, OrdreFabrication } from '../src/types/card.ts';
+import type { CardItem, CardJalon, OrdreFabrication, SousOrdreFabrication } from '../src/types/card.ts';
 import { normaliserDateJalon, okProdAuto } from '../src/utils/jalons.ts';
 import {
   createJalon,
@@ -105,9 +105,18 @@ function profilDe(req: Request): string {
 }
 
 /** Libellé lisible d'une carte pour la colonne « cible » du journal. */
-function cibleCarte(card: { id: string; modele?: string; batch?: string }): string {
-  const texte = card.modele || card.batch || '';
-  return texte ? `${card.id} · ${texte}` : card.id;
+function cibleCarte(card: {
+  id: string;
+  client?: string;
+  modele?: string;
+  batch?: string;
+}): string {
+  const morceaux = [
+    card.client?.trim(),
+    card.modele?.trim(),
+    card.batch?.trim(),
+  ].filter((v): v is string => Boolean(v));
+  return morceaux.length ? morceaux.join(' · ') : card.id;
 }
 
 /**
@@ -215,7 +224,11 @@ function diffCarte(avant: CardItem, apres: CardItem): ChampModifie[] {
   if (ofsAvant.length !== ofsApres.length) {
     champs.push({ k: 'ofsOrdre', a: ofsAvant.length, b: ofsApres.length });
   }
-  const labelOF = (of: OrdreFabrication, index: number) => of.codeOF || `OF${index + 1}`;
+  const labelOF = (of: OrdreFabrication, index: number) => {
+    const ref = `OF${index + 1}`;
+    const code = (of.codeOF ?? '').trim();
+    return code && code !== ref ? `${ref} (${code})` : ref;
+  };
   const normaliser = (v: unknown) => (vide(v) ? null : v);
   const comparerOF = (cle: string, label: string, av: unknown, ap: unknown) => {
     const a = normaliser(av);
@@ -223,30 +236,127 @@ function diffCarte(avant: CardItem, apres: CardItem): ChampModifie[] {
     if (JSON.stringify(a) === JSON.stringify(b)) return;
     champs.push({ k: cle, l: label, a, b });
   };
+  /** Abréviations des cases, de la gauche vers la droite (comme le tableau). */
+  const libellesCases = (nb: number) => {
+    const etapes = nb >= 5 ? ['PK', 'FA', 'FT', 'QL'] : ['PK', 'FT', 'QL'];
+    return [...etapes, 'OF'];
+  };
+
+  /**
+   * Détaille le découpage en cases d'un OF / sous-OF : nombre de cases et
+   * quantité de chacune, pour voir précisément quelle étape a bougé.
+   */
+  const comparerCases = (
+    prefixe: 'of' | 'ofSous',
+    label: string,
+    av: Omit<OrdreFabrication, 'id'> | Omit<SousOrdreFabrication, 'id'>,
+    ap: Omit<OrdreFabrication, 'id'> | Omit<SousOrdreFabrication, 'id'>
+  ) => {
+    comparerOF(
+      `${prefixe}NbCases`,
+      `${label} · Nombre de cases`,
+      av.nbCases,
+      ap.nbCases
+    );
+    const nbAv = Math.min(5, Math.max(4, av.nbCases || 5));
+    const nbAp = Math.min(5, Math.max(4, ap.nbCases || 5));
+    const nbMax = Math.max(nbAv, nbAp);
+    const libelles = libellesCases(nbMax);
+    for (let c = 0; c < nbMax; c += 1) {
+      const nomCase = libelles[c];
+      const suffixe = nomCase === 'OF' ? 'Case OF (total)' : `Case ${nomCase}`;
+      comparerOF(
+        `${prefixe}Case`,
+        `${label} · ${suffixe}`,
+        (av.casesEnCours ?? [])[c] ?? 0,
+        (ap.casesEnCours ?? [])[c] ?? 0
+      );
+    }
+  };
+
+  const ajouterDetailsCases = (
+    prefixe: 'of' | 'ofSous',
+    label: string,
+    nbCases: number | undefined,
+    casesEnCours: number[] | undefined
+  ) => {
+    comparerOF(`${prefixe}NbCases`, `${label} · Nombre de cases`, null, nbCases);
+    if (!casesEnCours || casesEnCours.length === 0) return;
+    const nb = Math.min(5, Math.max(4, nbCases || 5));
+    const libelles = libellesCases(nb);
+    for (let c = 0; c < nb; c += 1) {
+      const nomCase = libelles[c];
+      const suffixe = nomCase === 'OF' ? 'Case OF (total)' : `Case ${nomCase}`;
+      comparerOF(`${prefixe}Case`, `${label} · ${suffixe}`, null, casesEnCours?.[c] ?? 0);
+    }
+  };
+
   const avantParId = new Map(ofsAvant.map((o) => [o.id, o]));
   ofsApres.forEach((of, i) => {
     const a = avantParId.get(of.id);
     const label = labelOF(of, i);
     if (!a) {
-      champs.push({ k: 'ofAjout', l: `OF ${label}`, a: null, b: 'Ajouté' });
+      champs.push({ k: 'ofAjout', l: label, a: null, b: 'Ajouté' });
+      comparerOF('ofQuantiteDemandee', `${label} · Qté confiée`, null, of.quantiteDemandee);
+      comparerOF('ofQuantiteFinie', `${label} · Qté finie`, null, of.quantiteFinie);
+      comparerOF('ofType', `${label} · Type`, null, of.type);
+      comparerOF('ofStatut', `${label} · Statut`, null, of.statut);
+      comparerOF('ofDestination', `${label} · Destination`, null, of.destination);
+      comparerOF('ofTraitant', `${label} · Traitant`, null, of.nomExecutant);
+      comparerOF('ofNotes', `${label} · Notes`, null, of.notes);
+      ajouterDetailsCases('of', label, of.nbCases, of.casesEnCours);
       return;
     }
-    comparerOF('ofQuantiteDemandee', `OF ${label} · Qté confiée`, a.quantiteDemandee, of.quantiteDemandee);
-    comparerOF('ofQuantiteFinie', `OF ${label} · Qté finie`, a.quantiteFinie, of.quantiteFinie);
-    comparerOF('ofStatut', `OF ${label} · Statut`, a.statut, of.statut);
-    comparerOF('ofDestination', `OF ${label} · Destination`, a.destination, of.destination);
-    comparerOF('ofType', `OF ${label} · Type`, a.type, of.type);
-    comparerOF('ofTraitant', `OF ${label} · Traitant`, a.nomExecutant, of.nomExecutant);
-    comparerOF('ofTitre', `OF ${label} · Titre`, a.titre, of.titre);
+    comparerOF('ofCode', `OF ${i + 1} · Code`, a.codeOF, of.codeOF);
+    comparerOF('ofQuantiteDemandee', `${label} · Qté confiée`, a.quantiteDemandee, of.quantiteDemandee);
+    comparerOF('ofQuantiteFinie', `${label} · Qté finie`, a.quantiteFinie, of.quantiteFinie);
+    comparerOF('ofStatut', `${label} · Statut`, a.statut, of.statut);
+    comparerOF('ofDestination', `${label} · Destination`, a.destination, of.destination);
+    comparerOF('ofType', `${label} · Type`, a.type, of.type);
+    comparerOF('ofTraitant', `${label} · Traitant`, a.nomExecutant, of.nomExecutant);
+    comparerOF('ofTitre', `${label} · Titre`, a.titre, of.titre);
+    comparerOF('ofOrdreRDL', `${label} · Ordre RDL`, a.ordreRDL, of.ordreRDL);
+    comparerOF('ofNotes', `${label} · Notes`, a.notes, of.notes);
+    comparerOF('ofVerrou', `${label} · Verrouillé`, Boolean(a.isLocked), Boolean(of.isLocked));
+    comparerCases('of', label, a, of);
 
     const sousAvant = new Map((a.sousOfs ?? []).map((s) => [s.id, s]));
     (of.sousOfs ?? []).forEach((s, j) => {
       const sa = sousAvant.get(s.id);
-      const labelSous = s.codeSousOF || `${label}.${j + 1}`;
+      const refSous = `OF${i + 1}.${j + 1}`;
+      const codeSous = (s.codeSousOF ?? '').trim();
+      const labelSous =
+        codeSous && codeSous !== refSous ? `${refSous} (${codeSous})` : refSous;
       if (!sa) {
         champs.push({ k: 'ofAjout', l: `Sous-OF ${labelSous}`, a: null, b: 'Ajouté' });
+        comparerOF('ofSousCode', `Sous-OF ${labelSous} · Code`, null, s.codeSousOF);
+        comparerOF('ofTitre', `Sous-OF ${labelSous} · Titre`, null, s.titre);
+        comparerOF(
+          'ofQuantiteDemandee',
+          `Sous-OF ${labelSous} · Qté confiée`,
+          null,
+          s.quantiteDemandee
+        );
+        comparerOF(
+          'ofQuantiteFinie',
+          `Sous-OF ${labelSous} · Qté finie`,
+          null,
+          s.quantiteFinie
+        );
+        comparerOF('ofSousStatut', `Sous-OF ${labelSous} · Statut`, null, s.statut);
+        comparerOF('ofType', `Sous-OF ${labelSous} · Type`, null, s.type);
+        comparerOF(
+          'ofTraitant',
+          `Sous-OF ${labelSous} · Traitant`,
+          null,
+          s.nomExecutant
+        );
+        comparerOF('ofSousNotes', `Sous-OF ${labelSous} · Notes`, null, s.notes);
+        ajouterDetailsCases('ofSous', `Sous-OF ${labelSous}`, s.nbCases, s.casesEnCours);
         return;
       }
+      comparerOF('ofSousCode', `Sous-OF ${refSous} · Code`, sa.codeSousOF, s.codeSousOF);
+      comparerOF('ofTitre', `Sous-OF ${labelSous} · Titre`, sa.titre, s.titre);
       comparerOF(
         'ofQuantiteDemandee',
         `Sous-OF ${labelSous} · Qté confiée`,
@@ -259,6 +369,7 @@ function diffCarte(avant: CardItem, apres: CardItem): ChampModifie[] {
         sa.quantiteFinie,
         s.quantiteFinie
       );
+      comparerOF('ofSousStatut', `Sous-OF ${labelSous} · Statut`, sa.statut, s.statut);
       comparerOF('ofType', `Sous-OF ${labelSous} · Type`, sa.type, s.type);
       comparerOF(
         'ofTraitant',
@@ -266,12 +377,29 @@ function diffCarte(avant: CardItem, apres: CardItem): ChampModifie[] {
         sa.nomExecutant,
         s.nomExecutant
       );
+      comparerOF('ofSousNotes', `Sous-OF ${labelSous} · Notes`, sa.notes, s.notes);
+      comparerOF(
+        'ofSousVerrou',
+        `Sous-OF ${labelSous} · Verrouillé`,
+        Boolean(sa.isLocked),
+        Boolean(s.isLocked)
+      );
+      comparerCases('ofSous', `Sous-OF ${labelSous}`, sa, s);
+    });
+    const idsSousApres = new Set((of.sousOfs ?? []).map((s) => s.id));
+    (a.sousOfs ?? []).forEach((s, j) => {
+      if (idsSousApres.has(s.id)) return;
+      const refSous = `OF${i + 1}.${j + 1}`;
+      const codeSous = (s.codeSousOF ?? '').trim();
+      const labelSous =
+        codeSous && codeSous !== refSous ? `${refSous} (${codeSous})` : refSous;
+      champs.push({ k: 'ofSupprime', l: `Sous-OF ${labelSous}`, a: 'Présent', b: null });
     });
   });
   const idsApres = new Set(ofsApres.map((o) => o.id));
   ofsAvant.forEach((of, i) => {
     if (!idsApres.has(of.id)) {
-      champs.push({ k: 'ofSupprime', l: `OF ${labelOF(of, i)}`, a: 'Présent', b: null });
+      champs.push({ k: 'ofSupprime', l: labelOF(of, i), a: 'Présent', b: null });
     }
   });
 
@@ -535,11 +663,33 @@ apiRouter.post('/cards', (req: Request, res: Response) => {
 
   const created = insertCard(newCard);
 
+  // Détail structuré de la création : la fiche et chaque OF sont listés champ
+  // par champ (quantités, cases, type…), comme pour une modification, afin que
+  // l'historique montre exactement ce qui a été créé.
+  const carteVide: CardItem = {
+    ...created,
+    client: '',
+    batch: '',
+    modele: '',
+    typeCarte: undefined,
+    jalons: [],
+    okProd: false,
+    dateOkProd: undefined,
+    dateTerminaison: undefined,
+    ofs: [],
+    quantiteDemandee: 0,
+    quantiteFinie: 0,
+    statut: 'EN_ATTENTE',
+    decisionReunion: undefined,
+    notes: undefined,
+  };
+  const champsCreation = diffCarte(carteVide, created);
+
   journaliser({
     profil: profilDe(req),
     action: 'carte.creee',
     cible: cibleCarte(created),
-    details: `Client ${created.client} · ${created.quantiteDemandee} demandées`,
+    details: detailler(champsCreation, 'Carte créée'),
   });
 
   res.status(201).json({

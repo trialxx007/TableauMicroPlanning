@@ -10,7 +10,14 @@ import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx'
 import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
 import { Profil } from '@/src/utils/auth.ts';
 import { normalizeCases, computeOfQuantiteFinie } from './OFSubTable.tsx';
+import {
+  HistoriqueOFsPopover,
+  OFTermine,
+  collecterOfsTermines,
+} from './HistoriqueOFsPopover.tsx';
 import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
+import { useInspectionsParCarte } from '@/src/context/InspectionsParCarteContext.tsx';
+import { hasPassedCc } from '@/src/utils/inspections.ts';
 import { getNowParis, LIBELLE_FUSEAU } from '@/src/utils/dateFrance.ts';
 import { Calendar, Clock, Table2 } from 'lucide-react';
 
@@ -146,7 +153,8 @@ const OFRowEditable: React.FC<{
 
 /**
  * Vue « Tableaux des OFs » : un tableau par client, une ligne par carte, et pour
- * chaque carte ses OFs (cases + type) éditables.
+ * chaque carte seul l'OF en cours (cases + type) est éditable. Les OFs dont le
+ * CC est validé passent dans l'historique, ouvert par l'icône horloge.
  */
 export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
   cards,
@@ -160,6 +168,13 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
   const typeModifiable = profil.id !== 'production';
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
+  const { parCarte } = useInspectionsParCarte();
+  // Historique ouvert depuis l'icône horloge d'un tableau client.
+  const [historique, setHistorique] = useState<{
+    client: string;
+    termines: OFTermine[];
+    anchor: HTMLElement;
+  } | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setParisTime(getNowParis().timeStr), 15000);
@@ -269,6 +284,9 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
             // Une seule mention des colonnes de cases, en haut du tableau :
             // on se base sur le nombre de cases du premier OF de la section.
             const nbSection = nbCasesBorne(cartesClient[0]?.ofs?.[0]?.nbCases);
+            const terminesSection = cartesClient.flatMap((card) =>
+              collecterOfsTermines(card, parCarte[card.id])
+            );
             return (
             <section
             key={client}
@@ -307,6 +325,27 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
                                 </React.Fragment>
                               ))}
                             </div>
+
+                            <button
+                              type="button"
+                              onClick={(e) =>
+                                setHistorique({
+                                  client,
+                                  termines: terminesSection,
+                                  anchor: e.currentTarget,
+                                })
+                              }
+                              title={`Historique des OFs terminés (${terminesSection.length}) — défini par CC validé`}
+                              aria-label={`Historique des OFs terminés (${terminesSection.length})`}
+                              className="relative ml-auto shrink-0 rounded-md border border-slate-200 bg-white p-1 text-slate-500 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-700 cursor-pointer normal-case"
+                            >
+                              <Clock className="h-3.5 w-3.5" />
+                              {terminesSection.length > 0 && (
+                                <span className="absolute -right-1.5 -top-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-emerald-600 px-1 text-[9px] font-bold leading-none text-white tabular-nums">
+                                  {terminesSection.length}
+                                </span>
+                              )}
+                            </button>
                           </div>
                         </div>
                       </th>
@@ -342,18 +381,40 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          <div className="space-y-1.5">
-                            {card.ofs.map((of, i) => (
-                              <OFRowEditable
-                                key={of.id}
-                                of={of}
-                                numero={i + 1}
-                                onCommitCase={(idx, val) => handleCaseCommit(card, i, idx, val)}
-                                onCommitType={(t) => handleTypeCommit(card, i, t)}
-                                typeModifiable={typeModifiable}
-                              />
-                            ))}
-                          </div>
+                          {(() => {
+                            const bloc = parCarte[card.id];
+                            const termines = card.ofs.map((_, i) =>
+                              hasPassedCc(bloc, i)
+                            );
+                            // Un seul OF à la fois : le premier dont le CC n'est
+                            // pas encore validé. Les précédents sont dans l'historique.
+                            const actifIndex = termines.findIndex((t) => !t);
+                            const ofActif =
+                              actifIndex >= 0 ? card.ofs[actifIndex] : undefined;
+
+                            return (
+                              <div className="space-y-1.5">
+                                {ofActif ? (
+                                  <OFRowEditable
+                                    key={ofActif.id}
+                                    of={ofActif}
+                                    numero={actifIndex + 1}
+                                    onCommitCase={(idx, val) =>
+                                      handleCaseCommit(card, actifIndex, idx, val)
+                                    }
+                                    onCommitType={(t) =>
+                                      handleTypeCommit(card, actifIndex, t)
+                                    }
+                                    typeModifiable={typeModifiable}
+                                  />
+                                ) : (
+                                  <span className="text-[11px] italic text-slate-400">
+                                    Tous les OFs sont terminés
+                                  </span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
                       </tr>
                     ))}
@@ -365,6 +426,15 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
           })
         )}
       </div>
+
+      {historique && (
+        <HistoriqueOFsPopover
+          anchor={historique.anchor}
+          client={historique.client}
+          termines={historique.termines}
+          onClose={() => setHistorique(null)}
+        />
+      )}
     </div>
   );
 };

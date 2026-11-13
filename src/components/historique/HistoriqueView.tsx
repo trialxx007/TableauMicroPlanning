@@ -4,10 +4,14 @@ import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
 import { Profil } from '@/src/utils/auth.ts';
 import { historiqueApi, EntreeHistorique } from '@/src/services/api.ts';
 import { getNowParis, LIBELLE_FUSEAU } from '@/src/utils/dateFrance.ts';
-import { Calendar, Clock, History, RefreshCw, Filter, X } from 'lucide-react';
+import { CardItem } from '@/src/types/card.ts';
+import { useInspectionsParCarte } from '@/src/context/InspectionsParCarteContext.tsx';
+import { collecterAlertesOfs } from '@/src/utils/alertesOfs.ts';
+import { AlertTriangle, Calendar, Clock, History, RefreshCw, Filter, X } from 'lucide-react';
 
 interface HistoriqueViewProps {
   onChangePage: (page: AppPage) => void;
+  cards: CardItem[];
   profil: Profil;
   onDeconnexion: () => void;
 }
@@ -39,23 +43,35 @@ const LIBELLE_CHAMP: Record<string, string> = {
   batch: 'Saison',
   modele: 'Modèle',
   typeCarte: 'Type de carte',
-  quantiteDemandee: 'Qté demandée',
-  quantiteFinie: 'Qté finie',
-  statut: 'Statut',
-  okProd: 'OK Prod',
-  decisionReunion: 'Décision réunion',
-  notes: 'Notes',
+  quantiteDemandee: 'Carte · Qté demandée',
+  quantiteFinie: 'Carte · Qté finie',
+  statut: 'Carte · Statut',
+  okProd: 'Carte · OK Prod',
+  decisionReunion: 'Carte · Décision réunion',
+  notes: 'Carte · Notes',
   jalons: 'Jalons',
   jalon: 'Jalon',
   ofsOrdre: 'Nombre d’OFs',
   ofsQuantite: 'Qté finie des OFs',
+  ofCode: 'Code de l’OF',
   ofQuantiteDemandee: 'Qté confiée',
   ofQuantiteFinie: 'Qté finie',
-  ofStatut: 'Statut de l’OF',
+  ofStatut: 'Statut',
   ofDestination: 'Destination',
-  ofType: 'Type de l’OF',
+  ofType: 'Type',
   ofTraitant: 'Traitant',
-  ofTitre: 'Titre de l’OF',
+  ofTitre: 'Titre',
+  ofOrdreRDL: 'Ordre RDL',
+  ofNotes: 'Notes',
+  ofVerrou: 'Verrouillé',
+  ofNbCases: 'Nombre de cases',
+  ofCase: 'Quantité par case',
+  ofSousCode: 'Code du sous-OF',
+  ofSousStatut: 'Statut',
+  ofSousNotes: 'Notes',
+  ofSousVerrou: 'Verrouillé',
+  ofSousNbCases: 'Nombre de cases',
+  ofSousCase: 'Quantité par case',
   ofAjout: 'OF ajouté',
   ofSupprime: 'OF supprimé',
   alerte: 'Alerte',
@@ -81,6 +97,18 @@ const COULEUR_CHAMP: Record<string, string> = {
   ofType: 'bg-cyan-50 text-cyan-700 border-cyan-200',
   ofTraitant: 'bg-cyan-50 text-cyan-700 border-cyan-200',
   ofTitre: 'bg-slate-100 text-slate-700 border-slate-200',
+  ofCode: 'bg-violet-50 text-violet-700 border-violet-200',
+  ofOrdreRDL: 'bg-violet-50 text-violet-700 border-violet-200',
+  ofNotes: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+  ofVerrou: 'bg-rose-50 text-rose-700 border-rose-200',
+  ofNbCases: 'bg-sky-50 text-sky-700 border-sky-200',
+  ofCase: 'bg-blue-50 text-blue-700 border-blue-200',
+  ofSousCode: 'bg-cyan-50 text-cyan-700 border-cyan-200',
+  ofSousStatut: 'bg-amber-50 text-amber-700 border-amber-200',
+  ofSousNotes: 'bg-yellow-50 text-yellow-700 border-yellow-200',
+  ofSousVerrou: 'bg-rose-50 text-rose-700 border-rose-200',
+  ofSousNbCases: 'bg-sky-50 text-sky-700 border-sky-200',
+  ofSousCase: 'bg-blue-50 text-blue-700 border-blue-200',
   ofAjout: 'bg-slate-100 text-slate-700 border-slate-200',
   ofSupprime: 'bg-slate-100 text-slate-700 border-slate-200',
   alerte: 'bg-rose-50 text-rose-700 border-rose-200',
@@ -118,7 +146,7 @@ const LIBELLE_TYPE_OF: Record<string, string> = {
 function afficherValeur(cle: string, v: unknown): string {
   if (v === null || v === undefined || v === '') return '—';
   if (typeof v === 'boolean') return v ? 'Oui' : 'Non';
-  if (cle === 'statut' || cle === 'ofStatut') {
+  if (cle === 'statut' || cle === 'ofStatut' || cle === 'ofSousStatut') {
     return LIBELLE_STATUT[String(v)] ?? String(v);
   }
   if (cle === 'ofType') return LIBELLE_TYPE_OF[String(v)] ?? String(v);
@@ -236,6 +264,7 @@ function dateHeureLisible(iso: string): { date: string; heure: string } {
 
 export const HistoriqueView: React.FC<HistoriqueViewProps> = ({
   onChangePage,
+  cards,
   profil,
   onDeconnexion,
 }) => {
@@ -244,6 +273,7 @@ export const HistoriqueView: React.FC<HistoriqueViewProps> = ({
   const [entrees, setEntrees] = useState<EntreeHistorique[]>([]);
   const [chargement, setChargement] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
+  const { parCarte } = useInspectionsParCarte();
 
   // Filtres : profil auteur, bornes de date (locales, AAAA-MM-JJ).
   const [filtreProfil, setFiltreProfil] = useState<string>('');
@@ -301,6 +331,16 @@ export const HistoriqueView: React.FC<HistoriqueViewProps> = ({
     for (const e of entrees) map.set(e.profil, (map.get(e.profil) ?? 0) + 1);
     return map;
   }, [entrees]);
+
+  // Alertes OFs simultanés : visibles uniquement pour la Direction, et
+  // uniquement dans cet onglet Historique.
+  const alertesOfs = useMemo(
+    () =>
+      profil.id === 'direction'
+        ? collecterAlertesOfs(cards, parCarte)
+        : [],
+    [cards, parCarte, profil.id]
+  );
 
   const filtreActif = Boolean(filtreProfil || dateMin || dateMax || jourSelectionne);
   const reinitialiser = () => {
@@ -435,6 +475,40 @@ export const HistoriqueView: React.FC<HistoriqueViewProps> = ({
             </span>
           </div>
         </div>
+
+        {/* Alertes OFs simultanés — Direction uniquement, dans cet onglet. */}
+        {profil.id === 'direction' && alertesOfs.length > 0 && (
+          <div className="mb-5 rounded-2xl border border-amber-300 bg-amber-50 p-4 shadow-xs">
+            <div className="flex items-start gap-3">
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-amber-100 text-amber-700">
+                <AlertTriangle className="h-5 w-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-sm font-bold text-amber-900">
+                  Alertes OFs simultanés
+                </h2>
+                <p className="text-[11px] font-medium text-amber-700">
+                  Cartes avec plusieurs OFs non terminés en même temps (CC non validé).
+                </p>
+                <ul className="mt-2 grid gap-1.5 min-[700px]:grid-cols-2">
+                  {alertesOfs.map(({ card, ofs }) => (
+                    <li
+                      key={card.id}
+                      className="rounded-lg border border-amber-200 bg-white/70 px-2.5 py-1.5"
+                    >
+                      <div className="truncate text-xs font-bold text-amber-900">
+                        {card.client} · {card.modele}
+                      </div>
+                      <div className="text-[11px] font-medium text-amber-700">
+                        {card.batch} — {ofs.map((o) => `OF${o.index + 1}`).join(' + ')}
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Liste antéchronologique */}
         {erreur ? (

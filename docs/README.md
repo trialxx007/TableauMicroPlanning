@@ -91,6 +91,11 @@ directement cet onglet, sans sélecteur.
 ### Tableaux des OFs
 
 - Récapitulatif des OFs **regroupé par client et par modèle**.
+- Chaque carte n'affiche qu'**un seul OF à la fois** (le premier dont le CC
+  n'est pas encore validé). Dans l'en-tête du tableau client, sur la ligne des
+  labels `PK / FA / FT / QL / OF`, l'icône **horloge** ouvre l'historique des
+  OFs terminés du client, c'est-à-dire ceux dont le **CC (Carton Check) est
+  validé** dans le Suivi Global.
 - Le profil **Production** peut y modifier les **quantités** des OF directement
   dans le tableau (mais pas le type d'OF).
 - Un OF ou sous-OF marqué **Terminé** ou **Bloqué** est verrouillé ;
@@ -118,6 +123,12 @@ directement cet onglet, sans sélecteur.
 - Liste du plus récent au plus ancien de **toutes les écritures** (Planning et
   Production) : date/heure, profil auteur, action, objet, et détail **champ par
   champ** (avant → après).
+- Le détail descend jusqu'aux **OFs et sous-OFs** : code, titre, type, statut,
+  quantités confiée/finie, destination, traitant, ordre RDL, notes,
+  verrouillage, **nombre de cases** et **quantité de chaque case**
+  (`PK / FA / FT / QL / OF`) — pour savoir exactement ce qui a changé.
+- **Alertes OFs simultanés** (Direction uniquement) : cartes ayant plusieurs
+  OFs non terminés en même temps, c'est-à-dire sans **CC (Carton Check) validé**.
 - **Filtres** par profil et/ou par jour ; mise à jour automatique.
 
 ---
