@@ -73,7 +73,9 @@ directement cet onglet, sans sélecteur.
 - **OK Prod / Statut** : modifiables directement dans la ligne.
 - **Terminer un modèle** : depuis sa fiche, activez « Terminer le modèle » puis
   enregistrez. Il quitte les vues opérationnelles et rejoint l'onglet **Archive**.
-  Depuis l'archive, le bouton « Réactiver » le remet dans les vues actives.
+  Les cartes au statut « Terminé » rejoignent également l'archive. Depuis
+  l'archive, cliquez sur le nom d'un modèle pour consulter ses quantités et ses
+  OF. Le bouton « Réactiver » le remet dans les vues actives.
 - **Recherche** : barre de filtres pour retrouver un client, une saison ou un
   modèle.
 - **Copier la saison** : bouton de copie à côté de la valeur.

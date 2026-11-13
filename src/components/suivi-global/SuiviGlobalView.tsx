@@ -57,9 +57,10 @@ import {
 interface SuiviGlobalViewProps {
   onChangePage: (page: AppPage) => void;
   cards: CardItem[];
+  archivedCardIds: ReadonlySet<string>;
   /** Persiste des modifications partielles d'une carte (juron validé…). */
   onUpdateCard?: (id: string, updates: Partial<CardItem>) => Promise<void>;
-  onOpenCardModal?: (card: CardItem) => void;
+  onOpenCardModal?: (card: CardItem, slotType: TypeSlotGlobal) => void;
   onOpenCreateCard?: (
     prefillData: Partial<CardFormData> | null,
     onCreatedCallback: (createdCard: CardItem) => void
@@ -374,6 +375,7 @@ function buildBanner(
 export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   onChangePage,
   cards,
+  archivedCardIds,
   onUpdateCard,
   onOpenCardModal,
   onOpenCreateCard,
@@ -393,6 +395,19 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
   // Layout partagé via API (DB SQLite) avec polling + localStorage fallback
   const [rows, setRows] = useState<SuiviRow[]>(() => INITIAL_CHAINE_ROWS);
+
+  useEffect(() => {
+    if (layoutLoading || archivedCardIds.size === 0) return;
+    setRows((prev) => {
+      let next = prev;
+      for (const cardId of archivedCardIds) {
+        if (localiserCarteDansGroupe(next, cardId, 'planning')) {
+          next = retirerCarteDuGroupe(next, cardId, 'planning');
+        }
+      }
+      return next;
+    });
+  }, [archivedCardIds, layoutLoading, rows]);
 
   // Publie l'inspection de chaque carte (colonne Inspection) pour que la fiche
   // carte (CardModal) puisse y référer le long de ses OF.
@@ -959,8 +974,8 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
 
   /** Ouvre la fiche carte. */
   const onCarteClick = useCallback(
-    (card: CardItem) => {
-      if (onOpenCardModal) onOpenCardModal(card);
+    (card: CardItem, slotType: TypeSlotGlobal) => {
+      if (onOpenCardModal) onOpenCardModal(card, slotType);
     },
     [onOpenCardModal]
   );

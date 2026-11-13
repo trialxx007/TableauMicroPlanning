@@ -346,7 +346,7 @@ export interface SlotCaseProps {
   jalonInfosParCarte: ReadonlyMap<string, JalonInfo[]>;
   cartesAlerteRetard: ReadonlySet<string>;
   alertesManuelles: Record<string, AlerteManuelle[]>;
-  onCarteClick: (card: CardItem) => void;
+  onCarteClick: (card: CardItem, slotType: TypeSlotGlobal) => void;
   onOuvrirActionSlot: (
     rowId: string,
     titreSlot: string,
@@ -437,7 +437,7 @@ function SlotCase({
       if (slotType === 'expedition') {
         onOuvrirExpedition(row.id, slotIndex ?? 0);
       } else {
-        onCarteClick(linkedCard);
+        onCarteClick(linkedCard, slotType);
       }
     } else if (!lectureSeule) {
       onOuvrirActionSlot(row.id, titreSlot, slotType, lancementIndex, slotIndex);
@@ -733,7 +733,7 @@ export interface LigneTableSuiviProps {
   jalonInfosParCarte: ReadonlyMap<string, JalonInfo[]>;
   cartesAlerteRetard: ReadonlySet<string>;
   alertesManuelles: Record<string, AlerteManuelle[]>;
-  onCarteClick: (card: CardItem) => void;
+  onCarteClick: (card: CardItem, slotType: TypeSlotGlobal) => void;
   onOuvrirActionSlot: (
     rowId: string,
     titreSlot: string,

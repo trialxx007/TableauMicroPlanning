@@ -28,6 +28,9 @@ import {
 } from './utils/auth.ts';
 import { RefreshCw, FileSpreadsheet, Plus } from 'lucide-react';
 
+const estCarteArchivee = (card: CardItem) =>
+  Boolean(card.dateTerminaison) || card.statut === 'TERMINE';
+
 export default function App() {
   const [session, setSession] = useState<SessionProfil | null>(() => lireSession());
   const [currentPage, setCurrentPage] = useState<AppPage>(() => {
@@ -61,6 +64,8 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingCard, setEditingCard] = useState<CardItem | null>(null);
+  const [peutTerminerModele, setPeutTerminerModele] = useState(false);
+  const [masquerTerminerModele, setMasquerTerminerModele] = useState(false);
   const [createPrefill, setCreatePrefill] = useState<Partial<CardFormData> | null>(null);
   const onCreateCardRef = useRef<((card: CardItem) => void) | null>(null);
   const [notification, setNotification] = useState<string | null>(null);
@@ -186,6 +191,8 @@ export default function App() {
 
   const handleOpenEdit = (card: CardItem) => {
     setEditingCard(card);
+    setPeutTerminerModele(false);
+    setMasquerTerminerModele(false);
     setIsModalOpen(true);
   };
 
@@ -193,6 +200,8 @@ export default function App() {
     if (ficheLectureSeule) return;
     setCreatePrefill(null);
     setEditingCard(null);
+    setPeutTerminerModele(false);
+    setMasquerTerminerModele(false);
     setIsModalOpen(true);
   };
 
@@ -204,6 +213,8 @@ export default function App() {
     setCreatePrefill(prefill);
     onCreateCardRef.current = onCreated;
     setEditingCard(null);
+    setPeutTerminerModele(false);
+    setMasquerTerminerModele(false);
     setIsModalOpen(true);
   };
 
@@ -216,10 +227,14 @@ export default function App() {
     }
   };
 
-  const activeCards = useMemo(() => cards.filter((card) => !card.dateTerminaison), [cards]);
+  const activeCards = useMemo(() => cards.filter((card) => !estCarteArchivee(card)), [cards]);
   const archivedCards = useMemo(
-    () => cards.filter((card) => Boolean(card.dateTerminaison)),
+    () => cards.filter(estCarteArchivee),
     [cards]
+  );
+  const archivedCardIds = useMemo(
+    () => new Set(archivedCards.map((card) => card.id)),
+    [archivedCards]
   );
 
   const pendingReviewCount = useMemo(() => {
@@ -327,7 +342,11 @@ export default function App() {
   };
 
   const handleReactivateCard = async (id: string) => {
-    await handleUpdateCard(id, { dateTerminaison: '' });
+    const card = cards.find((item) => item.id === id);
+    await handleUpdateCard(id, {
+      dateTerminaison: '',
+      ...(card?.statut === 'TERMINE' ? { statut: 'EN_COURS' } : {}),
+    });
   };
 
   const handleConnexion = (profil: Profil) => {
@@ -495,11 +514,14 @@ export default function App() {
           <SuiviGlobalView
             onChangePage={setCurrentPage}
             cards={activeCards}
+            archivedCardIds={archivedCardIds}
             onUpdateCard={handleUpdateCard}
             profil={session.profil}
             onDeconnexion={handleDeconnexion}
-            onOpenCardModal={(card) => {
+            onOpenCardModal={(card, slotType) => {
               setEditingCard(card);
+              setPeutTerminerModele(slotType === 'modeleEnCours');
+              setMasquerTerminerModele(slotType === 'lancement');
               setIsModalOpen(true);
             }}
             onOpenCreateCard={handleOpenCreateCard}
@@ -524,6 +546,8 @@ export default function App() {
             onDeconnexion={handleDeconnexion}
             onOpenCardModal={(card) => {
               setEditingCard(card);
+              setPeutTerminerModele(false);
+              setMasquerTerminerModele(false);
               setIsModalOpen(true);
             }}
           />
@@ -544,11 +568,15 @@ export default function App() {
         onClose={() => {
           setIsModalOpen(false);
           setEditingCard(null);
+          setPeutTerminerModele(false);
+          setMasquerTerminerModele(false);
           setCreatePrefill(null);
           onCreateCardRef.current = null;
         }}
         onSubmit={handleCreateOrUpdate}
         initialData={editingCard}
+        peutTerminerModele={peutTerminerModele}
+        masquerTerminerModele={masquerTerminerModele}
         createPrefill={editingCard ? null : createPrefill}
         onJalonAjoute={handleJalonAjoute}
         lectureSeule={ficheLectureSeule}

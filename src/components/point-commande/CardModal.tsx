@@ -65,6 +65,9 @@ interface CardModalProps {
    * par exemple okProd/statut préréservés pour une case du Suivi Global.
    */
   createPrefill?: Partial<CardFormData> | null;
+  /** Autorise la terminaison uniquement depuis une carte de la colonne dédiée. */
+  peutTerminerModele?: boolean;
+  masquerTerminerModele?: boolean;
   /**
    * Appelé après l'ajout ou le retrait d'un jalon sur cette carte, pour recharger
    * le catalogue partagé et les cartes. Le jalon reste propre à la carte : les
@@ -149,6 +152,8 @@ export const CardModal: React.FC<CardModalProps> = ({
   onSubmit,
   initialData,
   createPrefill,
+  peutTerminerModele = false,
+  masquerTerminerModele = false,
   onJalonAjoute,
   lectureSeule = false,
 }) => {
@@ -726,29 +731,33 @@ export const CardModal: React.FC<CardModalProps> = ({
               </span>
             </button>
 
-            <button
-              type="button"
-              onClick={() =>
-                setDateTerminaison((current) =>
-                  current ? undefined : getNowParis().dateStr
-                )
-              }
-              disabled={lectureSeule}
-              aria-pressed={Boolean(dateTerminaison)}
-              title={
-                dateTerminaison
-                  ? 'Cliquer pour retirer ce modèle de l’archive'
-                  : 'Marquer ce modèle comme terminé et l’envoyer dans l’archive'
-              }
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold whitespace-nowrap transition-colors ${
-                dateTerminaison
-                  ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
-                  : 'bg-white text-slate-600 border-slate-300 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300'
-              } ${lectureSeule ? 'cursor-default' : 'cursor-pointer'}`}
-            >
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              <span>{dateTerminaison ? 'Modèle terminé' : 'Terminer le modèle'}</span>
-            </button>
+            {!masquerTerminerModele && (
+              <button
+                type="button"
+                onClick={() =>
+                  setDateTerminaison((current) =>
+                    current ? undefined : getNowParis().dateStr
+                  )
+                }
+                disabled={lectureSeule || !peutTerminerModele}
+                aria-pressed={Boolean(dateTerminaison)}
+                title={
+                  !peutTerminerModele
+                    ? 'La terminaison est disponible uniquement depuis la colonne Modèle en cours'
+                    : dateTerminaison
+                    ? 'Cliquer pour retirer ce modèle de l’archive'
+                    : 'Marquer ce modèle comme terminé et l’envoyer dans l’archive'
+                }
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border text-[11px] font-bold whitespace-nowrap transition-colors ${
+                  dateTerminaison
+                    ? 'bg-amber-50 text-amber-800 border-amber-300 hover:bg-amber-100'
+                    : 'bg-white text-slate-600 border-slate-300 hover:bg-amber-50 hover:text-amber-800 hover:border-amber-300'
+                } ${lectureSeule || !peutTerminerModele ? 'cursor-default' : 'cursor-pointer'}`}
+              >
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>{dateTerminaison ? 'Modèle terminé' : 'Terminer le modèle'}</span>
+              </button>
+            )}
 
             <button
               onClick={onClose}
