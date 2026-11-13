@@ -8,6 +8,7 @@ import {
 } from '@/src/types/card.ts';
 import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
 import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
+import { BoutonVisibiliteEntete, EnteteReduite, useEnteteVisible } from '@/src/components/layout/EnteteVisibilite.tsx';
 import { Profil } from '@/src/utils/auth.ts';
 import { normalizeCases, computeOfQuantiteFinie } from './OFSubTable.tsx';
 import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
@@ -160,6 +161,7 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
   const typeModifiable = profil.id !== 'production';
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
+  const [enteteVisible, basculerEntete] = useEnteteVisible();
 
   useEffect(() => {
     const timer = setInterval(() => setParisTime(getNowParis().timeStr), 15000);
@@ -210,6 +212,7 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
       {/* Bandeau haut : titre, date/heure, sélecteur de vue */}
+      {enteteVisible ? (
       <div className="relative z-20 border-b border-slate-200 bg-white shadow-xs">
         <div className="page-container py-4">
           <div className="flex flex-col gap-4">
@@ -240,6 +243,7 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
             {/* Actions */}
             <div className="flex min-w-0 flex-wrap items-center gap-2.5 min-[900px]:justify-end">
               <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+              <BoutonVisibiliteEntete visible onBasculer={basculerEntete} />
             </div>
 
             </div>
@@ -251,6 +255,9 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
           </div>
         </div>
       </div>
+      ) : (
+        <EnteteReduite page="tableaux-ofs" onBasculer={basculerEntete} />
+      )}
 
       <div className="page-container py-6 grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
         {parClient.length === 0 ? (
