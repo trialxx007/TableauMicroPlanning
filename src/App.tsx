@@ -509,6 +509,7 @@ export default function App() {
         <main className="flex-1 w-full">
           <HistoriqueView
             onChangePage={setCurrentPage}
+            cards={activeCards}
             profil={session.profil}
             onDeconnexion={handleDeconnexion}
           />
