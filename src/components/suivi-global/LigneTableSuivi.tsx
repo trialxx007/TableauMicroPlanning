@@ -33,7 +33,7 @@ import { getNowParis } from '@/src/utils/dateFrance.ts';
 import { InspectionCell } from './InspectionCell.tsx';
 import { idSlotCarte } from '@/src/utils/glisserCarte.ts';
 import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
-import { AlertTriangle, ArrowLeftRight, Columns, Pencil, Trash2, Truck, X } from 'lucide-react';
+import { AlertTriangle, ArrowLeftRight, Columns, Pencil, Plus, Trash2, Truck, X } from 'lucide-react';
 
 /** Ligne du tableau du Suivi Global, mémorisée : en éditant une ligne (inspection,
  *  cartes…), seules les lignes réellement modifiées se re-rendent, pas les autres. */
@@ -658,27 +658,53 @@ function SlotCase({
 
           {/* Hover Quick Action Buttons */}
           {!lectureSeule && (
-            <div className="absolute right-1 top-1 hidden group-hover:flex items-center gap-1 bg-white p-0.5 rounded-md shadow-xs border border-slate-200 z-10">
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onOuvrirPicker(row.id, titreSlot, slotType, lancementIndex, slotIndex);
-                }}
-                title="Changer / Réassigner une autre carte"
-                className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
-              >
-                <ArrowLeftRight className="w-3 h-3" />
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onAssignerSlot(row.id, slotType, null, lancementIndex, slotIndex);
-                }}
-                title="Retirer la carte de cette case"
-                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
-              >
-                <X className="w-3 h-3" />
-              </button>
+            <div className={`absolute right-1 top-1 flex items-center gap-1 bg-white p-0.5 rounded-md shadow-xs border border-slate-200 z-10 ${
+              slotType === 'lancement' && linkedCard ? '' : 'hidden group-hover:flex'
+            }`}>
+              {slotType === 'lancement' && linkedCard && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    setAlerteOuverte({
+                      card: linkedCard,
+                      slotTitle: titreSlot,
+                      anchor: event.currentTarget,
+                    });
+                  }}
+                  title="Ajouter ou consulter une alerte"
+                  aria-label={`Ajouter ou consulter une alerte pour ${linkedCard.modele}`}
+                  aria-haspopup="dialog"
+                  className="relative rounded p-1 text-rose-600 hover:bg-rose-50 cursor-pointer"
+                >
+                  <AlertTriangle className="h-3 w-3" />
+                  <Plus className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-white" />
+                </button>
+              )}
+              <div className="hidden items-center gap-1 group-hover:flex">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onOuvrirPicker(row.id, titreSlot, slotType, lancementIndex, slotIndex);
+                  }}
+                  title="Changer / Réassigner une autre carte"
+                  className="p-1 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded cursor-pointer"
+                >
+                  <ArrowLeftRight className="w-3 h-3" />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onAssignerSlot(row.id, slotType, null, lancementIndex, slotIndex);
+                  }}
+                  title="Retirer la carte de cette case"
+                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
             </div>
           )}
         </div>
