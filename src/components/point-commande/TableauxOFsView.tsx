@@ -169,9 +169,7 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
   const typeModifiable = profil.id !== 'production';
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
-<<<<<<< HEAD
   const [enteteVisible, basculerEntete] = useEnteteVisible();
-=======
   const { parCarte } = useInspectionsParCarte();
   // Historique ouvert depuis l'icône horloge d'un tableau client.
   const [historique, setHistorique] = useState<{
@@ -179,7 +177,6 @@ export const TableauxOFsView: React.FC<TableauxOFsViewProps> = ({
     termines: OFTermine[];
     anchor: HTMLElement;
   } | null>(null);
->>>>>>> b2d4497dd8e4ecdcb4d224e824bcac8538cc52b2
 
   useEffect(() => {
     const timer = setInterval(() => setParisTime(getNowParis().timeStr), 15000);
