@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
 import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
+import { BoutonVisibiliteEntete, EnteteReduite, useEnteteVisible } from '@/src/components/layout/EnteteVisibilite.tsx';
 import { Profil } from '@/src/utils/auth.ts';
 import { historiqueApi, EntreeHistorique } from '@/src/services/api.ts';
 import { getNowParis, LIBELLE_FUSEAU } from '@/src/utils/dateFrance.ts';
@@ -270,6 +271,7 @@ export const HistoriqueView: React.FC<HistoriqueViewProps> = ({
 }) => {
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
+  const [enteteVisible, basculerEntete] = useEnteteVisible();
   const [entrees, setEntrees] = useState<EntreeHistorique[]>([]);
   const [chargement, setChargement] = useState(false);
   const [erreur, setErreur] = useState<string | null>(null);
@@ -353,6 +355,7 @@ export const HistoriqueView: React.FC<HistoriqueViewProps> = ({
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
       {/* Bandeau haut : titre, date/heure, sélecteur de vue */}
+      {enteteVisible ? (
       <div className="relative z-20 border-b border-slate-200 bg-white shadow-xs">
         <div className="page-container py-4">
           <div className="flex flex-col gap-4">
@@ -383,6 +386,7 @@ export const HistoriqueView: React.FC<HistoriqueViewProps> = ({
             {/* Actions */}
             <div className="flex min-w-0 flex-wrap items-center gap-2.5 min-[900px]:justify-end">
               <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+              <BoutonVisibiliteEntete visible onBasculer={basculerEntete} />
             </div>
 
             </div>
@@ -394,6 +398,9 @@ export const HistoriqueView: React.FC<HistoriqueViewProps> = ({
           </div>
         </div>
       </div>
+      ) : (
+        <EnteteReduite page="historique" onBasculer={basculerEntete} />
+      )}
 
       <div className="page-container py-6">
         {/* Barre de filtres */}

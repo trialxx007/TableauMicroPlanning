@@ -27,6 +27,7 @@ import {
 import { chargerKanban, chargerKanbanServeur, KanbanEnvironnement, nouvelId, sauverKanban, sauverKanbanServeur } from '../utils/kanbanStorage.ts';
 import { AppPage, ViewSwitcher } from '@/src/components/layout/ViewSwitcher.tsx';
 import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
+import { BoutonVisibiliteEntete, EnteteReduite, useEnteteVisible } from '@/src/components/layout/EnteteVisibilite.tsx';
 import { EditableItemName } from '@/src/components/ui/EditableItemName.tsx';
 import { dateISOFromDateTime, estDateISO, FUSEAU_HORAIRE, getDateISOSite, getNowParis, joursEntreDatesISO, joursOuvresEntreDatesISO, joursOuvresHorsPeriodes, LIBELLE_FUSEAU } from '../utils/dateFrance.ts';
 import { Profil } from '@/src/utils/auth.ts';
@@ -91,6 +92,8 @@ interface BrouillonEdition {
   couleur: KanbanCouleurId;
   /** Date d'expédition (optionnelle) */
   dateExpedition?: string;
+  /** Date de création au format YYYY-MM-DD (modifiable manuellement). */
+  dateCreation?: string;
   attentes: KanbanAttente[];
 }
 
@@ -189,6 +192,7 @@ function entreeDeplacement(
  */
 export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePage, profil, onDeconnexion }) => {
   const estDirecteur = profil.id === 'direction';
+  const [enteteVisible, basculerEntete] = useEnteteVisible();
   const [board, setBoard] = useState<{ environnement: KanbanEnvironnement; data: KanbanData }>(
     {
       environnement: 'developpement',
@@ -255,7 +259,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   const [nouveauTitre, setNouveauTitre] = useState('');
   const [copieOk, setCopieOk] = useState<string | null>(null);
   const [ongletDirection, setOngletDirection] = useState<'alerte' | 'attente' | 'encours'>('alerte');
-  /** Currently displayed stage page (5 columns per page, view only). */
+  /** Currently displayed stage page (4 columns per page, view only). */
   const [pageEtapes, setPageEtapes] = useState(0);
   /** Slide direction of the page transition (1 = next, -1 = previous). */
   const [sensPage, setSensPage] = useState<1 | -1>(1);
@@ -345,7 +349,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   };
 
   const colonnes = useMemo(() => trierParOrdre(data.colonnes), [data.colonnes]);
-  const ETAPES_PAR_PAGE = 5;
+  const ETAPES_PAR_PAGE = 4;
   const totalPages = Math.max(1, Math.ceil(colonnes.length / ETAPES_PAR_PAGE));
   const pageCourante = Math.min(pageEtapes, totalPages - 1);
   const debutPage = pageCourante * ETAPES_PAR_PAGE;
@@ -1599,6 +1603,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       // La couleur affichée sert de défaut : le post-it a toujours une couleur.
       couleur: carte.couleur ?? 'jaune',
       dateExpedition: carte.dateExpedition,
+      dateCreation: dateISOFromDateTime(carte.creeLe) ?? '',
       attentes: (carte.attentes ?? []).map((a) => ({ ...a })),
     });
   };
@@ -1623,7 +1628,20 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       entrees.push(entreeHistorique(categorie, description));
     };
     const carteAvant = data.cartes.find((c) => c.id === edition.id);
+    const dateCreationActuelle = carteAvant ? dateISOFromDateTime(carteAvant.creeLe) : null;
+    const creeLe =
+      edition.dateCreation && edition.dateCreation !== dateCreationActuelle
+        ? `${edition.dateCreation}T00:00:00.000Z`
+        : carteAvant?.creeLe ?? new Date().toISOString();
     if (carteAvant) {
+      if (edition.dateCreation && edition.dateCreation !== dateCreationActuelle) {
+        journaliser(
+          'carte',
+          `Date de création modifiée : ${formatDateFr(dateCreationActuelle)} → ${formatDateFr(
+            edition.dateCreation
+          )}`
+        );
+      }
       if (titre !== carteAvant.titre) {
         journaliser('carte', `Titre modifié : « ${carteAvant.titre} » → « ${titre} »`);
       }
@@ -1735,6 +1753,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
         remarques: edition.remarques.trim() || undefined,
         couleur: edition.couleur,
         dateExpedition: edition.dateExpedition || undefined,
+        creeLe,
         attentes,
       },
       entrees
@@ -1805,6 +1824,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
       edition.remarques !== (carteEdition.remarques ?? '') ||
       edition.couleur !== (carteEdition.couleur ?? 'jaune') ||
       (edition.dateExpedition ?? '') !== (carteEdition.dateExpedition ?? '') ||
+      (edition.dateCreation ?? '') !== (dateISOFromDateTime(carteEdition.creeLe) ?? '') ||
       JSON.stringify(normaliserAttentes(edition.attentes)) !==
         JSON.stringify(normaliserAttentes(carteEdition.attentes ?? [])))
   );
@@ -2105,8 +2125,12 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
     fermerDeplacement();
   };
 
-  /** Post-its d'une zone : formes carrées, 2 par ligne, édition via la fiche. */
-  const rendreCartes = (zone: { sectionId?: string }, cartesZone: KanbanCarte[]) =>
+  /** Post-its d'une zone : édition via la fiche ; `carre` pour les colonnes à 2 cartes/ligne. */
+  const rendreCartes = (
+    zone: { sectionId?: string },
+    cartesZone: KanbanCarte[],
+    carre = false
+  ) =>
     cartesZone.map((carte, position) => {
       const enDrag = drag?.type === 'carte' && drag.id === carte.id;
       const colonneCarte = data.colonnes.find((c) => c.id === carte.colonneId);
@@ -2214,8 +2238,8 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           onDragOver={(e) => survolCarte(e, carte, position, zone.sectionId)}
           onClick={(e) => ouvrirEdition(carte, e.currentTarget)}
           className={`w-full cursor-pointer rounded-xl border p-3.5 shadow-xs transition-all hover:-translate-y-0.5 hover:shadow-md ${postIt.fond} ${postIt.bordure} ${
-            enDrag ? 'opacity-40' : ''
-          } ${carteAnimeeId === carte.id ? 'animate-carte-deplacee' : ''}`}
+            carre ? 'flex min-h-[11.5rem] flex-col' : ''
+          } ${enDrag ? 'opacity-40' : ''} ${carteAnimeeId === carte.id ? 'animate-carte-deplacee' : ''}`}
         >
           <div className="flex items-start justify-between gap-2">
             <div className="flex shrink-0 flex-col items-start gap-1 text-[10px] leading-tight">
@@ -2376,7 +2400,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
             </div>
           )}
 
-          <div className="mt-2.5 flex items-center justify-between gap-2 border-t border-black/5 pt-2 text-[11px]">
+          <div className="mt-auto flex items-center justify-between gap-2 border-t border-black/5 pt-2 text-[11px]">
             <div className="flex min-w-0 items-center gap-1.5">
               <span className="shrink-0 text-[9px] font-bold uppercase tracking-wide text-slate-500">
                 Statut
@@ -2695,12 +2719,12 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
         key={zone.sectionId ?? 'unique'}
         onDragOver={(e) => survolZone(e, colonne.id, zone.sectionId, cartesZone.length)}
         onDrop={(e) => deposerDansZone(e, colonne.id, zone.sectionId, cartesZone.length)}
-        className={`flex flex-col gap-2 content-start transition-colors ${
+        className={`grid max-h-[36rem] grid-cols-2 gap-2 content-start overflow-y-auto overscroll-contain pr-1 transition-colors ${
           zone.section ? 'min-h-[5rem] px-1' : 'min-h-[7rem] rounded-b-2xl'
         } ${surligne ? 'bg-violet-50/70' : ''}`}
       >
         {cartesZone.length === 0 && (
-          <div className="w-full rounded-lg border border-dashed border-slate-300/80 px-3 py-4 text-center text-[11px] text-slate-400">
+          <div className="col-span-2 w-full rounded-lg border border-dashed border-slate-300/80 px-3 py-4 text-center text-[11px] text-slate-400">
             {surligne
               ? 'Déposez la carte ici'
               : avecComposer
@@ -2709,9 +2733,11 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           </div>
         )}
 
-        {rendreCartes(zone, cartesZone)}
+        {rendreCartes(zone, cartesZone, true)}
 
-        {avecComposer && rendreComposer(colonne, zone)}
+        {avecComposer && (
+          <div className="col-span-2">{rendreComposer(colonne, zone)}</div>
+        )}
       </div>
     );
   };
@@ -3071,15 +3097,19 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
               {nonAssignees.length}
             </span>
           </div>
-          <div className="flex flex-col gap-2 content-start min-h-[4rem] px-1">
+          <div className="grid max-h-[36rem] grid-cols-2 gap-2 content-start overflow-y-auto overscroll-contain px-1">
             {nonAssignees.length === 0 ? (
-              <div className="w-full rounded-lg border border-dashed border-slate-300/80 px-3 py-3 text-center text-[11px] text-slate-400">
+              <div className="col-span-2 w-full rounded-lg border border-dashed border-slate-300/80 px-3 py-3 text-center text-[11px] text-slate-400">
                 {section ? 'Déposez une carte ici pour la désassigner' : 'Aucune carte en attente'}
               </div>
             ) : (
-              rendreCartes({ sectionId: section?.id }, nonAssignees)
+              rendreCartes({ sectionId: section?.id }, nonAssignees, true)
             )}
-            {peutDeposerNon && rendreComposer(colonne, { sectionId: section?.id })}
+            {peutDeposerNon && (
+              <div className="col-span-2">
+                {rendreComposer(colonne, { sectionId: section?.id })}
+              </div>
+            )}
           </div>
         </div>
 
@@ -3637,6 +3667,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
   return (
     <div className="kanban-app min-h-screen bg-slate-50 text-slate-800 flex flex-col">
       {/* Bandeau haut : titre, date/heure, sélecteur de vue (même trame que les autres vues) */}
+      {enteteVisible ? (
       <div className="relative z-20 border-b border-slate-200 bg-white shadow-xs">
         <div className="w-full px-4 py-4 sm:px-6">
           <div className="flex flex-col gap-4">
@@ -3702,6 +3733,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                 </span>
               </span>
               <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+              <BoutonVisibiliteEntete visible onBasculer={basculerEntete} />
             </div>
 
             </div>
@@ -3734,12 +3766,15 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
           </div>
         </div>
       </div>
+      ) : (
+        <EnteteReduite page="developpement" onBasculer={basculerEntete} containerClassName="w-full px-4 sm:px-6" />
+      )}
 
       {environnement === 'direction' ? (
         renduDirection()
       ) : (
         <>
-          {/* Stage pagination: 5 visible columns per page */}
+          {/* Stage pagination: 4 visible columns per page */}
           <div className="border-b border-slate-200 bg-white">
             <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5 sm:px-6">
               <div className="flex min-w-0 flex-wrap items-center gap-3">
@@ -3837,7 +3872,7 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                       ? estPatronnage
                         ? 'w-[22rem]'
                         : 'w-[26rem]'
-                      : 'w-72'
+                      : 'w-[26rem]'
                 } shrink-0 bg-slate-100/80 rounded-2xl border transition-all ${
                   enCible || colonneEnCible
                     ? 'border-violet-400 ring-2 ring-violet-200 bg-violet-50/60'
@@ -4261,18 +4296,8 @@ export const DeveloppementView: React.FC<DeveloppementViewProps> = ({ onChangePa
                             dateCreation: event.target.value || undefined,
                           })
                         }
-                        className={`kanban-field ${erreurExpedition ? 'kanban-field-error' : ''}`}
-                        aria-invalid={!!erreurExpedition}
-                        aria-describedby={erreurExpedition ? 'erreur-expedition' : undefined}
+                        className="kanban-field"
                       />
-                      {erreurExpedition && (
-                        <p
-                          id="erreur-expedition"
-                          className="mt-1 text-[11px] font-medium text-rose-600"
-                        >
-                          {erreurExpedition}
-                        </p>
-                      )}
                     </div>
                   </div>
 

@@ -80,6 +80,11 @@ const TABS: TabConfig[] = [
   },
 ];
 
+/** Libellé de l'onglet affiché dans les en-têtes. */
+export function libelleOnglet(page: AppPage): string {
+  return TABS.find((tab) => tab.page === page)?.label ?? '';
+}
+
 /** Sélecteur d'interface des deux vues, affiché au centre de l'en-tête. */
 export const ViewSwitcher: React.FC<ViewSwitcherProps> = ({ currentPage, onChangePage, variant = 'default' }) => {
   const { profil } = useProfil();

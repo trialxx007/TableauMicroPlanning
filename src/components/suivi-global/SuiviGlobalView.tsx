@@ -32,6 +32,7 @@ import { useJalonCatalogue } from '@/src/context/JalonCatalogueContext.tsx';
 import { useInspectionsParCarte } from '@/src/context/InspectionsParCarteContext.tsx';
 import { ViewSwitcher, AppPage } from '@/src/components/layout/ViewSwitcher.tsx';
 import { SessionBadge } from '@/src/components/layout/SessionBadge.tsx';
+import { BoutonVisibiliteEntete, EnteteReduite, useEnteteVisible } from '@/src/components/layout/EnteteVisibilite.tsx';
 import { Profil } from '@/src/utils/auth.ts';
 import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
 import { suiviGlobalApi, type SuiviGlobalLayoutRow } from '@/src/services/api.ts';
@@ -386,6 +387,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   const catalogue = useJalonCatalogue();
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
+  const [enteteVisible, basculerEntete] = useEnteteVisible();
   const [layoutLoading, setLayoutLoading] = useState(true);
 
   useEffect(() => {
@@ -1019,6 +1021,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-800 pb-16">
       {/* Top Banner / Actions Bar */}
+      {enteteVisible ? (
       <div className="relative z-20 border-b border-slate-200 bg-white shadow-xs">
         <div className="page-container-wide py-4">
           <div className="flex flex-col gap-4">
@@ -1058,6 +1061,7 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
                 </button>
               )}
               <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+              <BoutonVisibiliteEntete visible onBasculer={basculerEntete} />
             </div>
 
             </div>
@@ -1069,6 +1073,9 @@ export const SuiviGlobalView: React.FC<SuiviGlobalViewProps> = ({
           </div>
         </div>
       </div>
+      ) : (
+        <EnteteReduite page="suivi-global" onBasculer={basculerEntete} containerClassName="page-container-wide" />
+      )}
 
       {/* Main Board Container */}
       <div className="page-container-wide py-6">

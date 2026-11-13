@@ -8,6 +8,7 @@ import {
 import { getNowParis, LIBELLE_FUSEAU } from '@/src/utils/dateFrance.ts';
 import { ViewSwitcher, AppPage } from './ViewSwitcher.tsx';
 import { SessionBadge } from './SessionBadge.tsx';
+import { BoutonVisibiliteEntete, EnteteReduite, useEnteteVisible } from './EnteteVisibilite.tsx';
 import { Profil } from '@/src/utils/auth.ts';
 import { useLectureSeule } from '@/src/context/ProfilContext.tsx';
 
@@ -31,6 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [parisTime, setParisTime] = useState(getNowParis().timeStr);
   const { fullFrenchDate } = getNowParis();
   const lectureSeule = useLectureSeule();
+  const [enteteVisible, basculerEntete] = useEnteteVisible();
 
   useEffect(() => {
     const timer = setInterval(() => {
@@ -38,6 +40,10 @@ export const Header: React.FC<HeaderProps> = ({
     }, 15000);
     return () => clearInterval(timer);
   }, []);
+
+  if (!enteteVisible) {
+    return <EnteteReduite page={currentPage} onBasculer={basculerEntete} />;
+  }
 
   return (
     <header className="relative z-30 border-b border-slate-200 bg-white shadow-xs">
@@ -84,6 +90,7 @@ export const Header: React.FC<HeaderProps> = ({
                 </button>
               )}
               <SessionBadge profil={profil} onDeconnexion={onDeconnexion} />
+              <BoutonVisibiliteEntete visible onBasculer={basculerEntete} />
             </div>
           </div>
 
